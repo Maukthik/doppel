@@ -71,6 +71,19 @@ def cmd_personas(a) -> int:
     return 0
 
 
+def cmd_comment(a) -> int:
+    import os
+
+    from doppel.github import pr_number_from_event, upsert_comment
+    body = Path(a.report).read_text(encoding="utf-8")
+    if a.footer:
+        body += f"\n{a.footer}\n"
+    repo, token = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_TOKEN"]
+    pr = a.pr_number or pr_number_from_event()
+    print(f"PR #{pr}: comment {upsert_comment(body, repo, pr, token)}")
+    return 0
+
+
 def main(argv=None) -> int:
     try:  # the report has emoji; a redirected Windows console would otherwise crash on them
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -97,10 +110,20 @@ def main(argv=None) -> int:
     g.add_argument("-n", type=int, default=12, help="how many personas")
     g.add_argument("--model", help="default: $PERSONA_MODEL or nvidia/Nemotron-3_5-Lightning")
     g.add_argument("--out", default="personas.json")
+    c = sub.add_parser("comment", help="post or update the report as a PR comment (in GitHub Actions)")
+    c.add_argument("--report", required=True)
+    c.add_argument("--pr-number", type=int, help="default: from the GitHub event")
+    c.add_argument("--footer", default="", help="extra Markdown under the report (e.g. a link to the run)")
     a = ap.parse_args(argv)
-    if a.cmd == "personas":
-        return cmd_personas(a)
-    return cmd_run(a)
+    if a.cmd == "comment":
+        return cmd_comment(a)
+    try:
+        if a.cmd == "personas":
+            return cmd_personas(a)
+        return cmd_run(a)
+    except Exception as e:  # noqa: BLE001 - exit 2 = Doppel itself failed (1 means regressions found)
+        print(f"doppel: error: {type(e).__name__}: {e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

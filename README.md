@@ -27,8 +27,8 @@ slower requests. Then it tells you which differences the PR meant to make and wh
 |---|---|---|
 | 1 | Local twin: seed once, fresh world per persona, replay, diff, Markdown report | done |
 | 2 | Nebius Sandboxes backend (checkpoint + parallel forks) and Nemotron personas | done: live run found all 6 changes in 7.4 s |
-| 3 | Nemotron judge: intended vs regression, using the PR description; writes a test per regression | built, first live run next |
-| 4 | GitHub Action: comment on every PR, replay link | |
+| 3 | Nemotron judge: intended vs regression, using the PR description; writes a test per regression | built |
+| 4 | GitHub Action: comment on every PR, artifacts, fails the check on regressions | built, demo repo next |
 | 5 | Real open-source app demo + benchmark of planted regressions vs its own test suite | |
 | 6 | README results, video, submission | |
 
@@ -75,6 +75,30 @@ Nemotron 3 Ultra reads the PR description and diff and labels each distinct chan
 `regression` or `needs_human`. The report leads with regressions; intended changes fold away.
 `--tests-out` writes one pytest per regression that replays the persona and expects the base
 behavior: these tests pass on the main branch and fail on the PR. `--strict` exits 1 on regressions.
+
+## Use it on your pull requests (stage 4)
+
+`.github/workflows/doppel.yml` in your repo:
+
+```yaml
+name: doppel
+on: pull_request
+permissions: { contents: read, pull-requests: write }
+jobs:
+  twin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Maukthik/doppel@main
+        with:
+          app-dir: .                     # folder with doppel.toml
+          nebius-api-key: ${{ secrets.NEBIUS_API_KEY }}
+          nebius-project-id: ${{ secrets.NEBIUS_PROJECT_ID }}
+```
+
+Every PR gets one comment (updated on each push), the report in the job summary, and the personas,
+raw recordings and regression tests as run artifacts. The check fails on regressions. Without a
+`doppel-personas.json`, Nemotron invents the users. PRs from forks don't get secrets, so the twin
+runs on branches of the repo itself. `examples/demo-repo` sets up a repo to watch it work.
 
 ## Twin spec
 

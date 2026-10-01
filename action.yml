@@ -1,0 +1,108 @@
+name: Doppel
+description: A twin of your app tries every pull request first and comments with the regressions it found.
+author: Maukthik
+branding:
+  icon: copy
+  color: purple
+
+inputs:
+  app-dir:
+    description: Folder of the app inside the repo (holds doppel.toml)
+    default: "."
+  personas:
+    description: Personas JSON inside app-dir. If the file doesn't exist, Nemotron generates personas.
+    default: "doppel-personas.json"
+  personas-count:
+    description: How many personas Nemotron generates when there is no personas file
+    default: "12"
+  judge:
+    description: Let Nemotron Ultra label each change intended / regression using the PR description
+    default: "true"
+  fail-on-regression:
+    description: Fail the check when the judge finds a regression
+    default: "true"
+  nebius-api-key:
+    description: Nebius Token Factory API key (store it as a repository secret)
+    required: true
+  nebius-project-id:
+    description: Nebius project ID (needed for sandboxes)
+    required: true
+  github-token:
+    description: Token used to post the PR comment
+    default: ${{ github.token }}
+
+outputs:
+  exit-code:
+    description: "0 = no regressions, 1 = regressions found"
+    value: ${{ steps.run.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check out base (the branch the PR merges into)
+      uses: actions/checkout@v7
+      with:
+        ref: ${{ github.event.pull_request.base.sha }}
+        path: .doppel/base
+    - name: Check out head (the PR)
+      uses: actions/checkout@v7
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        path: .doppel/head
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.12"
+    - name: Install Doppel
+      shell: bash
+      run: pip install --quiet "${{ github.action_path }}[nebius]"
+    - name: Run the twin
+      id: run
+      shell: bash
+      env:
+        NEBIUS_API_KEY: ${{ inputs.nebius-api-key }}
+        NEBIUS_PROJECT_ID: ${{ inputs.nebius-project-id }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: |
+        set +e
+        mkdir -p .doppel/out
+        BASE=".doppel/base/${{ inputs.app-dir }}"
+        HEAD=".doppel/head/${{ inputs.app-dir }}"
+        PERSONAS="$HEAD/${{ inputs.personas }}"
+        if [ ! -f "$PERSONAS" ]; then
+          PERSONAS=".doppel/out/personas.json"
+          doppel personas --app "$BASE" --head "$HEAD" -n "${{ inputs.personas-count }}" --out "$PERSONAS" || exit 2
+        fi
+        printf '# %s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > .doppel/out/PR.md
+        JUDGE=""
+        if [ "${{ inputs.judge }}" = "true" ]; then
+          JUDGE="--pr .doppel/out/PR.md --tests-out .doppel/out/test_doppel_regressions.py"
+        fi
+        doppel run --backend nebius --base "$BASE" --head "$HEAD" --personas "$PERSONAS" $JUDGE \
+          --out .doppel/out/report.md --json .doppel/out/run.json --strict
+        code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        [ -f .doppel/out/report.md ] && cat .doppel/out/report.md >> "$GITHUB_STEP_SUMMARY"
+        [ $code -le 1 ] || exit $code
+    - name: Comment on the PR
+      if: always() && hashFiles('.doppel/out/report.md') != ''
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: >
+        doppel comment --report .doppel/out/report.md
+        --footer "<sub>Personas, raw recordings and regression tests:
+        [run artifacts](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})</sub>"
+    - name: Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: doppel-report
+        path: .doppel/out/
+        if-no-files-found: ignore
+    - name: Fail on regressions
+      if: steps.run.outputs.exit-code == '1' && inputs.fail-on-regression == 'true'
+      shell: bash
+      run: |
+        echo "Doppel found behavior changes the PR doesn't mention. See the PR comment."
+        exit 1
