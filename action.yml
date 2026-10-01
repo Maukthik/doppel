@@ -65,7 +65,16 @@ runs:
         PR_BODY: ${{ github.event.pull_request.body }}
       run: |
         set +e
+        # pasted secrets often carry a trailing newline or space, which HTTP headers reject
+        NEBIUS_API_KEY="$(printf '%s' "$NEBIUS_API_KEY" | tr -d '[:space:]')"
+        NEBIUS_PROJECT_ID="$(printf '%s' "$NEBIUS_PROJECT_ID" | tr -d '[:space:]')"
+        export NEBIUS_API_KEY NEBIUS_PROJECT_ID
         echo "nebius-api-key: ${#NEBIUS_API_KEY} characters | nebius-project-id: ${#NEBIUS_PROJECT_ID} characters"
+        # show only the unusual characters (not letters, digits, . _ -) so a bad paste is visible without leaking the value
+        for v in NEBIUS_API_KEY NEBIUS_PROJECT_ID; do
+          odd="$(printf '%s' "${!v}" | LC_ALL=C tr -d 'A-Za-z0-9._-' | od -An -c | tr -s ' ')"
+          echo "$v unusual characters: ${odd:-none}"
+        done
         for v in NEBIUS_API_KEY NEBIUS_PROJECT_ID; do
           if [ -z "${!v}" ]; then
             echo "::error::$v reached the action empty. Add it under Settings > Secrets and variables > Actions > Secrets > Repository secrets (not Variables, not Codespaces/Dependabot secrets) and pass it to the action as secrets.$v. PRs from forks never get secrets."
