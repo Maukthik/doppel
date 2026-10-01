@@ -26,8 +26,8 @@ slower requests. Then it tells you which differences the PR meant to make and wh
 | Stage | What | State |
 |---|---|---|
 | 1 | Local twin: seed once, fresh world per persona, replay, diff, Markdown report | done |
-| 2 | Nebius Sandboxes backend (checkpoint + parallel forks) and Nemotron personas | built, first live run next |
-| 3 | Nemotron judge: intended vs regression, using the PR description; writes a test per regression | |
+| 2 | Nebius Sandboxes backend (checkpoint + parallel forks) and Nemotron personas | done: live run found all 6 changes in 7.4 s |
+| 3 | Nemotron judge: intended vs regression, using the PR description; writes a test per regression | built, first live run next |
 | 4 | GitHub Action: comment on every PR, replay link | |
 | 5 | Real open-source app demo + benchmark of planted regressions vs its own test suite | |
 | 6 | README results, video, submission | |
@@ -62,6 +62,19 @@ How the twin uses sandbox checkpoints: base code is uploaded, dependencies insta
 seeded once (checkpoint). The base world forks from it; the head world forks from it with the
 PR's files laid on top. Every persona then runs in its own disposable fork of its world, all in
 parallel, so no persona sees another's side effects.
+
+## Judge the changes (stage 3)
+
+```bash
+doppel run --backend nebius --base examples/shop/base --head examples/shop/head \
+  --personas examples/shop/personas.json --pr examples/shop/PR.md \
+  --out report.md --tests-out test_doppel_regressions.py
+```
+
+Nemotron 3 Ultra reads the PR description and diff and labels each distinct change `intended`,
+`regression` or `needs_human`. The report leads with regressions; intended changes fold away.
+`--tests-out` writes one pytest per regression that replays the persona and expects the base
+behavior: these tests pass on the main branch and fail on the PR. `--strict` exits 1 on regressions.
 
 ## Twin spec
 

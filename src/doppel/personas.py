@@ -77,19 +77,19 @@ def code_diff(base_dir: str | Path, head_dir: str | Path) -> str:
     return "".join(out)
 
 
-def parse_json(text: str):
-    """Find the personas object in a reply, even if the model wrote its reasoning first.
-    Tries every '{"personas": ...' in the text and keeps the valid one with the most personas."""
+def parse_json(text: str, key: str = "personas"):
+    """Find the {key: [...]} object in a reply, even if the model wrote its reasoning first.
+    Tries every '{"<key>": ...' in the text and keeps the valid one with the longest list."""
     text = text or ""
     if "</think>" in text:
         text = text.rsplit("</think>", 1)[1]
     decoder, best = json.JSONDecoder(), None
-    for m in re.finditer(r'\{\s*"personas"\s*:', text):
+    for m in re.finditer(r'\{\s*"' + re.escape(key) + r'"\s*:', text):
         try:
             obj, _ = decoder.raw_decode(text[m.start():])
         except ValueError:
             continue
-        if isinstance(obj.get("personas"), list) and (best is None or len(obj["personas"]) >= len(best["personas"])):
+        if isinstance(obj.get(key), list) and (best is None or len(obj[key]) >= len(best[key])):
             best = obj
     if best is not None:
         return best
@@ -147,7 +147,7 @@ ATTEMPTS = (
 )
 
 
-def nemotron_chat(model: str, prompt: str) -> tuple[str, int, int]:
+def nemotron_chat(model: str, prompt: str, temperature: float = 0.7) -> tuple[str, int, int]:
     """One Token Factory call. Returns (text, input tokens, output tokens). Tests replace this."""
     from openai import BadRequestError, OpenAI, UnprocessableEntityError
     client = OpenAI(base_url=os.getenv("NEBIUS_BASE_URL", "https://api.tokenfactory.nebius.com/v1"),
@@ -157,14 +157,14 @@ def nemotron_chat(model: str, prompt: str) -> tuple[str, int, int]:
     last_error = None
     for extra in ATTEMPTS:
         try:
-            resp = client.chat.completions.create(model=model, temperature=0.7, max_tokens=16000,
+            resp = client.chat.completions.create(model=model, temperature=temperature, max_tokens=16000,
                                                   messages=messages, **extra)
         except (BadRequestError, UnprocessableEntityError) as e:  # option not supported here: try the next
             last_error = e
             continue
         choice, u = resp.choices[0], resp.usage
         if choice.finish_reason == "length":
-            print("[personas] warning: reply hit max_tokens and may be cut off; try a smaller -n",
+            print("[nemotron] warning: reply hit max_tokens and may be cut off",
                   file=sys.stderr)
         return choice.message.content or "", u.prompt_tokens or 0, u.completion_tokens or 0
     raise last_error

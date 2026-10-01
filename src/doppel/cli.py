@@ -35,15 +35,28 @@ def cmd_run(a) -> int:
     worlds = run_twin(a.base, a.head, spec, personas)
     findings = compare(worlds["base"], worlds["head"], spec.ignore, spec.slow_ratio, spec.slow_min_ms)
     steps = sum(len(r["steps"]) for r in worlds["base"])
-    md = markdown(findings, len(personas), steps)
+    judged = None
+    if a.pr and findings:
+        from doppel.judge import judge, regression_tests
+        from doppel.personas import code_diff
+        judged = judge(findings, Path(a.pr).read_text(encoding="utf-8"), code_diff(a.base, a.head))
+        if a.tests_out:
+            Path(a.tests_out).write_text(regression_tests(findings, judged["verdicts"], personas,
+                                                          Path(a.tests_out).name), encoding="utf-8")
+    md = markdown(findings, len(personas), steps, judged)
     print(md)
     print(f"({time.perf_counter() - t0:.1f} s)", file=sys.stderr)
     if a.out:
         Path(a.out).write_text(md, encoding="utf-8")
     if a.json:
-        Path(a.json).write_text(json.dumps({"findings": [f.to_dict() for f in findings], "worlds": worlds},
+        verdicts = [v.__dict__ for v in judged["verdicts"]] if judged else None
+        Path(a.json).write_text(json.dumps({"findings": [f.to_dict() for f in findings], "verdicts": verdicts,
+                                            "worlds": worlds},
                                            indent=1, ensure_ascii=False, default=str), encoding="utf-8")
-    return 1 if (a.strict and findings) else 0
+    if a.strict:
+        regressions = [v for v in judged["verdicts"] if v.label == "regression"] if judged else findings
+        return 1 if regressions else 0
+    return 0
 
 
 def cmd_personas(a) -> int:
@@ -74,7 +87,10 @@ def main(argv=None) -> int:
     r.add_argument("--backend", choices=["local", "nebius"], default="local")
     r.add_argument("--out", help="write the Markdown report here")
     r.add_argument("--json", help="write findings and raw recordings here")
-    r.add_argument("--strict", action="store_true", help="exit 1 if anything changed (for CI)")
+    r.add_argument("--pr", help="PR description file: Nemotron Ultra judges each change against it")
+    r.add_argument("--tests-out", help="write a pytest file with one test per regression")
+    r.add_argument("--strict", action="store_true",
+                   help="exit 1 on regressions (or on any change when there is no --pr), for CI")
     g = sub.add_parser("personas", help="have Nemotron invent personas for an app")
     g.add_argument("--app", required=True, help="folder with the app's (base) code")
     g.add_argument("--head", help="pull request code: about half the personas will target what changed")
