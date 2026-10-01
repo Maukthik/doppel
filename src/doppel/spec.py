@@ -3,6 +3,9 @@
 Read from doppel.toml in the app's folder:
 
     [app]
+    image = "python:3.12-slim"  # sandbox base image (nebius backend)
+    install = ""              # install dependencies, e.g. "pip install -r requirements.txt" (nebius backend;
+                              # the local backend uses your current environment)
     start = "python app.py"   # must listen on the port given in $PORT
     ready = "/health"         # polled until it answers (< 500)
     seed = "python seed.py"   # run ONCE on the base code; both worlds start from that data
@@ -24,6 +27,8 @@ from pathlib import Path
 class TwinSpec:
     start: str
     ready: str = "/"
+    image: str = "python:3.12-slim"
+    install: str = ""
     seed: str = ""
     migrate: str = ""
     ignore: list[str] = field(default_factory=list)
@@ -36,7 +41,8 @@ class TwinSpec:
         app, diff = data.get("app", {}), data.get("diff", {})
         if not app.get("start"):
             raise ValueError(f"{path}: [app] start is required (the command that runs the app)")
-        return cls(start=app["start"], ready=app.get("ready", "/"), seed=app.get("seed", ""),
+        return cls(start=app["start"], ready=app.get("ready", "/"), image=app.get("image", "python:3.12-slim"),
+                   install=app.get("install", ""), seed=app.get("seed", ""),
                    migrate=app.get("migrate", ""), ignore=list(diff.get("ignore", [])),
                    slow_ratio=float(diff.get("slow_ratio", 2.0)),
                    slow_min_ms=float(diff.get("slow_min_ms", 50.0)))

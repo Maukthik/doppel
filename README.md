@@ -26,7 +26,7 @@ slower requests. Then it tells you which differences the PR meant to make and wh
 | Stage | What | State |
 |---|---|---|
 | 1 | Local twin: seed once, fresh world per persona, replay, diff, Markdown report | done |
-| 2 | Nebius Sandboxes backend (checkpoint + parallel forks) and Nemotron personas | next |
+| 2 | Nebius Sandboxes backend (checkpoint + parallel forks) and Nemotron personas | built, first live run next |
 | 3 | Nemotron judge: intended vs regression, using the PR description; writes a test per regression | |
 | 4 | GitHub Action: comment on every PR, replay link | |
 | 5 | Real open-source app demo + benchmark of planted regressions vs its own test suite | |
@@ -46,12 +46,31 @@ The shop example's pull request (`examples/shop/PR.md`) says it only adds an `in
 Doppel also finds the two changes it doesn't mention: coupon orders now cost more, and an order
 with quantity 0 is accepted instead of rejected.
 
+## Run it on Nebius (stage 2)
+
+```bash
+pip install -e ".[nebius,dev]"
+cp .env.example .env        # fill in NEBIUS_API_KEY and NEBIUS_PROJECT_ID
+# 1. the same hand-written personas, now in sandboxes: must match the local report
+doppel run --backend nebius --base examples/shop/base --head examples/shop/head --personas examples/shop/personas.json
+# 2. let Nemotron 3.5 Lightning invent personas, half of them aimed at what the PR changed
+doppel personas --app examples/shop/base --head examples/shop/head -n 12 --out generated.json
+doppel run --backend nebius --base examples/shop/base --head examples/shop/head --personas generated.json
+```
+
+How the twin uses sandbox checkpoints: base code is uploaded, dependencies installed and data
+seeded once (checkpoint). The base world forks from it; the head world forks from it with the
+PR's files laid on top. Every persona then runs in its own disposable fork of its world, all in
+parallel, so no persona sees another's side effects.
+
 ## Twin spec
 
 Put a `doppel.toml` next to your app:
 
 ```toml
 [app]
+image = "python:3.12-slim"              # sandbox image
+install = "pip install -r requirements.txt"
 start = "python app.py"   # must listen on $PORT
 ready = "/health"
 seed = "python seed.py"   # runs once on the base code; both worlds start from this data
