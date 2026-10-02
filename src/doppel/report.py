@@ -26,11 +26,58 @@ def _row(f: Finding, why: str | None = None) -> str:
     return "| " + " | ".join(cells) + " |"
 
 
-def markdown(findings: list[Finding], personas: int, steps: int, judged: dict | None = None) -> str:
+LOW_COVERAGE = 0.3
+
+
+def coverage_line(cov: dict | None) -> str:
+    if not cov or not cov.get("requests"):
+        return ""
+    line = (f"Coverage: the app served {cov['served']} of {cov['requests']} requests "
+            f"({100 * cov['served'] / cov['requests']:.0f}%) on base.")
+    if cov.get("stuck_personas"):
+        line += f" Stuck at login or a missing route: {', '.join(cov['stuck_personas'][:5])}."
+    if cov.get("repaired"):
+        line += f" Fixed in rehearsal: {len(cov['repaired'])} persona(s)."
+    return line
+
+
+CHECK = {"confirmed": "🔴 confirmed", "refuted": "🟢 refuted", "untested": "⚪ untested"}
+
+
+def suspicions_section(suspicions: list[dict] | None) -> str:
+    """The AI reviewer's suspicions, each checked against what the twin actually did."""
+    if not suspicions:
+        return ""
+    rows = ["### 🔎 Reviewer's suspicions, checked by the twin", "",
+            "| | Suspicion | Evidence from the twin |", "|---|---|---|"]
+    order = {"confirmed": 0, "untested": 1, "refuted": 2}
+    for x in sorted(suspicions, key=lambda x: order.get(x.get("status", "untested"), 1)):
+        rows.append(f"| {CHECK.get(x.get('status', 'untested'))} | {x['claim'].replace('|', '/')} | "
+                    f"{str(x.get('evidence', '')).replace('|', '/')} |")
+    return "\n".join(rows) + "\n"
+
+
+def markdown(findings: list[Finding], personas: int, steps: int, judged: dict | None = None,
+             coverage: dict | None = None, suspicions: list[dict] | None = None) -> str:
+    extra = suspicions_section(suspicions)
+    body = _markdown(findings, personas, steps, judged, coverage)
+    return body + ("\n" + extra if extra else "")
+
+
+def _markdown(findings: list[Finding], personas: int, steps: int, judged: dict | None = None,
+              coverage: dict | None = None) -> str:
+    cov = coverage_line(coverage)
+    low = bool(coverage and coverage.get("requests")
+               and coverage["served"] < LOW_COVERAGE * coverage["requests"])
+    warn = ("> ⚠️ Most requests were refused or not found, so this run says little about the PR. "
+            "Check the personas (or add a `[personas] guide` to doppel.toml).\n\n") if low else ""
     if not findings:
-        return (f"## Doppel: no behavior changes\n\n{personas} personas replayed {steps} requests "
-                "against base and head; every response matched.\n")
-    replayed = f"{personas} personas replayed {steps} requests against base and head."
+        title = "## Doppel: couldn't test this PR (low coverage)" if low else "## Doppel: no behavior changes"
+        return (f"{title}\n\n{warn}{personas} personas replayed {steps} requests "
+                f"against base and head; every response matched." + (f" {cov}" if cov else "") + "\n")
+    replayed = f"{personas} personas replayed {steps} requests against base and head." + (f" {cov}" if cov else "")
+    if warn:
+        replayed = warn + replayed
     if not judged or not judged.get("verdicts"):
         counts = {k: sum(f.kind == k for f in findings) for k in ICON}
         summary = " · ".join(f"{ICON[k]} {counts[k]} {TITLE[k].lower()}" for k in ICON if counts[k])

@@ -1,0 +1,26 @@
+diff --git a/api/users.py b/api/users.py
+index 9936252..beaa4bb 100644
+--- a/api/users.py
++++ b/api/users.py
+@@ -139,6 +139,21 @@ def unfollow(id):
+     return {}
+ 
+ 
++@users.route('/users/<int:id>/stats', methods=['GET'])
++@authenticate(token_auth)
++@other_responses({404: 'User not found'})
++def stats(id):
++    """Retrieve post and follow counts for a user"""
++    import sqlalchemy as sqla
++    user = db.session.get(User, id) or abort(404)
++
++    def count(q):
++        return db.session.scalar(sqla.select(sqla.func.count()).select_from(q.subquery()))
++
++    return {'posts': count(user.posts.select()), 'followers': count(user.followers.select()),
++            'following': count(user.following.select())}
++
++
+ @users.route('/users/<int:id>/following', methods=['GET'])
+ @authenticate(token_auth)
+ @paginated_response(users_schema, order_by=User.username)

@@ -21,7 +21,9 @@ PERSONAS = json.loads((SHOP / "personas.json").read_text(encoding="utf-8"))
 def shop_findings():
     spec = TwinSpec.load(SHOP / "head" / "doppel.toml")
     worlds = local.run_twin(SHOP / "base", SHOP / "head", spec, PERSONAS)
-    return compare(worlds["base"], worlds["head"], spec.ignore, spec.slow_ratio, spec.slow_min_ms)
+    findings = compare(worlds["base"], worlds["head"], spec.ignore, spec.slow_ratio, spec.slow_min_ms)
+    # a busy CI machine can make one local request look slow; these tests are about the other kinds
+    return [f for f in findings if f.kind != "slow"]
 
 
 def fake_ultra(model, prompt, temperature=0.7):

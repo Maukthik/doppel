@@ -18,6 +18,9 @@ inputs:
   judge:
     description: Let Nemotron Ultra label each change intended / regression using the PR description
     default: "true"
+  guided:
+    description: Let Nemotron Ultra list suspected regressions first; probe personas prove or refute each one
+    default: "true"
   fail-on-regression:
     description: Fail the check when the judge finds a regression
     default: "true"
@@ -68,6 +71,10 @@ runs:
         # pasted secrets often carry a trailing newline or space, which HTTP headers reject
         NEBIUS_API_KEY="$(printf '%s' "$NEBIUS_API_KEY" | tr -d '[:space:]')"
         NEBIUS_PROJECT_ID="$(printf '%s' "$NEBIUS_PROJECT_ID" | tr -d '[:space:]')"
+        # ...and people paste the whole .env line: drop a leading NAME= and surrounding quotes
+        NEBIUS_API_KEY="${NEBIUS_API_KEY#NEBIUS_API_KEY=}"; NEBIUS_PROJECT_ID="${NEBIUS_PROJECT_ID#NEBIUS_PROJECT_ID=}"
+        NEBIUS_API_KEY="${NEBIUS_API_KEY//\"/}"; NEBIUS_API_KEY="${NEBIUS_API_KEY//\'/}"
+        NEBIUS_PROJECT_ID="${NEBIUS_PROJECT_ID//\"/}"; NEBIUS_PROJECT_ID="${NEBIUS_PROJECT_ID//\'/}"
         export NEBIUS_API_KEY NEBIUS_PROJECT_ID
         echo "nebius-api-key: ${#NEBIUS_API_KEY} characters | nebius-project-id: ${#NEBIUS_PROJECT_ID} characters"
         # show only the unusual characters (not letters, digits, . _ -) so a bad paste is visible without leaking the value
@@ -93,8 +100,9 @@ runs:
         JUDGE=""
         if [ "${{ inputs.judge }}" = "true" ]; then
           JUDGE="--pr .doppel/out/PR.md --tests-out .doppel/out/test_doppel_regressions.py"
+          if [ "${{ inputs.guided }}" = "true" ]; then JUDGE="$JUDGE --guided"; fi
         fi
-        doppel run --backend nebius --base "$BASE" --head "$HEAD" --personas "$PERSONAS" $JUDGE \
+        doppel run --backend nebius --base "$BASE" --head "$HEAD" --personas "$PERSONAS" $JUDGE --rehearse \
           --out .doppel/out/report.md --json .doppel/out/run.json --strict
         code=$?
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,1290 @@
+{
+ "id": "r03-auth-error-field",
+ "kind": "regression",
+ "title": "Small cleanup in auth error handlers",
+ "source": "reverted fix beed1d9",
+ "bug": "401/403 responses rename the `message` field to `name`, unlike every other error.",
+ "expect": ".",
+ "tests": {
+  "caught": false,
+  "failed": [],
+  "summary": "44 passed in 10.09s",
+  "seconds": 10.7
+ },
+ "doppel": {
+  "detected": false,
+  "caught": false,
+  "any_regression": false,
+  "needs_human": 0,
+  "findings": [],
+  "summary": "",
+  "personas": [
+   {
+    "name": "alice_power",
+    "goal": "Create posts and engage with feed",
+    "vars": {
+     "name": "alice"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "POST",
+      "path": "/api/posts",
+      "json": {
+       "text": "Hello from alice!"
+      },
+      "save": {
+       "post_id": "id"
+      },
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/feed",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/users/me/following",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/api/me/following/2",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/me/following",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {}
+   }
+  ],
+  "persona_count": 1,
+  "failed_personas": [],
+  "coverage": {
+   "requests": 6,
+   "served": 4,
+   "blocked": 1,
+   "stuck_personas": [],
+   "personas": 1
+  },
+  "coverage_before_rehearsal": {
+   "requests": 6,
+   "served": 4,
+   "blocked": 1,
+   "stuck_personas": [],
+   "personas": 1
+  },
+  "repaired": [],
+  "recordings": {
+   "base": [
+    {
+     "persona": "alice_power",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImhIaVktRll3WmUyN2tqTC1xMUZsdmk1el9Ob0FsWXlXVE1leC1md0NJRFkifQ.7AIEFs7n1wxKexA5r71bgh1gsAjLuTSri-tz4GCNLuY\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 201,
+       "body": "{\"author\": {\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-02T13:57:55.974042Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, \"id\": 151, \"text\": \"Hello from alice!\", \"timestamp\": \"2026-10-02T13:57:55.979034Z\", \"url\": \"/api/posts/151\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 200,
+       "body": "{\"data\": [{\"author\": {\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-02T13:57:55.985895Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, \"id\": 151, \"text\": \"Hello from alice!\", \"timestamp\": \"2026-10-02T13:57:55.979034Z\", \"url\": \"/api/posts/151\"}, {\"author\": {\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=ide"
+      },
+      {
+       "request": "GET /api/users/me/following",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      },
+      {
+       "request": "POST /api/me/following/2",
+       "status": 409,
+       "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
+      },
+      {
+       "request": "GET /api/me/following",
+       "status": 200,
+       "body": "{\"data\": [{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, {\"about_me\": \"I am carol.\", \"avatar_url\": \"https://www.gravatar.com/avatar/d4766e3f21c67b7c786f012d910fa54f?d=identicon\", \"email\": \"carol@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 3, \"last_seen\": \"2026-01-01T09:00:00Z\", "
+      }
+     ]
+    }
+   ],
+   "head": [
+    {
+     "persona": "alice_power",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkRrMGVXclBHZ0J2amlqTjRfT19OZHJwRUhpbmdkVEZHVTRNeGVfQ3ZRUDQifQ.dPol80sCyA2NbYlmyJ-UozXLb-rz6NZSzgg3N7CNiAU\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 201,
+       "body": "{\"author\": {\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-02T13:57:56.420863Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, \"id\": 151, \"text\": \"Hello from alice!\", \"timestamp\": \"2026-10-02T13:57:56.425578Z\", \"url\": \"/api/posts/151\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 200,
+       "body": "{\"data\": [{\"author\": {\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-02T13:57:56.432048Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, \"id\": 151, \"text\": \"Hello from alice!\", \"timestamp\": \"2026-10-02T13:57:56.425578Z\", \"url\": \"/api/posts/151\"}, {\"author\": {\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=ide"
+      },
+      {
+       "request": "GET /api/users/me/following",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      },
+      {
+       "request": "POST /api/me/following/2",
+       "status": 409,
+       "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
+      },
+      {
+       "request": "GET /api/me/following",
+       "status": 200,
+       "body": "{\"data\": [{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, {\"about_me\": \"I am carol.\", \"avatar_url\": \"https://www.gravatar.com/avatar/d4766e3f21c67b7c786f012d910fa54f?d=identicon\", \"email\": \"carol@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 3, \"last_seen\": \"2026-01-01T09:00:00Z\", "
+      }
+     ]
+    }
+   ]
+  },
+  "steps": 6,
+  "usd": {
+   "personas": 0.004046279999999999,
+   "rehearsal": 0.0,
+   "judge": 0.0,
+   "sandbox_reported": 0.08247484000000001
+  },
+  "seconds": {
+   "personas": 12.2,
+   "twin": 36.0,
+   "judge": 0.0
+  },
+  "backend": "nebius"
+ },
+ "review": {
+  "caught": true,
+  "verdict": "regression",
+  "why": "The PR changes the error response field from 'message' to 'name', breaking the documented API contract and existing client expectations for auth error responses.",
+  "usd": 0.028109,
+  "seconds": 3.1
+ },
+ "errors": {},
+ "doppel_guided": {
+  "detected": true,
+  "caught": true,
+  "any_regression": true,
+  "needs_human": 0,
+  "findings": [
+   {
+    "kind": "body",
+    "persona": "alice_normal",
+    "request": "POST /api/posts",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "alice_normal",
+    "request": "GET /api/feed",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "bob_regular",
+    "request": "POST /api/me/following/1",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "bob_regular",
+    "request": "GET /api/feed",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "carol_minimal",
+    "request": "GET /api/me",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "dave_power",
+    "request": "POST /api/posts",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "dave_power",
+    "request": "POST /api/posts",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "dave_power",
+    "request": "POST /api/posts",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "dave_power",
+    "request": "POST /api/me/following/2",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "dave_power",
+    "request": "POST /api/me/following/3",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "dave_power",
+    "request": "GET /api/feed",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "erin_bad_input",
+    "request": "POST /api/posts",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "erin_bad_input",
+    "request": "GET /api/feed",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "probe_s1",
+    "request": "POST /api/tokens",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "probe_s2",
+    "request": "POST /api/tokens",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "probe_s2",
+    "request": "GET /api/users",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "probe_s3",
+    "request": "GET /api/users",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "probe_s4",
+    "request": "GET /api/users",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "persona": "probe_s4",
+    "request": "POST /api/tokens",
+    "detail": "changed: message (removed), name (added)",
+    "label": "regression",
+    "why": "The PR description says 'tidy' but the diff renames the response field from 'message' to 'name', which is a breaking API change for all listed endpoints and personas.",
+    "on_target": true
+   }
+  ],
+  "summary": "The PR renames the error response field 'message' to 'name' in two auth handlers, a breaking change not mentioned in the description.",
+  "personas": [
+   {
+    "name": "alice_normal",
+    "goal": "Create a post and view the feed",
+    "vars": {
+     "username": "alice",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "access_token": "$.access_token"
+      },
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "POST",
+      "path": "/api/posts",
+      "json": {
+       "text": "Hello from alice"
+      },
+      "headers": {
+       "Authorization": "Bearer {access_token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/feed",
+      "headers": {
+       "Authorization": "Bearer {access_token}"
+      }
+     }
+    ]
+   },
+   {
+    "name": "bob_regular",
+    "goal": "Follow alice and view her posts",
+    "vars": {
+     "username": "bob",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "access_token": "$.access_token"
+      },
+      "auth": [
+       "bob",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "POST",
+      "path": "/api/me/following/1",
+      "headers": {
+       "Authorization": "Bearer {access_token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/feed",
+      "headers": {
+       "Authorization": "Bearer {access_token}"
+      }
+     }
+    ]
+   },
+   {
+    "name": "carol_minimal",
+    "goal": "View own profile only",
+    "vars": {
+     "username": "carol",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "access_token": "$.access_token"
+      },
+      "auth": [
+       "carol",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "GET",
+      "path": "/api/me",
+      "headers": {
+       "Authorization": "Bearer {access_token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "dave_power",
+    "goal": "Create many posts and follow many users",
+    "vars": {
+     "username": "dave",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "access_token": "$.access_token"
+      },
+      "auth": [
+       "dave",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "POST",
+      "path": "/api/posts",
+      "json": {
+       "text": "Post 1 by dave"
+      },
+      "headers": {
+       "Authorization": "Bearer {access_token}"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/api/posts",
+      "json": {
+       "text": "Post 2 by dave"
+      },
+      "headers": {
+       "Authorization": "Bearer {access_token}"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/api/posts",
+      "json": {
+       "text": "Post 3 by dave"
+      },
+      "headers": {
+       "Authorization": "Bearer {access_token}"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/api/me/following/2",
+      "headers": {
+       "Authorization": "Bearer {access_token}"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/api/me/following/3",
+      "headers": {
+       "Authorization": "Bearer {access_token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/feed",
+      "headers": {
+       "Authorization": "Bearer {access_token}"
+      }
+     }
+    ]
+   },
+   {
+    "name": "erin_bad_input",
+    "goal": "Post with empty text (careless user)",
+    "vars": {
+     "username": "erin",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "access_token": "$.access_token"
+      },
+      "auth": [
+       "erin",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "POST",
+      "path": "/api/posts",
+      "json": {
+       "text": ""
+      },
+      "save": {
+       "err": "$.code"
+      },
+      "headers": {
+       "Authorization": "Bearer {access_token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/feed",
+      "headers": {
+       "Authorization": "Bearer {access_token}"
+      }
+     }
+    ]
+   },
+   {
+    "name": "frank_duplicate",
+    "goal": "Register duplicate username",
+    "vars": {
+     "username": "frank",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/users",
+      "json": {
+       "username": "frank",
+       "email": "frank@example.com",
+       "password": "doppel-pass"
+      },
+      "save": {
+       "dup": "$.code"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "access_token": "$.access_token"
+      },
+      "auth": [
+       "frank",
+       "doppel-pass"
+      ]
+     }
+    ]
+   },
+   {
+    "name": "probe_s1",
+    "goal": "Probe auth error format change (name vs message)",
+    "vars": {
+     "username": "alice",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "resp": "$.json"
+      },
+      "auth": [
+       "nonexistent",
+       "wrongpass"
+      ]
+     },
+     {
+      "method": "GET",
+      "path": "/api/tokens",
+      "save": {},
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     }
+    ],
+    "probe": "s1"
+   },
+   {
+    "name": "probe_s2",
+    "goal": "Probe auth error format + header persistence",
+    "vars": {
+     "username": "alice",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "resp": "$.json",
+       "www": "$.headers.WWW-Authenticate"
+      },
+      "auth": [
+       "nonexistent",
+       "wrongpass"
+      ]
+     },
+     {
+      "method": "GET",
+      "path": "/api/users",
+      "save": {
+       "header": "$.headers.WWW-Authenticate",
+       "body": "$.json"
+      },
+      "headers": {
+       "Authorization": "Bearer invalid"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/tokens",
+      "save": {},
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     }
+    ],
+    "probe": "s2"
+   },
+   {
+    "name": "probe_s3",
+    "goal": "Probe token auth error format change",
+    "vars": {
+     "username": "alice",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "GET",
+      "path": "/api/users",
+      "save": {
+       "body": "$.json"
+      },
+      "headers": {
+       "Authorization": "Bearer invalid"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/tokens",
+      "save": {},
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     }
+    ],
+    "probe": "s3"
+   },
+   {
+    "name": "probe_s4",
+    "goal": "Probe missing WWW-Authenticate header in token error",
+    "vars": {
+     "username": "alice",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "GET",
+      "path": "/api/users",
+      "save": {
+       "header_token": "$.headers",
+       "body": "$.json"
+      },
+      "headers": {
+       "Authorization": "Bearer invalid"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "header_basic": "$.headers.WWW-Authenticate"
+      },
+      "auth": [
+       "nonexistent",
+       "wrongpass"
+      ]
+     },
+     {
+      "method": "GET",
+      "path": "/api/tokens",
+      "save": {},
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     }
+    ],
+    "probe": "s4"
+   }
+  ],
+  "persona_count": 10,
+  "failed_personas": [],
+  "coverage": {
+   "requests": 30,
+   "served": 6,
+   "blocked": 23,
+   "stuck_personas": [
+    "alice_normal",
+    "bob_regular",
+    "dave_power",
+    "erin_bad_input",
+    "probe_s1",
+    "probe_s2",
+    "probe_s3",
+    "probe_s4"
+   ],
+   "personas": 10
+  },
+  "coverage_before_rehearsal": {
+   "requests": 31,
+   "served": 6,
+   "blocked": 24,
+   "stuck_personas": [
+    "alice_normal",
+    "bob_regular",
+    "dave_power",
+    "erin_bad_input",
+    "probe_s1",
+    "probe_s2",
+    "probe_s3",
+    "probe_s4"
+   ],
+   "personas": 10
+  },
+  "repaired": [
+   "alice_normal",
+   "bob_regular",
+   "dave_power",
+   "erin_bad_input",
+   "probe_s1",
+   "probe_s2",
+   "probe_s3",
+   "probe_s4"
+  ],
+  "recordings": {
+   "base": [
+    {
+     "persona": "alice_normal",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Imp4aE1VTGpoX2I3SnF6bXZlZEUyeXZub1ZIZEktUXREY0ZnMTZ2M2xkdDQifQ.SD8MDUnyirZexRb2RPRQsbKYbY0fqBJiY1IErz-y0xo\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "bob_regular",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkNsOE1TNV9HWVp5Ykc2aU5MZTduUVV4dS1ILTdEaWJ0X1lfWWh3Q21rN1UifQ.Zz3G8VEcp99uCLFqRHm5rD40uHC3BL5ZumIGBWX8Yrs\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/me/following/1",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "carol_minimal",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6InJpbzJBWk85SmprUHlVbTJvNlZrMkJ5Y3JqaGFab3J0b0JiMUF4SDVJZVkifQ.0eVsJdLCoLNp7dC82q7gCM151hLDDqG-fPLcDhHcB68\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "dave_power",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Ii1zRjZBU3hGSlNtbTJlS0xNQ3J6WjFFSGE2azRCZEZFdTdUbjd6ejZXWjQifQ.1ri76yhJgxMAGZHsqETk2tOg3mxfnLDNpVZ-xoUM9Rw\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/me/following/2",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/me/following/3",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "erin_bad_input",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6InZXTDlUOEl3NjBqOC1tazhMQktRZ1VTWFdBbnBpdm1aT3Z3Q1dqTjlBNlUifQ.xS9Py3MAHUBnsUTfgpCkQxRQnj1if3Ax2o29ofyIb2c\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "frank_duplicate",
+     "steps": [
+      {
+       "request": "POST /api/users",
+       "status": 400,
+       "body": "{\"code\": 400, \"description\": \"The server found one or more errors in the information that you sent.\", \"errors\": {\"json\": {\"email\": [\"Use a different email.\"], \"username\": [\"Use a different username.\"]}}, \"message\": \"Validation Error\"}"
+      },
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Im5wWW5VeDJJQUpEY1Q1S0t6SFlkUHNCVWtwM25fZVVoN21HVHh6bHY0c3MifQ.jDcfevAUTcipHpLyELpOXlG5uU9oxN_TMWqBuVdvi7w\", \"refresh_token\": null}"
+      }
+     ]
+    },
+    {
+     "persona": "probe_s1",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/tokens",
+       "status": 405,
+       "body": "{\"code\": 405, \"description\": \"The method is not allowed for the requested URL.\", \"message\": \"Method Not Allowed\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe_s2",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/users",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/tokens",
+       "status": 405,
+       "body": "{\"code\": 405, \"description\": \"The method is not allowed for the requested URL.\", \"message\": \"Method Not Allowed\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe_s3",
+     "steps": [
+      {
+       "request": "GET /api/users",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/tokens",
+       "status": 405,
+       "body": "{\"code\": 405, \"description\": \"The method is not allowed for the requested URL.\", \"message\": \"Method Not Allowed\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe_s4",
+     "steps": [
+      {
+       "request": "GET /api/users",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/tokens",
+       "status": 405,
+       "body": "{\"code\": 405, \"description\": \"The method is not allowed for the requested URL.\", \"message\": \"Method Not Allowed\"}"
+      }
+     ]
+    }
+   ],
+   "head": [
+    {
+     "persona": "alice_normal",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkhGeEdpZzRHRVRET0VoQ1AzQklYbzRlZFk5MGZkZ01jUk90eng2cnl0RWcifQ.P0UcWlgEBjlo2NX7Apm1AZl7_i45HMLtn0Jd33Ve8UY\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "bob_regular",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Ik92NzZBdUp4T0pkaHNEdXpTLWVNMm50SEhSa3lVOElua0ZobjhpbmxkWEUifQ.k6WnUVQhiLwNjE3G1mdnFvafLlJNO91fhh65R-I_L-U\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/me/following/1",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "carol_minimal",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkJCUnpxVGJ3ZWlMZzRLaGM2YnR2ZVFqZmFMVUZMN201dmtZX3VLOUxkelEifQ.mMNXvfK4FiNxrNHb7BCqiMOBMasl26gf7wZuVae3bkY\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "dave_power",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IlNPZFJWRkc2TlhOeUxhdVZXb0ZhcHJja0tWWEJ0WTJVekhOOUd2RlpqUTQifQ.LGsF-mE91UEYfaxFMdEmZwP0SjWw56R45Y8ljyzTCdo\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/me/following/2",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/me/following/3",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "erin_bad_input",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImYyVGc2cE53cVRSVWtqY1BNUlByenhSU09SdUV4NjFZYjRrQmMtQUZtTHcifQ.mb0WSFIIfTByYchnPXU8lrerUgDeF-03M8EhfJ9jeFU\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "frank_duplicate",
+     "steps": [
+      {
+       "request": "POST /api/users",
+       "status": 400,
+       "body": "{\"code\": 400, \"description\": \"The server found one or more errors in the information that you sent.\", \"errors\": {\"json\": {\"email\": [\"Use a different email.\"], \"username\": [\"Use a different username.\"]}}, \"message\": \"Validation Error\"}"
+      },
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IldrRXJFNzQtZ1pjVHVPbXJneHZEdEtvMUI3Rk5GLWlEV1hUR1ZFd1ZQOFUifQ.-7AXj91_BoK5It3x1qcYblKQ6dP_uEfn4hqaf09W-f4\", \"refresh_token\": null}"
+      }
+     ]
+    },
+    {
+     "persona": "probe_s1",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/tokens",
+       "status": 405,
+       "body": "{\"code\": 405, \"description\": \"The method is not allowed for the requested URL.\", \"message\": \"Method Not Allowed\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe_s2",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/users",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/tokens",
+       "status": 405,
+       "body": "{\"code\": 405, \"description\": \"The method is not allowed for the requested URL.\", \"message\": \"Method Not Allowed\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe_s3",
+     "steps": [
+      {
+       "request": "GET /api/users",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/tokens",
+       "status": 405,
+       "body": "{\"code\": 405, \"description\": \"The method is not allowed for the requested URL.\", \"message\": \"Method Not Allowed\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe_s4",
+     "steps": [
+      {
+       "request": "GET /api/users",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"name\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/tokens",
+       "status": 405,
+       "body": "{\"code\": 405, \"description\": \"The method is not allowed for the requested URL.\", \"message\": \"Method Not Allowed\"}"
+      }
+     ]
+    }
+   ]
+  },
+  "steps": 30,
+  "suspicions": [
+   {
+    "id": "s1",
+    "claim": "The basic auth error handler now returns 'name' instead of 'message' in the JSON error response, breaking the documented error format.",
+    "route": "POST /api/tokens",
+    "trigger": "Send POST /api/tokens with invalid Basic Auth credentials (e.g., Authorization: Basic invalid). Read the JSON response body and verify the error object contains 'name' instead of the documented 'message' field.",
+    "status": "confirmed",
+    "evidence": "POST /api/tokens with invalid Basic Auth returned 401 with 'message' in base and 'name' in head (f14, f15, f19).",
+    "changes": [
+     "f14",
+     "f15",
+     "f19"
+    ]
+   },
+   {
+    "id": "s2",
+    "claim": "The basic auth error handler still returns the 'WWW-Authenticate': 'Form' header but the error body format changed, potentially breaking clients expecting the documented 'message' field with that header.",
+    "route": "POST /api/tokens",
+    "trigger": "Send POST /api/tokens with invalid Basic Auth credentials. Read the response headers for 'WWW-Authenticate' and the JSON body for 'name' vs 'message' field.",
+    "status": "untested",
+    "evidence": "Probes for s2 did not include response headers, so presence of 'WWW-Authenticate' header cannot be verified.",
+    "changes": []
+   },
+   {
+    "id": "s3",
+    "claim": "The token auth error handler now returns 'name' instead of 'message' in the JSON error response, breaking the documented error format for token authentication failures.",
+    "route": "GET /api/users",
+    "trigger": "Send GET /api/users with an invalid or missing Bearer token (Authorization: Bearer invalid). Read the JSON response body and verify the error object contains 'name' instead of the documented 'message' field.",
+    "status": "confirmed",
+    "evidence": "GET /api/users with invalid Bearer token returned 401 with 'message' in base and 'name' in head (f16, f17, f18).",
+    "changes": [
+     "f16",
+     "f17",
+     "f18"
+    ]
+   },
+   {
+    "id": "s4",
+    "claim": "The token auth error handler no longer returns the 'WWW-Authenticate' header that basic auth returns, creating an inconsistency between auth error responses that clients may rely on.",
+    "route": "GET /api/users",
+    "trigger": "Send GET /api/users with an invalid Bearer token. Compare response headers with a failed Basic Auth request to /api/tokens; observe missing 'WWW-Authenticate' header in token auth error response.",
+    "status": "untested",
+    "evidence": "Probes for s4 did not include response headers, so presence or absence of 'WWW-Authenticate' header cannot be verified.",
+    "changes": []
+   }
+  ],
+  "probes": 4,
+  "usd": {
+   "suspect": 0.029364,
+   "check": 0.003867,
+   "personas": 0.0051364800000000006,
+   "rehearsal": 0.03678,
+   "judge": 0.000867,
+   "sandbox_reported": 0.10438055
+  },
+  "seconds": {
+   "personas": 33.9,
+   "twin": 347.3,
+   "judge": 3.2
+  },
+  "backend": "nebius"
+ }
+}

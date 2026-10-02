@@ -95,6 +95,10 @@ def judge(findings: list[Finding], pr_text: str, diff: str, model: str | None = 
     verdicts: list[Verdict | None] = [None] * len(findings)
     for cid, idx in groups.items():
         verdict = by_id.get(cid, Verdict("needs_human", "The judge gave no verdict for this change."))
+        if findings[idx[0]].kind == "slow" and verdict.label == "regression":
+            # one timing sample in a shared sandbox is not proof: a human decides
+            verdict = Verdict("needs_human", "Slower in this run (one sample in a shared sandbox): "
+                                             + verdict.why)
         for i in idx:
             verdicts[i] = verdict
     summary = str(raw.get("summary", "")) if isinstance(raw, dict) else ""

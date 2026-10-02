@@ -32,7 +32,33 @@ def cmd_run(a) -> int:
         from doppel.backends.nebius import run_twin
 
     t0 = time.perf_counter()
-    worlds = run_twin(a.base, a.head, spec, personas)
+    sus, checks = [], {}
+    if a.guided:
+        if not a.pr:
+            raise ValueError("--guided needs --pr (the reviewer reads the PR description)")
+        from doppel.personas import code_diff, generate, read_source
+        from doppel.suspects import suspect
+        sus = suspect(Path(a.pr).read_text(encoding="utf-8"), code_diff(a.base, a.head),
+                      read_source(a.base))["suspicions"]
+        print(f"[review] {len(sus)} suspicion(s): " + "; ".join(x["claim"] for x in sus), file=sys.stderr)
+        if sus:
+            personas = personas + generate(a.base, head_dir=a.head, guide=spec.persona_guide, suspicions=sus,
+                                           probes_only=True)["personas"]
+    refine, repaired = None, []
+    if a.rehearse:
+        from doppel.rehearsal import repair
+
+        def refine(ps, recordings):
+            fixed = repair(ps, recordings, a.base, guide=spec.persona_guide, login=spec.login)
+            repaired.extend(fixed["repaired"])
+            print(f"[rehearsal] fixed {len(fixed['repaired'])} persona(s) that got nowhere", file=sys.stderr)
+            return fixed["personas"]
+    worlds = run_twin(a.base, a.head, spec, personas, refine=refine)
+    personas = worlds.get("personas", personas)
+    for f in worlds.get("failed", []):
+        print(f"[twin] persona '{f['persona']}' failed: {f['error']}", file=sys.stderr)
+    from doppel.rehearsal import coverage
+    cov = {**coverage(worlds["base"]), "repaired": repaired}
     findings = compare(worlds["base"], worlds["head"], spec.ignore, spec.slow_ratio, spec.slow_min_ms)
     steps = sum(len(r["steps"]) for r in worlds["base"])
     judged = None
@@ -43,7 +69,12 @@ def cmd_run(a) -> int:
         if a.tests_out:
             Path(a.tests_out).write_text(regression_tests(findings, judged["verdicts"], personas,
                                                           Path(a.tests_out).name), encoding="utf-8")
-    md = markdown(findings, len(personas), steps, judged)
+    if sus:
+        from doppel.suspects import check
+        checks = check(sus, findings, judged["verdicts"] if judged else None, personas,
+                       worlds["base"], worlds["head"])["checks"]
+    md = markdown(findings, len(worlds["base"]), steps, judged, cov,
+                  [{**x, **checks.get(x["id"], {})} for x in sus])
     print(md)
     print(f"({time.perf_counter() - t0:.1f} s)", file=sys.stderr)
     if a.out:
@@ -51,7 +82,7 @@ def cmd_run(a) -> int:
     if a.json:
         verdicts = [v.__dict__ for v in judged["verdicts"]] if judged else None
         Path(a.json).write_text(json.dumps({"findings": [f.to_dict() for f in findings], "verdicts": verdicts,
-                                            "worlds": worlds},
+                                            "coverage": cov, "personas": personas, "worlds": worlds},
                                            indent=1, ensure_ascii=False, default=str), encoding="utf-8")
     if a.strict:
         regressions = [v for v in judged["verdicts"] if v.label == "regression"] if judged else findings
@@ -61,7 +92,9 @@ def cmd_run(a) -> int:
 
 def cmd_personas(a) -> int:
     from doppel.personas import generate
-    out = generate(a.app, n=a.n, head_dir=a.head, model=a.model)
+    spec_path = Path(a.head or a.app) / "doppel.toml"
+    guide = TwinSpec.load(spec_path).persona_guide if spec_path.exists() else ""
+    out = generate(a.app, n=a.n, head_dir=a.head, model=a.model, guide=guide)
     Path(a.out).write_text(json.dumps(out["personas"], indent=1, ensure_ascii=False), encoding="utf-8")
     print(f"{len(out['personas'])} personas -> {a.out} | {out['model']} | "
           f"{out['tokens'][0]}+{out['tokens'][1]} tokens | ${out['usd']:.4f}"
@@ -102,6 +135,10 @@ def main(argv=None) -> int:
     r.add_argument("--json", help="write findings and raw recordings here")
     r.add_argument("--pr", help="PR description file: Nemotron Ultra judges each change against it")
     r.add_argument("--tests-out", help="write a pytest file with one test per regression")
+    r.add_argument("--guided", action="store_true",
+                   help="an AI reviewer lists suspected regressions; probe personas prove or refute each one")
+    r.add_argument("--rehearse", action="store_true",
+                   help="replay personas on base first and have Nemotron fix the ones stuck at login or 404")
     r.add_argument("--strict", action="store_true",
                    help="exit 1 on regressions (or on any change when there is no --pr), for CI")
     g = sub.add_parser("personas", help="have Nemotron invent personas for an app")

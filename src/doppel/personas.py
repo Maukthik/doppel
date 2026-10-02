@@ -27,23 +27,44 @@ the app can be compared by replaying the same personas against both.
 Return ONLY JSON: {{"personas": [persona, ...]}} with exactly {n} personas. Each persona:
   {{"name": "short distinct name", "goal": "one sentence",
     "vars": {{"name": value, ...}},
+    "headers": {{"Header-Name": "value"}} (optional, sent with every step),
     "steps": [{{"method": "GET|POST|PUT|PATCH|DELETE", "path": "/route?query",
                "json": {{...}} (only for requests with a body),
+               "headers": {{...}} (optional, this step only),
+               "auth": ["username", "password"] (optional, HTTP Basic auth for this step),
                "save": {{"var_name": "dotted.path.in.response"}} (optional)}}, ...]}}
-Use "{{var}}" in path or json to reuse saved or preset values (e.g. an id returned by an earlier step).
+Use "{{var}}" in path, json or headers to reuse saved or preset values (an id or a token returned
+by an earlier step), e.g. "headers": {{"Authorization": "Bearer {{token}}"}} after a login step that
+saves {{"token": "access_token"}}.
 Rules:
-- Only use routes that exist in the code below. 2-6 steps per persona.
+- Only use routes that exist in the code below, with their full path (including any URL prefix the
+  app registers them under). 2-8 steps per persona.
+- If routes need a login, read how the code authenticates (e.g. HTTP Basic auth on a token route,
+  then a Bearer token header) and do exactly that, using accounts that the seed or setup code
+  creates (or that the persona registers itself first). A persona stuck at the login tests nothing.
+- Log in only with accounts the seed or setup code creates (exact usernames and passwords), or
+  register the account first in the same persona.
 - Mix: typical users, power users, and careless users who send bad input (zero, negative, empty,
   missing fields, unknown ids, duplicates, boundary values). Careless users matter: they find lost validation.
 - Every persona must work on its own against a freshly seeded database (no persona depends on another).
-{focus}
+{guide}{focus}
 App source:
 {source}
 """
 
 FOCUS = """- About half of the personas must walk through the behavior touched by this pull request diff
-  (they should call the routes whose code changed, with inputs that reach the changed lines):
+  (they should call the routes whose code changed, with inputs that reach the changed lines).
+  After any request that changes data, read the affected data back (the list, the object, the
+  feed), because a wrong side effect only shows up in what the app returns afterwards:
 {diff}
+"""
+
+PROBES = """- Probes: {lead} exactly one probe persona per suspicion below (so {total} personas in
+  all). A probe has "probe": "<suspicion id>" and a name starting with "probe". It logs in if the
+  route needs it, sends exactly the input that would trigger the suspicion (use ids that exist in
+  the seed data or that an earlier step created and saved, never an unfilled placeholder), and then
+  reads back whatever would show the effect. Suspicions:
+{suspicions}
 """
 
 
@@ -118,14 +139,23 @@ def validate(raw) -> list[dict]:
                 step["json"] = s["json"]
             if isinstance(s.get("save"), dict):
                 step["save"] = {str(k): str(v) for k, v in s["save"].items()}
+            if isinstance(s.get("headers"), dict):
+                step["headers"] = {str(k): str(v) for k, v in s["headers"].items()}
+            if isinstance(s.get("auth"), list) and len(s["auth"]) == 2:
+                step["auth"] = [str(x) for x in s["auth"]]
             steps.append(step)
         name = str(p.get("name") or f"persona {len(personas) + 1}")[:60]
         while name in seen:
             name += "'"
         if steps:
             seen.add(name)
-            personas.append({"name": name, "goal": str(p.get("goal", ""))[:200],
-                             "vars": p.get("vars") if isinstance(p.get("vars"), dict) else {}, "steps": steps})
+            persona = {"name": name, "goal": str(p.get("goal", ""))[:200],
+                       "vars": p.get("vars") if isinstance(p.get("vars"), dict) else {}, "steps": steps}
+            if isinstance(p.get("headers"), dict):
+                persona["headers"] = {str(k): str(v) for k, v in p["headers"].items()}
+            if p.get("probe"):
+                persona["probe"] = str(p["probe"])[:20]
+            personas.append(persona)
     return personas
 
 
@@ -170,17 +200,36 @@ def nemotron_chat(model: str, prompt: str, temperature: float = 0.7) -> tuple[st
     raise last_error
 
 
-def generate(app_dir, n: int = 12, head_dir=None, model: str | None = None, chat=nemotron_chat) -> dict:
-    """Returns {"personas": [...], "model": ..., "usd": ..., "dropped": ...}."""
+def generate(app_dir, n: int = 12, head_dir=None, model: str | None = None, chat=nemotron_chat,
+             guide: str = "", suspicions: list[dict] | None = None, probes_only: bool = False) -> dict:
+    """Returns {"personas": [...], "model": ..., "usd": ..., "dropped": ...}. Asks again once if the
+    model returns fewer than half the personas asked for."""
     model = model or os.getenv("PERSONA_MODEL", "nvidia/Nemotron-3_5-Lightning")
     diff = code_diff(app_dir, head_dir) if head_dir else ""
     focus = FOCUS.format(diff=diff[:60_000]) if diff else ""
-    prompt = PROMPT.format(n=n, focus=focus, source=read_source(app_dir))
-    text, tin, tout = chat(model, prompt)
-    raw = parse_json(text)
-    personas = validate(raw)
-    asked = len(raw.get("personas", [])) if isinstance(raw, dict) else 0
+    if suspicions:
+        listed = "\n".join(f"  {x['id']}: {x['claim']} (route: {x.get('route')}; trigger: {x.get('trigger')})"
+                           for x in suspicions)
+        if probes_only:  # only the probes: n is the number of suspicions
+            n, focus = len(suspicions), ""
+        focus += PROBES.format(lead="write only" if probes_only else "in addition, write",
+                               total=n if probes_only else n + len(suspicions), suspicions=listed)
+    notes = f"- Notes from the app's owner: {guide}\n" if guide else ""
+    prompt = PROMPT.format(n=n, guide=notes, focus=focus, source=read_source(app_dir))
+    best, usd, tokens = ([], "", 0), 0.0, [0, 0]
+    for _ in range(2):
+        text, tin, tout = chat(model, prompt)
+        usd += cost_usd(model, tin, tout)
+        tokens = [tokens[0] + tin, tokens[1] + tout]
+        raw = parse_json(text)
+        personas = validate(raw)
+        asked = len(raw.get("personas", [])) if isinstance(raw, dict) else 0
+        if len(personas) > len(best[0]):
+            best = (personas, text, asked)
+        if len(personas) * 2 >= n:
+            break
+    personas, text, asked = best
     if not personas:
         raise RuntimeError(f"{model} returned no usable personas. Reply started with: {text[:300]!r}")
-    return {"personas": personas, "model": model, "usd": cost_usd(model, tin, tout),
-            "tokens": [tin, tout], "dropped": max(asked - len(personas), 0)}
+    return {"personas": personas, "model": model, "usd": usd, "tokens": tokens,
+            "dropped": max(asked - len(personas), 0) if isinstance(asked, int) else 0}

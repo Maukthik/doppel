@@ -15,6 +15,7 @@ Needs NEBIUS_API_KEY and NEBIUS_PROJECT_ID (pip install "doppel[nebius]").
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import shlex
 from pathlib import Path
@@ -28,6 +29,7 @@ PORT = 8000
 MAX_PARALLEL = 40          # the beta allows 50 concurrent operations; leave headroom
 PERSONA_TIMEOUT = 300
 OUTPUT_LIMIT = 8 * 1024 * 1024  # default is 64 KB, too small for a persona's recording
+RETRIES = 3
 
 
 def code_files(root: str | Path) -> dict[str, Path]:
@@ -87,14 +89,43 @@ class NebiusTwin:
         if s.migrate:
             head = await self._step(head, s.migrate, "migrate (head)")
         self.log(f"[twin] base world {base.uuid} | head world {head.uuid}")
+        await self.verify(base, base_dir, head, head_dir)
         return {"base": base, "head": head}
+
+    async def verify(self, base, base_dir, head, head_dir) -> None:
+        """Check, inside each world, that the files the PR changes hold that world's version.
+        A twin that silently runs the same code twice would report "no changes" for every PR."""
+        changed = changed_files(base_dir, head_dir)
+        if not changed:
+            self.log("[twin] warning: base and head code are identical")
+            return
+        for label, world, root in (("base", base, base_dir), ("head", head, head_dir)):
+            expected = {rel: _sha(Path(root) / rel) for rel in changed}
+            out = await world.run(shell=f"cd {APP} && python3 -c {shlex.quote(HASH_SCRIPT)}",
+                                  files={"doppel/paths.json": json.dumps(changed).encode()}, timeout=120)
+            self._count(out)
+            try:
+                found = json.loads((out.stdout or "").strip().splitlines()[-1])
+            except (ValueError, IndexError):
+                raise RuntimeError(f"could not verify the {label} world: {(out.stderr or '')[-500:]}") from None
+            wrong = sorted(rel for rel in changed if found.get(rel) != expected[rel])
+            if wrong:
+                raise RuntimeError(f"the {label} world doesn't contain the {label} code for: {', '.join(wrong[:8])}")
+        self.log(f"[twin] verified {len(changed)} changed file(s) in both worlds")
 
     async def replay_persona(self, world, persona: dict, sem: asyncio.Semaphore) -> dict:
         files = {"doppel/runner.py": RUNNER.read_bytes(),
                  "doppel/persona.json": json.dumps([persona]).encode()}
-        async with sem:
-            out = await world.run(shell=persona_command(self.spec), files=files, timeout=PERSONA_TIMEOUT,
-                                  truncate_output_at=OUTPUT_LIMIT)
+        for attempt in range(RETRIES):
+            try:
+                async with sem:
+                    out = await world.run(shell=persona_command(self.spec), files=files, timeout=PERSONA_TIMEOUT,
+                                          truncate_output_at=OUTPUT_LIMIT)
+                break
+            except Exception as e:  # noqa: BLE001 - retry network hiccups, re-raise anything else
+                if attempt == RETRIES - 1 or not _transient(e):
+                    raise
+                await asyncio.sleep(2 * (attempt + 1))
         self._count(out)
         text = (out.stdout or "").strip()
         try:
@@ -106,14 +137,69 @@ class NebiusTwin:
                                f"{text[-1500:]}\n{(out.stderr or '')[-1500:]}")
         return recordings[0]
 
-    async def run(self, base_dir, head_dir, personas: list[dict]) -> dict:
-        worlds = await self.build_worlds(base_dir, head_dir)
+    async def _replay_all(self, world, personas: list[dict], sem) -> list:
+        """One recording (or the exception) per persona; one broken persona doesn't sink the run."""
+        return await asyncio.gather(*(self.replay_persona(world, p, sem) for p in personas), return_exceptions=True)
+
+    async def run(self, base_dir, head_dir, personas: list[dict], refine=None) -> dict:
+        for attempt in range(RETRIES):  # building talks to the API a lot: retry network hiccups
+            try:
+                worlds = await self.build_worlds(base_dir, head_dir)
+                break
+            except Exception as e:  # noqa: BLE001
+                if attempt == RETRIES - 1 or not _transient(e):
+                    raise
+                self.log(f"[twin] {type(e).__name__} while building the worlds, retrying")
+                await asyncio.sleep(5 * (attempt + 1))
         sem = asyncio.Semaphore(MAX_PARALLEL)
-        jobs = [self.replay_persona(worlds[label], p, sem) for label in ("base", "head") for p in personas]
-        results = await asyncio.gather(*jobs)
-        n = len(personas)
-        self.log(f"[twin] {2 * n} persona runs | {self.runs} sandbox runs | reported cost {self.cost:.4f}")
-        return {"base": list(results[:n]), "head": list(results[n:]), "sandbox_cost": self.cost}
+        rehearsal = None
+        if refine is not None:  # rehearse on base, let the caller fix personas that got nowhere
+            first = await self._replay_all(worlds["base"], personas, sem)
+            rehearsal = [r for r in first if isinstance(r, dict)]
+            personas = refine(personas, rehearsal)
+            self.log(f"[twin] rehearsal: {len(rehearsal)} personas replayed on base")
+        base, head = await asyncio.gather(self._replay_all(worlds["base"], personas, sem),
+                                          self._replay_all(worlds["head"], personas, sem))
+        out = pair(personas, base, head)
+        failed = f" | {len(out['failed'])} personas failed" if out["failed"] else ""
+        self.log(f"[twin] {2 * len(personas)} persona runs | {self.runs} sandbox runs | "
+                 f"reported cost {self.cost:.4f}{failed}")
+        return {**out, "personas": personas, "rehearsal": rehearsal, "sandbox_cost": self.cost}
+
+
+HASH_SCRIPT = ("import hashlib,json,os;p=json.load(open('/doppel/paths.json'));"
+               "print(json.dumps({r:(hashlib.sha256(open(r,'rb').read()).hexdigest() "
+               "if os.path.exists(r) else None) for r in p}))")
+
+
+def _sha(path: Path):
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+
+
+def changed_files(base_dir, head_dir) -> list[str]:
+    """App-relative paths (posix) that differ between the two code trees, added or removed included."""
+    a = {k.split("/", 1)[1]: v for k, v in code_files(base_dir).items()}
+    b = {k.split("/", 1)[1]: v for k, v in code_files(head_dir).items()}
+    return sorted(rel for rel in set(a) | set(b)
+                  if rel not in a or rel not in b or a[rel].read_bytes() != b[rel].read_bytes())
+
+
+def _transient(e: Exception) -> bool:
+    name = type(e).__name__.lower()
+    return any(k in name for k in ("timeout", "timedout", "connect", "unavailable", "network"))
+
+
+def pair(personas: list[dict], base: list, head: list) -> dict:
+    """Keep personas that replayed in both worlds; report the rest instead of crashing the run."""
+    ok_base, ok_head, failed = [], [], []
+    for p, rb, rh in zip(personas, base, head, strict=True):
+        if isinstance(rb, dict) and isinstance(rh, dict):
+            ok_base.append(rb)
+            ok_head.append(rh)
+        else:
+            err = rb if not isinstance(rb, dict) else rh
+            failed.append({"persona": p.get("name"), "error": f"{type(err).__name__}: {str(err)[:300]}"})
+    return {"base": ok_base, "head": ok_head, "failed": failed}
 
 
 def make_client():
@@ -122,7 +208,8 @@ def make_client():
     return Contree(config=ContreeConfig(operation_poll_secs_min=0.05, operation_poll_secs_max=1.0))
 
 
-def run_twin(base_dir, head_dir, spec: TwinSpec, personas: list[dict], client=None) -> dict:
-    """Same contract as backends.local.run_twin: {"base": recordings, "head": recordings}."""
+def run_twin(base_dir, head_dir, spec: TwinSpec, personas: list[dict], client=None, refine=None) -> dict:
+    """Same contract as backends.local.run_twin: {"base": recordings, "head": recordings, "failed": [...],
+    "personas": the personas actually replayed (after refine), "rehearsal": base recordings or None}."""
     twin = NebiusTwin(client or make_client(), spec)
-    return asyncio.run(twin.run(base_dir, head_dir, personas))
+    return asyncio.run(twin.run(base_dir, head_dir, personas, refine))

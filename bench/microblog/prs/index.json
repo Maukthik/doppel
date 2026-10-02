@@ -1,0 +1,272 @@
+[
+ {
+  "id": "r01-email-lookup",
+  "kind": "regression",
+  "title": "Drop redundant email lookup in UserSchema",
+  "body": "The `email` column is already unique in the database, so the extra query in `validate_email` is redundant. Removing it saves one query per registration and profile update.",
+  "expect": "POST /api/users|PUT /api/me",
+  "source": "reverted fix 5d704d1 (issue #9)",
+  "bug": "Duplicate emails now fail with a raw database integrity error instead of a validation error."
+ },
+ {
+  "id": "r02-revoke-auth",
+  "kind": "regression",
+  "title": "Let DELETE /api/tokens handle its own auth",
+  "body": "The revoke endpoint reads the token from the Authorization header itself, so the `token_auth` decorator was doing the same lookup twice.",
+  "expect": "DELETE /api/tokens",
+  "source": "reverted fix 4c5d5aa (issue #24)",
+  "bug": "Revoking without an Authorization header crashes with a 500 instead of 401."
+ },
+ {
+  "id": "r03-auth-error-field",
+  "kind": "regression",
+  "title": "Small cleanup in auth error handlers",
+  "body": "Tidy the two error handlers in `api/auth.py`.",
+  "expect": ".",
+  "source": "reverted fix beed1d9",
+  "bug": "401/403 responses rename the `message` field to `name`, unlike every other error."
+ },
+ {
+  "id": "r04-pagination-count",
+  "kind": "regression",
+  "title": "Cheaper count for paginated responses",
+  "body": "Speed up paginated endpoints: reuse the page query for the count instead of running a separate COUNT over the whole table.",
+  "expect": "GET /api/",
+  "source": "planted",
+  "bug": "`pagination.total` is capped at the page size, so clients think there is one page."
+ },
+ {
+  "id": "r05-feed-own-posts",
+  "kind": "regression",
+  "title": "Simplify feed query",
+  "body": "Removes the OR condition from the feed query; the join on followers already covers it.",
+  "expect": "GET /api/feed",
+  "source": "planted",
+  "bug": "Your own posts disappear from your feed."
+ },
+ {
+  "id": "r06-password-change",
+  "kind": "regression",
+  "title": "Simplify password update check",
+  "body": "Flatten the nested condition in `PUT /api/me`.",
+  "expect": "PUT /api/me",
+  "source": "planted",
+  "bug": "The password can be changed without sending the old password."
+ },
+ {
+  "id": "r07-edit-own-post",
+  "kind": "regression",
+  "title": "Avoid loading the author when checking post ownership",
+  "body": "Compare the post's `user_id` instead of loading the `author` relationship on every edit.",
+  "expect": "PUT /api/posts/",
+  "source": "planted",
+  "bug": "Authors get 403 when editing their own posts."
+ },
+ {
+  "id": "r08-login-by-email",
+  "kind": "regression",
+  "title": "Use a single query in verify_password",
+  "body": "One lookup instead of two in the basic auth callback.",
+  "expect": "POST /api/tokens",
+  "source": "planted",
+  "bug": "Logging in with an email address instead of a username stops working."
+ },
+ {
+  "id": "r09-post-length",
+  "kind": "regression",
+  "title": "Tidy PostSchema",
+  "body": "Reorder fields and tidy the validators in `PostSchema`.",
+  "expect": "POST /api/posts|PUT /api/posts/",
+  "source": "planted",
+  "bug": "Posts longer than 140 characters (allowed: 280) are rejected."
+ },
+ {
+  "id": "r10-post-201",
+  "kind": "regression",
+  "title": "Consistent response decorators in posts.py",
+  "body": "Use the same decorator style everywhere in `api/posts.py`.",
+  "expect": "POST /api/posts",
+  "source": "planted",
+  "bug": "Creating a post answers 200 instead of 201 Created."
+ },
+ {
+  "id": "r11-email-length",
+  "kind": "regression",
+  "title": "Allow emails up to 254 characters",
+  "body": "RFC 5321 allows addresses up to 254 characters; our limit of 120 rejected some real users.",
+  "expect": "POST /api/users|PUT /api/me",
+  "source": "planted",
+  "bug": "The email format check is gone: `not-an-email` is accepted."
+ },
+ {
+  "id": "r12-posts-url",
+  "kind": "regression",
+  "title": "Code style cleanup in schemas.py",
+  "body": "Line lengths and field ordering in `api/schemas.py`. No functional change.",
+  "expect": ".",
+  "source": "planted",
+  "bug": "`posts_url` disappears from every user object."
+ },
+ {
+  "id": "r13-unfollow-all",
+  "kind": "regression",
+  "title": "Single-statement unfollow",
+  "body": "Skip the `is_following` check in `User.unfollow` and issue the DELETE directly.",
+  "expect": "follow|feed",
+  "source": "planted",
+  "bug": "Unfollowing one user unfollows everyone."
+ },
+ {
+  "id": "r14-is-followed",
+  "kind": "regression",
+  "title": "Readability: clearer names in is_followed",
+  "body": "Rename variables in `is_followed` for clarity.",
+  "expect": "GET /api/me/following/\\d",
+  "source": "planted",
+  "bug": "`GET /me/following/<id>` answers whether they follow you, not you them."
+ },
+ {
+  "id": "r15-followers-swapped",
+  "kind": "regression",
+  "title": "Share one helper between following and followers",
+  "body": "Deduplicate the two endpoints that list a user's follow relationships.",
+  "expect": "GET /api/users/\\d+/followers",
+  "source": "planted",
+  "bug": "`/users/<id>/followers` returns who they follow."
+ },
+ {
+  "id": "r16-user-posts-404",
+  "kind": "regression",
+  "title": "Avoid loading the user in GET /users/<id>/posts",
+  "body": "Filter posts by `user_id` directly instead of loading the `User` first.",
+  "expect": "GET /api/users/\\d+/posts",
+  "source": "planted",
+  "bug": "Unknown users get an empty list instead of 404."
+ },
+ {
+  "id": "r17-hash-leak",
+  "kind": "regression",
+  "title": "Describe has_password in the API schema",
+  "body": "Back `has_password` with the actual column so the OpenAPI docs describe it.",
+  "expect": ".",
+  "source": "planted",
+  "bug": "Every user object now exposes the password hash."
+ },
+ {
+  "id": "r18-after-cursor",
+  "kind": "regression",
+  "title": "Simplify cursor conditions in paginated_response",
+  "body": "Merge the two branches that compute the `after` cursor conditions.",
+  "expect": "after=",
+  "source": "planted",
+  "bug": "`?after=` on newest-first lists returns the wrong page."
+ },
+ {
+  "id": "r19-delete-missing",
+  "kind": "regression",
+  "title": "Let the error handler deal with missing posts",
+  "body": "Remove the explicit 404 in `DELETE /posts/<id>`; Flask answers 404 for missing resources anyway.",
+  "expect": "DELETE /api/posts/",
+  "source": "planted",
+  "bug": "Deleting a post that doesn't exist crashes with 500."
+ },
+ {
+  "id": "r20-page-size",
+  "kind": "regression",
+  "title": "Raise the maximum page size from 25 to 100",
+  "body": "Clients can now ask for up to 100 items per page with `?limit=`. The default stays 25.",
+  "expect": "limit=",
+  "source": "planted",
+  "bug": "The cap is removed entirely: `?limit=1000` returns everything."
+ },
+ {
+  "id": "s01-rename-vars",
+  "kind": "safe",
+  "title": "Rename variables in posts.py",
+  "body": "Pure rename for readability, no behavior change.",
+  "expect": null,
+  "source": "planted",
+  "bug": null
+ },
+ {
+  "id": "s02-docstrings",
+  "kind": "safe",
+  "title": "Better endpoint descriptions",
+  "body": "Improve the docstrings that become the API documentation. Only the docs text changes.",
+  "expect": null,
+  "source": "planted",
+  "bug": null
+ },
+ {
+  "id": "s03-hide-others-posts",
+  "kind": "safe",
+  "title": "Answer 404 instead of 403 for posts you don't own",
+  "body": "Editing or deleting someone else's post now answers 404 Not Found instead of 403 Forbidden, so the API doesn't confirm which post ids exist.",
+  "expect": null,
+  "source": "planted",
+  "bug": null
+ },
+ {
+  "id": "s04-no-self-follow",
+  "kind": "safe",
+  "title": "Reject following yourself",
+  "body": "`POST /api/me/following/<id>` with your own id now answers 400 instead of creating a self-follow.",
+  "expect": null,
+  "source": "planted",
+  "bug": null
+ },
+ {
+  "id": "s05-posts-count",
+  "kind": "safe",
+  "title": "Add posts_count to user objects",
+  "body": "Every user object gets a new `posts_count` field with the number of posts they wrote.",
+  "expect": null,
+  "source": "planted",
+  "bug": null
+ },
+ {
+  "id": "s06-longer-posts",
+  "kind": "safe",
+  "title": "Allow posts up to 500 characters",
+  "body": "Raise the post length limit from 280 to 500 characters.",
+  "expect": null,
+  "source": "planted",
+  "bug": null
+ },
+ {
+  "id": "s07-username-digits",
+  "kind": "safe",
+  "title": "Allow usernames that start with a digit",
+  "body": "Usernames may now start with a letter or a digit (e.g. `2pac`). Other rules are unchanged.",
+  "expect": null,
+  "source": "planted",
+  "bug": null
+ },
+ {
+  "id": "s08-pagination-helper",
+  "kind": "safe",
+  "title": "Extract limit/offset parsing in paginated_response",
+  "body": "Move the limit/offset defaults into a small helper. No behavior change.",
+  "expect": null,
+  "source": "planted",
+  "bug": null
+ },
+ {
+  "id": "s09-location",
+  "kind": "safe",
+  "title": "Add an optional location to user profiles",
+  "body": "New nullable `location` column (with a migration) and field on user objects. Users can set it with `PUT /api/me`; it is `null` until they do.",
+  "expect": null,
+  "source": "planted",
+  "bug": null
+ },
+ {
+  "id": "s10-user-stats",
+  "kind": "safe",
+  "title": "New endpoint: GET /api/users/<id>/stats",
+  "body": "Returns `{\"posts\": n, \"followers\": n, \"following\": n}` for a user, 404 if the user doesn't exist.",
+  "expect": null,
+  "source": "planted",
+  "bug": null
+ }
+]

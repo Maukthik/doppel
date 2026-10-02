@@ -31,10 +31,10 @@ class FakeImage:
 
     async def apply_files(self, files):
         self.log.append(("apply", sorted(files)))
-        return FakeImage(self.log, {**self.files, **files}, self.history + ("apply",))
+        return type(self)(self.log, {**self.files, **files}, self.history + ("apply",))
 
     def run(self, shell=None, disposable=True, files=None, timeout=None, truncate_output_at=None):
-        prepared = FakeImage(self.log, self.files, self.history)
+        prepared = type(self)(self.log, self.files, self.history)
         prepared.req = (shell, disposable, files or {})
         return prepared
 
@@ -44,8 +44,14 @@ class FakeImage:
     async def _exec(self):
         shell, disposable, files = self.req
         self.log.append(("run", shell, disposable, sorted(files), self.history))
-        out = FakeImage(self.log, {**self.files, **files}, self.history + ((shell,) if not disposable else ()))
-        if "runner.py" in shell:  # a persona run: answer like runner.py would
+        out = type(self)(self.log, {**self.files, **files}, self.history + ((shell,) if not disposable else ()))
+        if "doppel/paths.json" in files:  # world verification: hash the files as the sandbox holds them
+            import hashlib
+            paths = json.loads(files["doppel/paths.json"])
+            held = {k.split("/", 1)[1]: v for k, v in self.files.items() if k.startswith("app/")}
+            out.stdout = json.dumps({r: hashlib.sha256(Path(held[r]).read_bytes()).hexdigest()
+                                     if r in held else None for r in paths})
+        elif "runner.py" in shell:  # a persona run: answer like runner.py would
             persona = json.loads(files["doppel/persona.json"])[0]
             app = next(v for k, v in self.files.items() if k == "app/app.py")
             world = "head" if Path(app).read_text() == "HEAD" else "base"
@@ -98,6 +104,29 @@ def test_nebius_twin_builds_checkpoints_and_forks_every_persona(tmp_path):
     assert twin.runs >= 16 and twin.cost > 0
 
 
+def test_nebius_twin_refuses_a_head_world_without_the_pr_code(tmp_path):
+    """If the sandbox ever ends up with base code in the head world, say so instead of reporting
+    "no changes" (this is what a silent no-op patch looked like in the first benchmark runs)."""
+    base, head = tmp_path / "base", tmp_path / "head"
+    for d, body in ((base, "BASE"), (head, "HEAD")):
+        d.mkdir()
+        (d / "app.py").write_text(body)
+
+    class DroppingImage(FakeImage):
+        async def apply_files(self, files):  # existing files win: the PR's version never lands
+            return DroppingImage(self.log, {**files, **self.files}, self.history + ("apply",))
+
+    client = FakeClient()
+    client.images = SimpleNamespace(use=lambda tag: _ret(DroppingImage(client.log)))
+    twin = nebius.NebiusTwin(client, TwinSpec(start="python app.py"), log=lambda *_: None)
+    with pytest.raises(RuntimeError, match="head world doesn't contain the head code"):
+        asyncio.run(twin.run(base, head, [{"name": "p", "steps": [{"method": "GET", "path": "/x"}]}]))
+
+
+async def _ret(value):
+    return value
+
+
 def test_persona_command_stops_the_app_and_keeps_the_exit_code():
     cmd = nebius.persona_command(TwinSpec(start="python app.py", ready="/health"))
     assert "PORT=8000 python app.py" in cmd and "--ready-path /health" in cmd
@@ -142,7 +171,8 @@ def test_generate_sends_source_and_diff_and_prices_the_call():
     assert out["personas"][0]["name"] == "coupon fan"
     assert "### app.py" in seen["prompt"] and "exactly 3 personas" in seen["prompt"]
     assert "with_tax" in seen["prompt"]                      # the PR diff is in the prompt
-    assert out["usd"] == pytest.approx((20000 * 0.06 + 1500 * 0.24) / 1e6)
+    # 1 persona of the 3 asked for is too few, so it asked a second time: two calls priced
+    assert out["usd"] == pytest.approx(2 * (20000 * 0.06 + 1500 * 0.24) / 1e6)
 
 
 def test_generate_fails_loudly_on_unusable_output():

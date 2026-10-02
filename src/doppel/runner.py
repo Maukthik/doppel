@@ -6,14 +6,17 @@ the app, so it must work in any Python image without installing anything.
     python runner.py --base-url http://127.0.0.1:8000 --personas personas.json
 prints a JSON list of recordings to stdout.
 
-A persona is {"name": ..., "vars": {...}, "steps": [step, ...]}. A step is
-    {"method": "POST", "path": "/orders", "json": {...}, "save": {"order_id": "id"}}
-"{name}" placeholders in path and json are filled from vars; "save" copies values from
-the JSON response (dotted paths like "items.0.id") into vars for later steps.
+A persona is {"name": ..., "vars": {...}, "headers": {...}, "steps": [step, ...]}. A step is
+    {"method": "POST", "path": "/orders", "json": {...}, "save": {"order_id": "id"},
+     "headers": {"Authorization": "Bearer {token}"}, "auth": ["alice", "secret"]}
+"{name}" placeholders in path, json and headers are filled from vars; "save" copies values from
+the JSON response (dotted paths like "items.0.id") into vars for later steps. Persona headers
+apply to every step (step headers win); "auth" sends HTTP Basic credentials.
 """
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import re
 import sys
@@ -51,9 +54,24 @@ def extract(obj, path: str):
     return obj
 
 
-def call(base_url: str, method: str, path: str, body, timeout: float):
+def build_headers(persona: dict, step: dict, variables: dict) -> dict:
+    """Persona headers, then step headers, then Basic auth; header values are always strings.
+    A header whose placeholder isn't filled yet (no token saved so far) is sent as written,
+    the same way in both worlds."""
+    headers = {}
+    for source in (persona.get("headers"), step.get("headers")):
+        if isinstance(source, dict):
+            headers.update({str(k): str(render(v, variables)) for k, v in source.items()})
+    auth = step.get("auth")
+    if isinstance(auth, (list, tuple)) and len(auth) == 2:
+        user, password = (str(render(x, variables)) for x in auth)
+        headers["Authorization"] = "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
+    return headers
+
+
+def call(base_url: str, method: str, path: str, body, timeout: float, headers: dict | None = None):
     data = json.dumps(body).encode() if body is not None else None
-    headers = {"Content-Type": "application/json"} if data is not None else {}
+    headers = {**({"Content-Type": "application/json"} if data is not None else {}), **(headers or {})}
     req = urllib.request.Request(base_url.rstrip("/") + path, data=data, method=method, headers=headers)
     t0 = time.perf_counter()
     try:
@@ -71,20 +89,50 @@ def call(base_url: str, method: str, path: str, body, timeout: float):
     return status, payload, round(ms, 1)
 
 
+def placeholders(value) -> set[str]:
+    """Every {name} used anywhere in a persona (paths, bodies, headers)."""
+    return set(_PLACEHOLDER.findall(json.dumps(value)))
+
+
+def auto_capture(payload, wanted: set[str], variables: dict, path: str = "") -> None:
+    """Fill placeholders nobody saved from the response that obviously provides them: a key with the
+    same name, or, for a token-like name ("token", "access_token", "jwt"), the response's access token.
+    Personas often log in and use {token} but forget the "save"; without this they stay at 401."""
+    if not isinstance(payload, dict):
+        return
+    for name in sorted(wanted - set(variables)):
+        if isinstance(payload.get(name), (str, int, float)):
+            variables[name] = payload[name]
+        elif name.lower().endswith("_id") and isinstance(payload.get("id"), (int, str)) \
+                and name.lower()[:-3] in path.lower():  # {post_id} from the "id" of POST /posts
+            variables[name] = payload["id"]
+        elif name.lower().endswith(("token", "jwt")) or name.lower() in ("auth", "bearer", "access"):
+            keys = [k for k, v in payload.items() if isinstance(v, str) and v and
+                    any(t in k.lower() for t in ("token", "jwt"))]
+            keys.sort(key=lambda k: (k.lower() != "access_token", "refresh" in k.lower()))
+            if keys:
+                variables[name] = payload[keys[0]]
+
+
 def replay(base_url: str, personas: list[dict], timeout: float = 10.0) -> list[dict]:
     recordings = []
     for persona in personas:
         variables = dict(persona.get("vars") or {})
+        wanted = placeholders({k: persona.get(k) for k in ("headers", "steps")})
+        saved = {v for step in persona.get("steps") or [] for v in (step.get("save") or {})}
         steps = []
         for i, step in enumerate(persona.get("steps") or []):
             method = str(step.get("method", "GET")).upper()
             path = str(render(step.get("path", "/"), variables))
             body = render(step["json"], variables) if "json" in step else None
-            status, payload, ms = call(base_url, method, path, body, timeout)
+            status, payload, ms = call(base_url, method, path, body, timeout,
+                                       build_headers(persona, step, variables))
             for var, dotted in (step.get("save") or {}).items():
                 value = extract(payload, dotted)
                 if value is not None:
                     variables[var] = value
+            if 200 <= status < 300:
+                auto_capture(payload, wanted - saved, variables, path)
             steps.append({"i": i, "request": f"{method} {path}", "sent": body,
                           "status": status, "body": payload, "ms": ms})
         recordings.append({"persona": persona.get("name", "?"), "steps": steps})

@@ -27,9 +27,9 @@ slower requests. Then it tells you which differences the PR meant to make and wh
 |---|---|---|
 | 1 | Local twin: seed once, fresh world per persona, replay, diff, Markdown report | done |
 | 2 | Nebius Sandboxes backend (checkpoint + parallel forks) and Nemotron personas | done: live run found all 6 changes in 7.4 s |
-| 3 | Nemotron judge: intended vs regression, using the PR description; writes a test per regression | built |
-| 4 | GitHub Action: comment on every PR, artifacts, fails the check on regressions | built, demo repo next |
-| 5 | Real open-source app demo + benchmark of planted regressions vs its own test suite | |
+| 3 | Nemotron judge: intended vs regression, using the PR description; writes a test per regression | done |
+| 4 | GitHub Action: comment on every PR, artifacts, fails the check on regressions | done: live on a demo repo |
+| 5 | Benchmark on a real app: 30 PRs to microblog-api; tests 12/20, AI review 17/20, Doppel 11/20 (0 false alarms); review-guided Doppel next | in progress |
 | 6 | README results, video, submission | |
 
 ## Try it (stage 1, offline)
@@ -99,6 +99,19 @@ Every PR gets one comment (updated on each push), the report in the job summary,
 raw recordings and regression tests as run artifacts. The check fails on regressions. Without a
 `doppel-personas.json`, Nemotron invents the users. PRs from forks don't get secrets, so the twin
 runs on branches of the repo itself. `examples/demo-repo` sets up a repo to watch it work.
+
+## Benchmark on a real app (stage 5)
+
+30 pull requests to [microblog-api](https://github.com/miguelgrinberg/microblog-api) (Flask, 44 tests):
+20 carry a regression (3 are reverted upstream bug fixes), 10 are safe. Its own test suite catches
+12 of the 20. Doppel and an AI code reviewer (Nemotron 3 Ultra reading the diff) run on the same PRs.
+Method and honest limits: [bench/README.md](bench/README.md). Results: [bench/results/results.md](bench/results/results.md).
+
+Personas can log in: a step can send HTTP Basic credentials (`"auth": ["alice", "pw"]`), save the
+returned token, and later steps send it in a header (`"headers": {"Authorization": "Bearer {token}"}`).
+With `--rehearse` (on in the Action), personas first run once on base; any stuck at 401/403/404 go back
+to Nemotron with the app's real answers and are fixed before the comparison. Every report states
+coverage ("the app served X of Y requests"), so "no regressions" is never confused with "couldn't test".
 
 ## Twin spec
 

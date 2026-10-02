@@ -34,6 +34,19 @@ def _argv(command: str) -> list[str]:
     return args
 
 
+SHELL_CHARS = ("&&", "||", "|", ";", "$", ">", "<", "`")
+
+
+def _popen_args(command: str) -> dict:
+    """Plain commands run without a shell (so stopping the app really stops it); commands that
+    need one ("flask db upgrade && python seed.py") run through the system shell."""
+    if not any(c in command for c in SHELL_CHARS):
+        return {"args": _argv(command)}
+    chained = any(op in command for op in ("&&", "||", ";"))
+    # a single command (e.g. "gunicorn -b :$PORT app:app") replaces the shell, so terminate() reaches it
+    return {"args": command if os.name == "nt" or chained else f"exec {command}", "shell": True}
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -43,7 +56,7 @@ def _free_port() -> int:
 def _run(command: str, cwd: Path, what: str) -> None:
     if not command:
         return
-    p = subprocess.run(_argv(command), cwd=cwd, capture_output=True, text=True, timeout=600)
+    p = subprocess.run(**_popen_args(command), cwd=cwd, capture_output=True, text=True, timeout=600)
     if p.returncode != 0:
         raise RuntimeError(f"{what} failed ({command}) in {cwd}:\n{p.stdout}{p.stderr}")
 
@@ -56,7 +69,7 @@ def _overlay(src: Path, dst: Path) -> None:
 def _serve_and_replay(world: Path, spec: TwinSpec, personas: list[dict]) -> list[dict]:
     port = _free_port()
     env = {**os.environ, "PORT": str(port), "PYTHONDONTWRITEBYTECODE": "1"}
-    app = subprocess.Popen(_argv(spec.start), cwd=world, env=env,
+    app = subprocess.Popen(**_popen_args(spec.start), cwd=world, env=env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     base_url = f"http://127.0.0.1:{port}"
     try:
@@ -74,32 +87,56 @@ def _serve_and_replay(world: Path, spec: TwinSpec, personas: list[dict]) -> list
                 app.kill()
 
 
-def run_world(code_dir: Path, seeded: Path, spec: TwinSpec, personas: list[dict], work: Path) -> list[dict]:
-    """Every persona gets its own fresh copy of the migrated world, so one persona's
-    side effects (an extra order, a sold-out item) can't leak into another's results.
-    In the sandbox backend each copy is a fork of one checkpoint and they run in parallel."""
+def build_world(code_dir: Path, seeded: Path, spec: TwinSpec, work: Path) -> Path:
     world = work / "world"
     shutil.copytree(seeded, world, ignore=SKIP)
     _overlay(code_dir, world)
     _run(spec.migrate, world, "migrate")
-    recordings = []
+    return world
+
+
+def replay_world(world: Path, spec: TwinSpec, personas: list[dict], work: Path, tag: str = "") -> list:
+    """Every persona gets its own fresh copy of the migrated world, so one persona's
+    side effects (an extra order, a sold-out item) can't leak into another's results.
+    In the sandbox backend each copy is a fork of one checkpoint and they run in parallel.
+    Returns one recording, or the exception, per persona."""
+    out = []
     for i, persona in enumerate(personas):
-        fork = work / f"persona{i}"
+        fork = work / f"persona{tag}{i}"
         shutil.copytree(world, fork)
-        recordings += _serve_and_replay(fork, spec, [persona])
-    return recordings
+        try:
+            out += _serve_and_replay(fork, spec, [persona])
+        except Exception as e:  # noqa: BLE001 - one broken persona doesn't sink the run
+            out.append(e)
+        shutil.rmtree(fork, ignore_errors=True)
+    return out
 
 
-def run_twin(base_dir: str | Path, head_dir: str | Path, spec: TwinSpec, personas: list[dict]) -> dict:
-    """Returns {"base": recordings, "head": recordings}."""
+def run_world(code_dir: Path, seeded: Path, spec: TwinSpec, personas: list[dict], work: Path) -> list[dict]:
+    world = build_world(code_dir, seeded, spec, work)
+    return [r for r in replay_world(world, spec, personas, work) if isinstance(r, dict)]
+
+
+def run_twin(base_dir: str | Path, head_dir: str | Path, spec: TwinSpec, personas: list[dict],
+             refine=None) -> dict:
+    """Returns {"base": recordings, "head": recordings, "failed": [...], "personas": [...],
+    "rehearsal": base recordings before refine, or None}. refine(personas, recordings) -> personas."""
+    from doppel.backends.nebius import pair
     base_dir, head_dir = Path(base_dir).resolve(), Path(head_dir).resolve()
     with tempfile.TemporaryDirectory(prefix="doppel-", ignore_cleanup_errors=True) as tmp:
         work = Path(tmp)
         seeded = work / "seeded"
         shutil.copytree(base_dir, seeded, ignore=SKIP)
         _run(spec.seed, seeded, "seed")
-        out = {}
+        worlds = {}
         for label, code in (("base", base_dir), ("head", head_dir)):
             (work / label).mkdir()
-            out[label] = run_world(code, seeded, spec, personas, work / label)
-        return out
+            worlds[label] = build_world(code, seeded, spec, work / label)
+        rehearsal = None
+        if refine is not None:
+            rehearsal = [r for r in replay_world(worlds["base"], spec, personas, work / "base", "r")
+                         if isinstance(r, dict)]
+            personas = refine(personas, rehearsal)
+        base = replay_world(worlds["base"], spec, personas, work / "base")
+        head = replay_world(worlds["head"], spec, personas, work / "head")
+        return {**pair(personas, base, head), "personas": personas, "rehearsal": rehearsal}

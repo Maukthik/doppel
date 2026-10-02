@@ -1,0 +1,28 @@
+# Doppel twin spec for miguelgrinberg/microblog-api, added next to the app as a user would.
+[app]
+image = "python:3.12-slim"
+install = "pip install --quiet --disable-pip-version-check -r requirements.txt"
+start = "gunicorn --workers 1 microblog:app"   # gunicorn listens on $PORT by itself
+ready = "/docs"
+seed = "python doppel_seed.py"                  # once, on the base code
+migrate = "python doppel_seed.py --migrate-only" # in each world: apply the PR's migrations, if any
+
+[personas]
+# How to use this app, written once by its owner (it says nothing about any pull request)
+guide = """Log in with POST /api/tokens using HTTP Basic auth (a username and password); the answer has
+an access_token. Send it as "Authorization: Bearer <token>" on every other /api route. Seeded accounts
+alice, bob, carol, dave, erin and frank (user ids 1-6) all use the password doppel-pass."""
+
+[personas.login]
+method = "POST"
+path = "/api/tokens"
+auth = ["alice", "doppel-pass"]
+save = { token = "access_token" }
+header = { Authorization = "Bearer {token}" }
+
+[diff]
+# values that differ on every run by design: fresh tokens and "now" timestamps
+ignore = ["access_token", "refresh_token", "timestamp", "first_seen", "last_seen"]
+# shared sandboxes add 100-200 ms of jitter to single requests, so only flag big slowdowns
+slow_ratio = 3.0
+slow_min_ms = 400
