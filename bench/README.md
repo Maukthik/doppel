@@ -33,7 +33,14 @@ the description says what the author *meant* to do.
 `index.json` stores what each regression really does (`bug`) and the route where it shows
 (`expect`, a regex). Neither is shown to Doppel or to the AI reviewer.
 
-## The three arms
+**Held-out set (10 PRs, `h01`–`h10`, `"set": "heldout"`).** Written on 3 Oct, after the results
+below were in and after Doppel was tuned on them, and before the tuned version ran on them: 7 new
+regressions of new kinds (lookup broken, feed order flipped, edits not saved, duplicate follow
+accepted, a newly required field, tokens expiring at once, an inverted delete check) and 3 safe PRs.
+Doppel improvements are judged on this set, so tuning to the main 30 can't inflate the result.
+Run it with `--set heldout`.
+
+## The four arms
 
 | Arm | What it sees | Caught means |
 |---|---|---|
@@ -47,7 +54,68 @@ Doppel's score is the strictest of the three: it has to find the change *and* th
 call it a regression *and* it has to be on the right route. The AI reviewer only has to say
 "regression"; we don't check that it named the right bug.
 
-## What the first run taught us (2 Oct)
+## Results (3 Oct)
+
+**Main 30 PRs**
+
+| | Regressions caught | False alarms on safe PRs | Cost per PR | Time per PR |
+|---|---|---|---|---|
+| App's own test suite (44 tests) | 12/20 | 0/10 | $0 (CI minutes) | 11 s |
+| AI code review (Nemotron 3 Ultra) | 17/20 | 1/10 | $0.03 | 3 s |
+| Doppel alone | 11/20 | 1/10 | $0.13 | 81 s |
+| **Review-guided Doppel** | **16/20** | **0/10** | $0.25 | 147 s |
+| App's tests + review-guided Doppel | **20/20** | 0/10 | | |
+| AI review + review-guided Doppel | 19/20 | 1/10 | | |
+
+**Held-out 10 PRs** (written after the main results were in)
+
+| | Regressions caught | False alarms on safe PRs |
+|---|---|---|
+| App's own test suite | 6/7 | 0/3 |
+| AI code review | 5/7 | 0/3 |
+| **Review-guided Doppel** | **6/7** | **0/3** |
+
+Per-PR tables and chart: [results/results.md](results/results.md). Every catch is backed by recorded
+requests: the same synthetic user got a different answer from the PR than from main (for example
+r02: `DELETE /api/tokens` with an empty `Bearer` header, 401 on main, 500 on the PR).
+
+What the numbers say:
+- **Doppel and the app's tests are complementary: together they catch all 20.** Every regression
+  the 44 tests miss, review-guided Doppel caught.
+- **The AI reviewer and the twin catch different things.** The reviewer missed r02 (a 500 crash)
+  and r17 (every user object leaks its password hash; it called the PR "safe"); review-guided
+  Doppel caught both. On the held-out set the reviewer missed h02 (feed order flipped); Doppel caught it.
+- **Review-guided Doppel made no false alarms on 13 safe PRs; the reviewer made one** (s08: it
+  claimed a refactor broke `limit=0`; the twin's probes sent `limit=0`, `limit=abc`, `limit=30` and
+  no limit to both versions and got identical answers, so its suspicions were refuted).
+- **Misses:** r08 (login by email), r14 (`is_following` flag) and r18 (`after` cursor) were never
+  triggered by a synthetic user in the recorded run. r20 (page cap removed) was reached, but only with
+  `limit=50` and `limit=100`, which the PR description allows; no persona asked for more than 100.
+  h03 (edits answer 200 but aren't saved) was not observed in the recorded run.
+
+### How these numbers were produced (read this before quoting them)
+
+- **Runs vary.** Personas are sampled, so individual PRs flip between runs. Complete runs of the
+  review-guided arm on the main 30 scored 15, 17, 16 and 15 of 20. Each PR's result file keeps the
+  run it came from; a few (r11, h04) come from an earlier run because their latest rerun failed on a
+  Token Factory or sandbox timeout, and the file records that error.
+- **The judge was changed after the held-out set had run, and re-applied to the same recordings.**
+  The first held-out run showed the judge calling unannounced changes "intended" (h04: following
+  twice now answers 204). Our first fix (the judge must quote the PR description) backfired on the
+  main set (12/20): the judge quoted sentences that describe the code edit ("removes the OR
+  condition") as if they announced the effect. The judge now asks a second, narrower question with
+  **only the PR description and the observed before/after, no diff**: would a reader of this
+  description expect exactly this change? A change is "intended" only if that answer is yes and the
+  quoted sentence is really in the description. `bench/rejudge.py` re-labelled every recorded
+  finding with this judge, without rerunning the twin; each finding keeps its old label in `label_v1`.
+- So the held-out set is **no longer a clean held-out test of the judge**: h04 moved from missed to
+  caught by that change. It is still held out for the personas, the twin and the rehearsal, which
+  were not changed after it ran. Without h04, review-guided Doppel is 5/6 on the held-out regressions.
+- The re-judge turned "intended" into "regression" on 5 regressions (r01, r05, r09, r11, h04),
+  removed the one false alarm (s09: the description does announce `location`), and created
+  no new false alarm on the 13 safe PRs. It moved no PR from caught to missed.
+
+## How we got here: what each failed run taught us (2 Oct)
 
 The first full run scored Doppel **0 of 20**: it found no behavior change in any PR, not even the
 safe ones that add a field. The personas were the problem, not the diff. Nemotron 3.5 Lightning
@@ -108,6 +176,7 @@ in `results/` as the `doppel` arm.
 ```bash
 pip install -e ".[nebius,dev]"            # from the repo root; .env holds NEBIUS_API_KEY and NEBIUS_PROJECT_ID
 python bench/run_bench.py --arms doppel,review   # all 30 PRs, about $2-3 of credits
+python bench/rejudge.py                    # optional: re-label recorded findings with the current judge
 python bench/summarize.py                  # -> results/results.md and results/chart.svg
 ```
 

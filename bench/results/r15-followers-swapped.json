@@ -835,80 +835,59 @@
   "findings": [
    {
     "kind": "body",
-    "persona": "alice_follower",
+    "persona": "dave_all_follow",
+    "request": "GET /api/users/4/followers",
+    "detail": "changed: data.*.about_me x5, data.*.avatar_url x5, data.*.email x5, data.*.has_password x5, +4 more",
+    "label": "regression",
+    "why": "The helper uses 'follower' for the followers endpoint but the relationship attribute is 'followers' (plural), causing it to return the wrong user list.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "body",
+    "persona": "probe s1: alice_normal",
     "request": "GET /api/users/2/followers",
     "detail": "changed: data, pagination.count, pagination.total",
     "label": "regression",
-    "why": "The helper _relationship uses 'followers' as the kind string for the followers endpoint but checks for 'followers' (plural) while the following endpoint passes 'following' (singular), causing the followers endpoint to incorrectly return user.following.select() instead of user.followers.select()",
-    "on_target": true
+    "why": "The same helper bug returns following instead of followers for users 2 and 3, changing the response data and pagination.",
+    "on_target": true,
+    "label_v1": "regression"
    },
    {
     "kind": "body",
-    "persona": "bob_power_user",
-    "request": "GET /api/users/1/followers",
-    "detail": "changed: data.*.about_me, data.*.avatar_url, data.*.email, data.*.id, +3 more",
-    "label": "regression",
-    "why": "Same root cause as c1: the kind parameter mismatch makes the followers endpoint return following relationships, changing the returned user data for the same request",
-    "on_target": true
-   },
-   {
-    "kind": "body",
-    "persona": "dave_networker",
+    "persona": "probe_s1_s2_followers_following",
     "request": "GET /api/users/3/followers",
     "detail": "changed: data, pagination.count, pagination.total",
     "label": "regression",
-    "why": "The helper _relationship uses 'followers' as the kind string for the followers endpoint but checks for 'followers' (plural) while the following endpoint passes 'following' (singular), causing the followers endpoint to incorrectly return user.following.select() instead of user.followers.select()",
-    "on_target": true
+    "why": "The same helper bug returns following instead of followers for users 2 and 3, changing the response data and pagination.",
+    "on_target": true,
+    "label_v1": "regression"
    },
    {
     "kind": "body",
-    "persona": "dave_networker",
-    "request": "GET /api/users/6/followers",
+    "persona": "probe_s1_s2_followers_following2",
+    "request": "GET /api/users/3/followers",
     "detail": "changed: data, pagination.count, pagination.total",
     "label": "regression",
-    "why": "The helper _relationship uses 'followers' as the kind string for the followers endpoint but checks for 'followers' (plural) while the following endpoint passes 'following' (singular), causing the followers endpoint to incorrectly return user.following.select() instead of user.followers.select()",
-    "on_target": true
-   },
-   {
-    "kind": "body",
-    "persona": "erin_feeder",
-    "request": "GET /api/users/1/followers",
-    "detail": "changed: data, pagination.count, pagination.total",
-    "label": "regression",
-    "why": "The helper _relationship uses 'followers' as the kind string for the followers endpoint but checks for 'followers' (plural) while the following endpoint passes 'following' (singular), causing the followers endpoint to incorrectly return user.following.select() instead of user.followers.select()",
-    "on_target": true
-   },
-   {
-    "kind": "body",
-    "persona": "frank_unfollow",
-    "request": "GET /api/users/2/followers",
-    "detail": "changed: data, pagination.count, pagination.total",
-    "label": "regression",
-    "why": "The helper _relationship uses 'followers' as the kind string for the followers endpoint but checks for 'followers' (plural) while the following endpoint passes 'following' (singular), causing the followers endpoint to incorrectly return user.following.select() instead of user.followers.select()",
-    "on_target": true
-   },
-   {
-    "kind": "body",
-    "persona": "probe_s1_followers_bug",
-    "request": "GET /api/users/4/followers",
-    "detail": "changed: data, pagination.count, pagination.total",
-    "label": "regression",
-    "why": "The helper _relationship uses 'followers' as the kind string for the followers endpoint but checks for 'followers' (plural) while the following endpoint passes 'following' (singular), causing the followers endpoint to incorrectly return user.following.select() instead of user.followers.select()",
-    "on_target": true
+    "why": "The same helper bug returns following instead of followers for users 2 and 3, changing the response data and pagination.",
+    "on_target": true,
+    "label_v1": "regression"
    }
   ],
-  "summary": "The refactoring introduced a bug where the followers endpoint returns following relationships due to a string mismatch in the shared helper function.",
+  "summary": "The refactored helper _relationship uses the wrong attribute name 'follower' instead of 'followers', causing both endpoints to return following relationships instead of followers.",
   "personas": [
    {
-    "name": "alice_follower",
-    "goal": "Check feed and following/followers",
-    "vars": {},
+    "name": "alice_power",
+    "goal": "View following list and feed",
+    "vars": {
+     "name": "alice"
+    },
     "steps": [
      {
       "method": "POST",
       "path": "/api/tokens",
       "save": {
-       "access_token": "access_token"
+       "token": "access_token"
       },
       "auth": [
        "alice",
@@ -919,51 +898,40 @@
       "method": "GET",
       "path": "/api/me/following",
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      },
      {
       "method": "GET",
       "path": "/api/me/followers",
       "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "POST",
-      "path": "/api/me/following/2",
-      "save": {},
-      "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      },
      {
       "method": "GET",
-      "path": "/api/users/2/followers",
+      "path": "/api/feed",
       "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "GET",
-      "path": "/api/users/2/following",
-      "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      }
     ],
-    "headers": {}
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
    },
    {
-    "name": "bob_power_user",
-    "goal": "Create posts, follow, check feed",
-    "vars": {},
+    "name": "bob_follow_alice",
+    "goal": "Follow and unfollow alice",
+    "vars": {
+     "name": "bob"
+    },
     "steps": [
      {
       "method": "POST",
       "path": "/api/tokens",
       "save": {
-       "access_token": "access_token"
+       "token": "access_token"
       },
       "auth": [
        "bob",
@@ -972,55 +940,35 @@
      },
      {
       "method": "POST",
-      "path": "/api/posts",
-      "json": {
-       "text": "Bob's first post"
-      },
-      "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "POST",
       "path": "/api/me/following/1",
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      },
      {
-      "method": "GET",
-      "path": "/api/feed",
+      "method": "DELETE",
+      "path": "/api/me/following/1",
       "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "GET",
-      "path": "/api/users/1/followers",
-      "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "GET",
-      "path": "/api/users/1/following",
-      "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      }
     ],
-    "headers": {}
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
    },
    {
     "name": "carol_careless",
-    "goal": "Send bad input to find validation bugs",
-    "vars": {},
+    "goal": "Send invalid data to trigger validation errors",
+    "vars": {
+     "name": "carol"
+    },
     "steps": [
      {
       "method": "POST",
       "path": "/api/tokens",
       "save": {
-       "access_token": "access_token"
+       "token": "access_token"
       },
       "auth": [
        "carol",
@@ -1029,58 +977,45 @@
      },
      {
       "method": "POST",
-      "path": "/api/posts",
+      "path": "/api/users",
       "json": {
-       "text": ""
+       "username": "",
+       "email": "bad",
+       "password": "doppel-pass"
       },
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      },
      {
       "method": "POST",
-      "path": "/api/posts",
+      "path": "/api/users",
       "json": {
-       "text": "a"
+       "username": "123",
+       "email": "bad",
+       "password": "doppel-pass"
       },
       "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "POST",
-      "path": "/api/me/following/999",
-      "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "GET",
-      "path": "/api/users/999/followers",
-      "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "GET",
-      "path": "/api/users/999/following",
-      "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      }
     ],
-    "headers": {}
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
    },
    {
-    "name": "dave_networker",
-    "goal": "Follow many users, check followers list",
-    "vars": {},
+    "name": "dave_all_follow",
+    "goal": "Follow all named users then view followers",
+    "vars": {
+     "name": "dave"
+    },
     "steps": [
      {
       "method": "POST",
       "path": "/api/tokens",
       "save": {
-       "access_token": "access_token"
+       "token": "access_token"
       },
       "auth": [
        "dave",
@@ -1089,59 +1024,56 @@
      },
      {
       "method": "POST",
+      "path": "/api/me/following/2",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "POST",
       "path": "/api/me/following/3",
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      },
      {
       "method": "POST",
-      "path": "/api/me/following/4",
+      "path": "/api/me/following/1",
       "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "POST",
-      "path": "/api/me/following/5",
-      "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      },
      {
       "method": "POST",
       "path": "/api/me/following/6",
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      },
      {
       "method": "GET",
-      "path": "/api/users/3/followers",
+      "path": "/api/users/4/followers",
       "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "GET",
-      "path": "/api/users/6/followers",
-      "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      }
     ],
-    "headers": {}
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
    },
    {
-    "name": "erin_feeder",
-    "goal": "Create posts and verify feed",
-    "vars": {},
+    "name": "erin_post_feed",
+    "goal": "Create posts and view personalized feed",
+    "vars": {
+     "name": "erin"
+    },
     "steps": [
      {
       "method": "POST",
       "path": "/api/tokens",
       "save": {
-       "access_token": "access_token"
+       "token": "access_token"
       },
       "auth": [
        "erin",
@@ -1152,63 +1084,46 @@
       "method": "POST",
       "path": "/api/posts",
       "json": {
-       "text": "Erin post one"
+       "text": "Hello from erin"
       },
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      },
      {
       "method": "POST",
       "path": "/api/posts",
       "json": {
-       "text": "Erin post two"
+       "text": "Another post"
       },
       "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "POST",
-      "path": "/api/me/following/1",
-      "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      },
      {
       "method": "GET",
       "path": "/api/feed",
       "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "GET",
-      "path": "/api/users/1/following",
-      "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "GET",
-      "path": "/api/users/1/followers",
-      "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      }
     ],
-    "headers": {}
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
    },
    {
-    "name": "frank_unfollow",
-    "goal": "Follow then unfollow a user",
-    "vars": {},
+    "name": "frank_unfollow_all",
+    "goal": "Unfollow all previously followed users",
+    "vars": {
+     "name": "frank"
+    },
     "steps": [
      {
       "method": "POST",
       "path": "/api/tokens",
       "save": {
-       "access_token": "access_token"
+       "token": "access_token"
       },
       "auth": [
        "frank",
@@ -1216,124 +1131,137 @@
       ]
      },
      {
-      "method": "POST",
-      "path": "/api/me/following/2",
+      "method": "GET",
+      "path": "/api/me/following",
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      },
      {
       "method": "DELETE",
       "path": "/api/me/following/2",
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      },
      {
-      "method": "GET",
-      "path": "/api/me/following",
+      "method": "DELETE",
+      "path": "/api/me/following/3",
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "power_user_full_cycle",
+    "goal": "Complete follow/unfollow/feed cycle with posts",
+    "vars": {},
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "POST",
+      "path": "/api/posts",
+      "json": {
+       "text": "Power user post"
       }
      },
      {
+      "method": "POST",
+      "path": "/api/me/following/2",
+      "json": {}
+     },
+     {
       "method": "GET",
-      "path": "/api/me/followers",
+      "path": "/api/feed"
+     },
+     {
+      "method": "DELETE",
+      "path": "/api/me/following/2"
+     },
+     {
+      "method": "GET",
+      "path": "/api/feed"
+     }
+    ]
+   },
+   {
+    "name": "probe s1: alice_normal",
+    "goal": "Normal user activity: read profile, follow, view feed",
+    "vars": {
+     "name": "alice"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "GET",
+      "path": "/api/me",
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/api/me/following/2",
+      "headers": {
+       "Authorization": "Bearer {token}"
       }
      },
      {
       "method": "GET",
       "path": "/api/users/2/followers",
       "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     }
-    ],
-    "headers": {}
-   },
-   {
-    "name": "probe_s1_followers_bug",
-    "goal": "Probe s1: followers returns following list",
-    "vars": {},
-    "steps": [
-     {
-      "method": "POST",
-      "path": "/api/tokens",
-      "save": {
-       "access_token": "access_token"
-      },
-      "auth": [
-       "alice",
-       "doppel-pass"
-      ]
-     },
-     {
-      "method": "POST",
-      "path": "/api/users",
-      "json": {
-       "username": "userA",
-       "email": "a@example.com",
-       "password": "doppel-pass"
-      },
-      "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "POST",
-      "path": "/api/users",
-      "json": {
-       "username": "userB",
-       "email": "b@example.com",
-       "password": "doppel-pass"
-      },
-      "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "POST",
-      "path": "/api/me/following/3",
-      "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "POST",
-      "path": "/api/me/following/4",
-      "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "POST",
-      "path": "/api/users/3/followers",
-      "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      },
      {
       "method": "GET",
-      "path": "/api/users/4/followers",
+      "path": "/api/users/2/following",
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      }
     ],
-    "headers": {}
+    "headers": {
+     "Authorization": "Bearer {token}"
+    },
+    "probe": "s1"
    },
    {
-    "name": "probe_s2_following_bug",
-    "goal": "Probe s2: following returns followers list",
-    "vars": {},
+    "name": "probe_s1_s2_followers_following",
+    "goal": "Probe s1 and s2: test typo in followers/following helper parameter check",
+    "vars": {
+     "name": "probe_s1_s2"
+    },
     "steps": [
      {
       "method": "POST",
       "path": "/api/tokens",
       "save": {
-       "access_token": "access_token"
+       "token": "access_token"
       },
       "auth": [
        "alice",
@@ -1342,86 +1270,121 @@
      },
      {
       "method": "POST",
-      "path": "/api/users",
-      "json": {
-       "username": "userA",
-       "email": "a@example.com",
-       "password": "doppel-pass"
-      },
-      "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "POST",
-      "path": "/api/users",
-      "json": {
-       "username": "userB",
-       "email": "b@example.com",
-       "password": "doppel-pass"
-      },
-      "headers": {
-       "Authorization": "Bearer {access_token}"
-      }
-     },
-     {
-      "method": "POST",
       "path": "/api/me/following/3",
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      },
      {
-      "method": "POST",
-      "path": "/api/me/following/4",
+      "method": "GET",
+      "path": "/api/users/3/followers",
+      "save": {
+       "followers_resp": "$.data"
+      },
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
       }
      },
      {
       "method": "GET",
       "path": "/api/users/3/following",
+      "save": {
+       "following_resp": "$.data"
+      },
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    },
+    "probe": "s1"
+   },
+   {
+    "name": "probe_s1_s2_followers_following2",
+    "goal": "Probe s1 and s2: test typo in followers/following helper parameter check",
+    "vars": {
+     "name": "probe_s1_s2"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "POST",
+      "path": "/api/me/following/3",
+      "headers": {
+       "Authorization": "Bearer {token}"
       }
      },
      {
       "method": "GET",
-      "path": "/api/users/4/following",
+      "path": "/api/users/3/following",
+      "save": {
+       "following_resp": "$.data"
+      },
       "headers": {
-       "Authorization": "Bearer {access_token}"
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/users/3/followers",
+      "save": {
+       "followers_resp": "$.data"
+      },
+      "headers": {
+       "Authorization": "Bearer {token}"
       }
      }
     ],
-    "headers": {}
+    "headers": {
+     "Authorization": "Bearer {token}"
+    },
+    "probe": "s2"
    }
   ],
-  "persona_count": 8,
+  "persona_count": 10,
   "failed_personas": [],
   "coverage": {
-   "requests": 52,
-   "served": 40,
-   "blocked": 4,
-   "stuck_personas": [],
-   "personas": 8
+   "requests": 43,
+   "served": 26,
+   "blocked": 5,
+   "stuck_personas": [
+    "power_user_full_cycle"
+   ],
+   "personas": 10
   },
   "coverage_before_rehearsal": {
-   "requests": 52,
-   "served": 40,
-   "blocked": 4,
-   "stuck_personas": [],
-   "personas": 8
+   "requests": 39,
+   "served": 25,
+   "blocked": 2,
+   "stuck_personas": [
+    "power_user_full_cycle"
+   ],
+   "personas": 10
   },
-  "repaired": [],
+  "repaired": [
+   "power_user_full_cycle"
+  ],
   "recordings": {
    "base": [
     {
-     "persona": "alice_follower",
+     "persona": "alice_power",
      "steps": [
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IjZ2ZGhxOE5HUjdzUU5maVFyR0RLbUxZTm5JU1NIMGtCbW5ob1U0Wnp0NmsifQ.4aQ-15WHFMiFELM3ryq9cnqd9sXWsuxTRHOVb-k2U40\", \"refresh_token\": null}"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IlhoLUNwdjhuX1M1c1Atb1pVZFUyekJ3VzFnQ0VxRWVBWTMzYXhlZG9xeXcifQ.QLbpZyPf09mRM5ZIGyLdS2C8j2Py-2aY7ZCcLJohCdc\", \"refresh_token\": null}"
       },
       {
        "request": "GET /api/me/following",
@@ -1434,34 +1397,19 @@
        "body": "{\"data\": [{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, {\"about_me\": \"I am dave.\", \"avatar_url\": \"https://www.gravatar.com/avatar/6c1265401f75f9840d9c267655954800?d=identicon\", \"email\": \"dave@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 4, \"last_seen\": \"2026-01-01T09:00:00Z\", \"p"
       },
       {
-       "request": "POST /api/me/following/2",
-       "status": 409,
-       "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
-      },
-      {
-       "request": "GET /api/users/2/followers",
+       "request": "GET /api/feed",
        "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-02T15:58:59.645722Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, {\"about_me\": \"Drive necessary arrive not.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c922747a93b40d1ea88262bf1aebee62?d=identicon\", \"email\": \"user1@example.org\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": false, \"id\": 8, \"last_s"
-      },
-      {
-       "request": "GET /api/users/2/following",
-       "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-02T15:58:59.657095Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}], \"pagination\": {\"count\": 1, \"limit\": 25, \"offset\": 0, \"total\": 1}}"
+       "body": "{\"data\": [{\"author\": {\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T11:42:18.046404Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, \"id\": 145, \"text\": \"Bag impact available keep tell nearly research. Phone whether middle least. Name whose court little behavior health. Arm down head address organization defense feel religious.\", \"timestamp\": \"2026-01-03T01:48:00Z\","
       }
      ]
     },
     {
-     "persona": "bob_power_user",
+     "persona": "bob_follow_alice",
      "steps": [
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImJKcHo2cmQ5N1ItVXJBSzZ3OTRXVmJOdjc1V3BjYnZUeVM5Wnk0eUppLWMifQ.-x4dRdM1LNNZ9YXMQ-MT2gl7qrSLrwvBYlxnNk3xSmc\", \"refresh_token\": null}"
-      },
-      {
-       "request": "POST /api/posts",
-       "status": 201,
-       "body": "{\"author\": {\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-10-02T15:58:59.352251Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, \"id\": 151, \"text\": \"Bob's first post\", \"timestamp\": \"2026-10-02T15:58:59.357451Z\", \"url\": \"/api/posts/151\"}"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImZna0NXdUplV2VUelVDeURES0o1dzMyakpWdkduYkRUM3FNQjlKRGtvXzgifQ.4tXGmep8u-VHXYL0Efc9l9cswts0uzqa_3ewVbYy_Gg\", \"refresh_token\": null}"
       },
       {
        "request": "POST /api/me/following/1",
@@ -1469,19 +1417,9 @@
        "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
       },
       {
-       "request": "GET /api/feed",
-       "status": 200,
-       "body": "{\"data\": [{\"author\": {\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-10-02T15:58:59.372311Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, \"id\": 151, \"text\": \"Bob's first post\", \"timestamp\": \"2026-10-02T15:58:59.357451Z\", \"url\": \"/api/posts/151\"}, {\"author\": {\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\""
-      },
-      {
-       "request": "GET /api/users/1/followers",
-       "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-10-02T15:58:59.385286Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, {\"about_me\": \"I am dave.\", \"avatar_url\": \"https://www.gravatar.com/avatar/6c1265401f75f9840d9c267655954800?d=identicon\", \"email\": \"dave@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 4, \"last_seen\": \"2026-01-01T09:00:0"
-      },
-      {
-       "request": "GET /api/users/1/following",
-       "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-10-02T15:58:59.393018Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, {\"about_me\": \"I am carol.\", \"avatar_url\": \"https://www.gravatar.com/avatar/d4766e3f21c67b7c786f012d910fa54f?d=identicon\", \"email\": \"carol@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 3, \"last_seen\": \"2026-01-01T09:00"
+       "request": "DELETE /api/me/following/1",
+       "status": 204,
+       "body": "null"
       }
      ]
     },
@@ -1491,42 +1429,32 @@
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkZfR0ZYSHg0QXJBQkJITi0tVnFDS1podmI2Y1FwVlNOWWhjY1ZjR2RYRHMifQ.biDvwifpPfgNuDN9G1vnAYqWOoLPxh3QKGxISXz73T8\", \"refresh_token\": null}"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IjhEWTJaTU13a1hsVGlMM3BqcGpXUnFvOWppU29xRWJzc1ptYVFTY2lIcHcifQ.r9eoiiaAVuKo6LugWoWgfrDjo1AzNjC0cYSqIO2-Pog\", \"refresh_token\": null}"
       },
       {
-       "request": "POST /api/posts",
+       "request": "POST /api/users",
        "status": 400,
-       "body": "{\"code\": 400, \"description\": \"The server found one or more errors in the information that you sent.\", \"errors\": {\"json\": {\"text\": [\"Length must be between 1 and 280.\"]}}, \"message\": \"Validation Error\"}"
+       "body": "{\"code\": 400, \"description\": \"The server found one or more errors in the information that you sent.\", \"errors\": {\"json\": {\"email\": [\"Not a valid email address.\"], \"username\": [\"Length must be between 3 and 64.\"]}}, \"message\": \"Validation Error\"}"
       },
       {
-       "request": "POST /api/posts",
-       "status": 201,
-       "body": "{\"author\": {\"about_me\": \"I am carol.\", \"avatar_url\": \"https://www.gravatar.com/avatar/d4766e3f21c67b7c786f012d910fa54f?d=identicon\", \"email\": \"carol@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 3, \"last_seen\": \"2026-10-02T15:58:59.415969Z\", \"posts_url\": \"/api/users/3/posts\", \"url\": \"/api/users/3\", \"username\": \"carol\"}, \"id\": 151, \"text\": \"a\", \"timestamp\": \"2026-10-02T15:58:59.421544Z\", \"url\": \"/api/posts/151\"}"
-      },
-      {
-       "request": "POST /api/me/following/999",
-       "status": 404,
-       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
-      },
-      {
-       "request": "GET /api/users/999/followers",
-       "status": 404,
-       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
-      },
-      {
-       "request": "GET /api/users/999/following",
-       "status": 404,
-       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+       "request": "POST /api/users",
+       "status": 400,
+       "body": "{\"code\": 400, \"description\": \"The server found one or more errors in the information that you sent.\", \"errors\": {\"json\": {\"email\": [\"Not a valid email address.\"], \"username\": [\"Username must start with a letter\"]}}, \"message\": \"Validation Error\"}"
       }
      ]
     },
     {
-     "persona": "dave_networker",
+     "persona": "dave_all_follow",
      "steps": [
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImxXMWlfRzBHbmk2TVk3bkctSUtBOFVnNElOS2M4TGlmTGc0N1FXejVxR0kifQ.ZH_gcUXfoxuK_gwUQaOBiLF9uvDiaxS1-rM59lTUJps\", \"refresh_token\": null}"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IlBDQ0R3TV8wV1FZZWNSam9uX0N3RlNlT1NUdU1OVy10NmNBd3NwWF9XNUEifQ.Zj6_c7TY5c-h4JqCwd19RCY6UXDu4fqOBAz1fUXQlSE\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/me/following/2",
+       "status": 409,
+       "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
       },
       {
        "request": "POST /api/me/following/3",
@@ -1534,12 +1462,7 @@
        "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
       },
       {
-       "request": "POST /api/me/following/4",
-       "status": 204,
-       "body": "null"
-      },
-      {
-       "request": "POST /api/me/following/5",
+       "request": "POST /api/me/following/1",
        "status": 409,
        "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
       },
@@ -1549,74 +1472,44 @@
        "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
       },
       {
-       "request": "GET /api/users/3/followers",
+       "request": "GET /api/users/4/followers",
        "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, {\"about_me\": \"Drive necessary arrive not.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c922747a93b40d1ea88262bf1aebee62?d=identicon\", \"email\": \"user1@example.org\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": false, \"id\": 8, \"last_seen\": \""
-      },
-      {
-       "request": "GET /api/users/6/followers",
-       "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am dave.\", \"avatar_url\": \"https://www.gravatar.com/avatar/6c1265401f75f9840d9c267655954800?d=identicon\", \"email\": \"dave@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 4, \"last_seen\": \"2026-10-02T15:58:59.410492Z\", \"posts_url\": \"/api/users/4/posts\", \"url\": \"/api/users/4\", \"username\": \"dave\"}, {\"about_me\": \"Gun real trial serve fear poor before.\", \"avatar_url\": \"https://www.gravatar.com/avatar/9bb2e235737df4fc221da2b6216e7590?d=identicon\", \"email\": \"user17@example.org\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": false, \"id\": 2"
+       "body": "{\"data\": [{\"about_me\": \"Officer however wish another.\", \"avatar_url\": \"https://www.gravatar.com/avatar/10fc7f102be8de7657fb4d80898bbfe3?d=identicon\", \"email\": \"user2@example.org\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": false, \"id\": 9, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/9/posts\", \"url\": \"/api/users/9\", \"username\": \"crystalaguilar2\"}, {\"about_me\": \"Chance edge girl hair but support.\", \"avatar_url\": \"https://www.gravatar.com/avatar/f7e7867056f1e5aa7cdc23184075609c?d=identicon\", \"email\": \"user15@example.org\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_pass"
       }
      ]
     },
     {
-     "persona": "erin_feeder",
+     "persona": "erin_post_feed",
      "steps": [
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6InZ2WnhEbU52TXJ3Yk5nU09LY0lYaExjVkhPR24tVzFwMWUwalRmQWVvVFEifQ.WeMnpvf0UzvoXkEF4rXKXKUbEVntnw5vlIyIuTM0ZJY\", \"refresh_token\": null}"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkpjckpkUzJWa3pyOHJVSVhFVkJ3VVJjeHZ6aWdBNXMzM0hjR3VKVENmem8ifQ.MSjBYgl9nIL-6DxU5rIpKBpz_bcvwlKqOezWsWaX3uY\", \"refresh_token\": null}"
       },
       {
        "request": "POST /api/posts",
        "status": 201,
-       "body": "{\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", \"email\": \"erin@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 5, \"last_seen\": \"2026-10-02T15:58:59.353322Z\", \"posts_url\": \"/api/users/5/posts\", \"url\": \"/api/users/5\", \"username\": \"erin\"}, \"id\": 151, \"text\": \"Erin post one\", \"timestamp\": \"2026-10-02T15:58:59.358925Z\", \"url\": \"/api/posts/151\"}"
+       "body": "{\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", \"email\": \"erin@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 5, \"last_seen\": \"2026-10-03T11:42:18.006428Z\", \"posts_url\": \"/api/users/5/posts\", \"url\": \"/api/users/5\", \"username\": \"erin\"}, \"id\": 151, \"text\": \"Hello from erin\", \"timestamp\": \"2026-10-03T11:42:18.011194Z\", \"url\": \"/api/posts/151\"}"
       },
       {
        "request": "POST /api/posts",
        "status": 201,
-       "body": "{\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", \"email\": \"erin@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 5, \"last_seen\": \"2026-10-02T15:58:59.366340Z\", \"posts_url\": \"/api/users/5/posts\", \"url\": \"/api/users/5\", \"username\": \"erin\"}, \"id\": 152, \"text\": \"Erin post two\", \"timestamp\": \"2026-10-02T15:58:59.370570Z\", \"url\": \"/api/posts/152\"}"
-      },
-      {
-       "request": "POST /api/me/following/1",
-       "status": 204,
-       "body": "null"
+       "body": "{\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", \"email\": \"erin@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 5, \"last_seen\": \"2026-10-03T11:42:18.017613Z\", \"posts_url\": \"/api/users/5/posts\", \"url\": \"/api/users/5\", \"username\": \"erin\"}, \"id\": 152, \"text\": \"Another post\", \"timestamp\": \"2026-10-03T11:42:18.021548Z\", \"url\": \"/api/posts/152\"}"
       },
       {
        "request": "GET /api/feed",
        "status": 200,
-       "body": "{\"data\": [{\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", \"email\": \"erin@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 5, \"last_seen\": \"2026-10-02T15:58:59.388560Z\", \"posts_url\": \"/api/users/5/posts\", \"url\": \"/api/users/5\", \"username\": \"erin\"}, \"id\": 152, \"text\": \"Erin post two\", \"timestamp\": \"2026-10-02T15:58:59.370570Z\", \"url\": \"/api/posts/152\"}, {\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\","
-      },
-      {
-       "request": "GET /api/users/1/following",
-       "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, {\"about_me\": \"I am carol.\", \"avatar_url\": \"https://www.gravatar.com/avatar/d4766e3f21c67b7c786f012d910fa54f?d=identicon\", \"email\": \"carol@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 3, \"last_seen\": \"2026-01-01T09:00:00Z\", "
-      },
-      {
-       "request": "GET /api/users/1/followers",
-       "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, {\"about_me\": \"I am dave.\", \"avatar_url\": \"https://www.gravatar.com/avatar/6c1265401f75f9840d9c267655954800?d=identicon\", \"email\": \"dave@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 4, \"last_seen\": \"2026-01-01T09:00:00Z\", \"p"
+       "body": "{\"data\": [{\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", \"email\": \"erin@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 5, \"last_seen\": \"2026-10-03T11:42:18.027536Z\", \"posts_url\": \"/api/users/5/posts\", \"url\": \"/api/users/5\", \"username\": \"erin\"}, \"id\": 152, \"text\": \"Another post\", \"timestamp\": \"2026-10-03T11:42:18.021548Z\", \"url\": \"/api/posts/152\"}, {\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", "
       }
      ]
     },
     {
-     "persona": "frank_unfollow",
+     "persona": "frank_unfollow_all",
      "steps": [
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImVaWkpkQmlXUmU4eGl3cDRvQ29KWHd3bzhtNjVzR2NyMUk3OFFZRGI3VXcifQ.GUuJqNbACyAhLua51pYXaCzW2JkjsoBSa6NDsF97RUI\", \"refresh_token\": null}"
-      },
-      {
-       "request": "POST /api/me/following/2",
-       "status": 204,
-       "body": "null"
-      },
-      {
-       "request": "DELETE /api/me/following/2",
-       "status": 204,
-       "body": "null"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IjNqM3BVQl9MNWtZd21Pc2t4UzloSkRQb3AyWVlEd0kycTVxZ2NmUWdzMTgifQ.EP5jsRmB4UhS-OQ6c6cJf71NCfW6_VTd7i_K-L6iRlQ\", \"refresh_token\": null}"
       },
       {
        "request": "GET /api/me/following",
@@ -1624,34 +1517,89 @@
        "body": "{\"data\": [], \"pagination\": {\"count\": 0, \"limit\": 25, \"offset\": 0, \"total\": 0}}"
       },
       {
-       "request": "GET /api/me/followers",
+       "request": "DELETE /api/me/following/2",
+       "status": 409,
+       "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
+      },
+      {
+       "request": "DELETE /api/me/following/3",
+       "status": 409,
+       "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
+      }
+     ]
+    },
+    {
+     "persona": "power_user_full_cycle",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am dave.\", \"avatar_url\": \"https://www.gravatar.com/avatar/6c1265401f75f9840d9c267655954800?d=identicon\", \"email\": \"dave@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 4, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/4/posts\", \"url\": \"/api/users/4\", \"username\": \"dave\"}, {\"about_me\": \"Gun real trial serve fear poor before.\", \"avatar_url\": \"https://www.gravatar.com/avatar/9bb2e235737df4fc221da2b6216e7590?d=identicon\", \"email\": \"user17@example.org\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": false, \"id\": 24, \"las"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IlVlWHN1enFNT2doN2ZHOWFKa0dMRlF1SGFucVNsa1ZBNFVYTHFOeFJCUlEifQ.GXfhvJeGYyL3efzMAbbnPm6LyvMBndPs8RU1xW-cDgs\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/me/following/2",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "DELETE /api/me/following/2",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe s1: alice_normal",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6InZWaHdXUHJlYWZmWWE3NWV3WkJnbFY3eUl2N2hpY0w0bGl5NEJiMFM0WWcifQ.UM3BcEoIVblkrgf2MqVQYn_5ufxmv3U41t58KerH-bA\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 200,
+       "body": "{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T11:42:18.260912Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}"
+      },
+      {
+       "request": "POST /api/me/following/2",
+       "status": 409,
+       "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
       },
       {
        "request": "GET /api/users/2/followers",
        "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, {\"about_me\": \"Drive necessary arrive not.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c922747a93b40d1ea88262bf1aebee62?d=identicon\", \"email\": \"user1@example.org\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": false, \"id\": 8, \"last_seen\": \""
+       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T11:42:18.279350Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, {\"about_me\": \"Drive necessary arrive not.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c922747a93b40d1ea88262bf1aebee62?d=identicon\", \"email\": \"user1@example.org\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": false, \"id\": 8, \"last_s"
+      },
+      {
+       "request": "GET /api/users/2/following",
+       "status": 200,
+       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T11:42:18.288594Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}], \"pagination\": {\"count\": 1, \"limit\": 25, \"offset\": 0, \"total\": 1}}"
       }
      ]
     },
     {
-     "persona": "probe_s1_followers_bug",
+     "persona": "probe_s1_s2_followers_following",
      "steps": [
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6InRSTlVrbUp2cGlJNHBsNExhZ0dIRDlzTmZVNGlDX1lreHJHeHJwUm9yVEkifQ.g2u3M_pGyDnFfoKjcVUoXc-Rd2Xdlt0C6P7bxivUrMw\", \"refresh_token\": null}"
-      },
-      {
-       "request": "POST /api/users",
-       "status": 201,
-       "body": "{\"about_me\": null, \"avatar_url\": \"https://www.gravatar.com/avatar/b418773a2c51fb9777a1648346fa7394?d=identicon\", \"email\": \"a@example.com\", \"first_seen\": \"2026-10-02T15:58:59.433677Z\", \"has_password\": true, \"id\": 31, \"last_seen\": \"2026-10-02T15:58:59.433695Z\", \"posts_url\": \"/api/users/31/posts\", \"url\": \"/api/users/31\", \"username\": \"userA\"}"
-      },
-      {
-       "request": "POST /api/users",
-       "status": 201,
-       "body": "{\"about_me\": null, \"avatar_url\": \"https://www.gravatar.com/avatar/d3d7ebb9768eb6f1d6cee6d0cefd341b?d=identicon\", \"email\": \"b@example.com\", \"first_seen\": \"2026-10-02T15:58:59.617341Z\", \"has_password\": true, \"id\": 32, \"last_seen\": \"2026-10-02T15:58:59.617350Z\", \"posts_url\": \"/api/users/32/posts\", \"url\": \"/api/users/32\", \"username\": \"userB\"}"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IlVVaDc3ZXpRZGsxSktNX3VDOVRlb3ZNQmxnc3JwXzBvRHpnSGZST1dEUzAifQ.2qfOm_YQP9JqaPU0aiErkRN1ApVsHBruWZermAVwoyQ\", \"refresh_token\": null}"
       },
       {
        "request": "POST /api/me/following/3",
@@ -1659,49 +1607,29 @@
        "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
       },
       {
-       "request": "POST /api/me/following/4",
-       "status": 204,
-       "body": "null"
-      },
-      {
-       "request": "POST /api/users/3/followers",
-       "status": 405,
-       "body": "{\"code\": 405, \"description\": \"The method is not allowed for the requested URL.\", \"message\": \"Method Not Allowed\"}"
-      },
-      {
-       "request": "GET /api/users/4/followers",
+       "request": "GET /api/users/3/followers",
        "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-02T15:58:59.663442Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, {\"about_me\": \"Officer however wish another.\", \"avatar_url\": \"https://www.gravatar.com/avatar/10fc7f102be8de7657fb4d80898bbfe3?d=identicon\", \"email\": \"user2@example.org\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": false, \"id\": 9, \"last"
+       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T11:42:18.273073Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, {\"about_me\": \"Drive necessary arrive not.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c922747a93b40d1ea88262bf1aebee62?d=identicon\", \"email\": \"user1@example.org\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": false, \"id\": 8, \"last_s"
+      },
+      {
+       "request": "GET /api/users/3/following",
+       "status": 200,
+       "body": "{\"data\": [], \"pagination\": {\"count\": 0, \"limit\": 25, \"offset\": 0, \"total\": 0}}"
       }
      ]
     },
     {
-     "persona": "probe_s2_following_bug",
+     "persona": "probe_s1_s2_followers_following2",
      "steps": [
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IjVHeHVreHFyN011OWtuQmFTdi1aUEVjT2x4emlxUlRSRlgzcmxPUVN1RkkifQ.S1k9l6odgmKCIWisna6roh-i59Y1XfxmSYcH6oLCilc\", \"refresh_token\": null}"
-      },
-      {
-       "request": "POST /api/users",
-       "status": 201,
-       "body": "{\"about_me\": null, \"avatar_url\": \"https://www.gravatar.com/avatar/b418773a2c51fb9777a1648346fa7394?d=identicon\", \"email\": \"a@example.com\", \"first_seen\": \"2026-10-02T15:58:59.620850Z\", \"has_password\": true, \"id\": 31, \"last_seen\": \"2026-10-02T15:58:59.620860Z\", \"posts_url\": \"/api/users/31/posts\", \"url\": \"/api/users/31\", \"username\": \"userA\"}"
-      },
-      {
-       "request": "POST /api/users",
-       "status": 201,
-       "body": "{\"about_me\": null, \"avatar_url\": \"https://www.gravatar.com/avatar/d3d7ebb9768eb6f1d6cee6d0cefd341b?d=identicon\", \"email\": \"b@example.com\", \"first_seen\": \"2026-10-02T15:58:59.717353Z\", \"has_password\": true, \"id\": 32, \"last_seen\": \"2026-10-02T15:58:59.717364Z\", \"posts_url\": \"/api/users/32/posts\", \"url\": \"/api/users/32\", \"username\": \"userB\"}"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Im9GWUtpRXZFcmpqLWJmVGRvVVdkME5CQjZ3Rmpmam5VTUdVTXNIVFNyZTgifQ.GExi51Kqh1P30JYX2I_nT4ZgHCEYD5DblSixIoXGZII\", \"refresh_token\": null}"
       },
       {
        "request": "POST /api/me/following/3",
        "status": 409,
        "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
-      },
-      {
-       "request": "POST /api/me/following/4",
-       "status": 204,
-       "body": "null"
       },
       {
        "request": "GET /api/users/3/following",
@@ -1709,21 +1637,21 @@
        "body": "{\"data\": [], \"pagination\": {\"count\": 0, \"limit\": 25, \"offset\": 0, \"total\": 0}}"
       },
       {
-       "request": "GET /api/users/4/following",
+       "request": "GET /api/users/3/followers",
        "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-02T15:58:59.929743Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, {\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-01-01T09:"
+       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T11:42:18.284729Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, {\"about_me\": \"Drive necessary arrive not.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c922747a93b40d1ea88262bf1aebee62?d=identicon\", \"email\": \"user1@example.org\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": false, \"id\": 8, \"last_s"
       }
      ]
     }
    ],
    "head": [
     {
-     "persona": "alice_follower",
+     "persona": "alice_power",
      "steps": [
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6InYtOG1ZelpBZXdHTGtOMkE1Mm9hNGZJXzlBby1NY3kxQVBnUi0xQ3MwTzgifQ.sUjac2g36hpUdAUMZhBaSa62AY-tUICO8g-8U5SGND8\", \"refresh_token\": null}"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkpPc3VoV0tIQkpDOUdaSGRRelh1SHA0OWl1M2E4bjJjeWZlaU5mR2VwNTgifQ.E-Vsd7VuK2Dh_4tH8rdtUTQF5wir3YBiR5Qf-osThBs\", \"refresh_token\": null}"
       },
       {
        "request": "GET /api/me/following",
@@ -1736,34 +1664,19 @@
        "body": "{\"data\": [{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, {\"about_me\": \"I am dave.\", \"avatar_url\": \"https://www.gravatar.com/avatar/6c1265401f75f9840d9c267655954800?d=identicon\", \"email\": \"dave@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 4, \"last_seen\": \"2026-01-01T09:00:00Z\", \"p"
       },
       {
-       "request": "POST /api/me/following/2",
-       "status": 409,
-       "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
-      },
-      {
-       "request": "GET /api/users/2/followers",
+       "request": "GET /api/feed",
        "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-02T15:58:59.380099Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}], \"pagination\": {\"count\": 1, \"limit\": 25, \"offset\": 0, \"total\": 1}}"
-      },
-      {
-       "request": "GET /api/users/2/following",
-       "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-02T15:58:59.386408Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}], \"pagination\": {\"count\": 1, \"limit\": 25, \"offset\": 0, \"total\": 1}}"
+       "body": "{\"data\": [{\"author\": {\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T11:42:18.059727Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, \"id\": 145, \"text\": \"Bag impact available keep tell nearly research. Phone whether middle least. Name whose court little behavior health. Arm down head address organization defense feel religious.\", \"timestamp\": \"2026-01-03T01:48:00Z\","
       }
      ]
     },
     {
-     "persona": "bob_power_user",
+     "persona": "bob_follow_alice",
      "steps": [
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6InBEdGMwY3V3cFp3U2RUTnROZ0N0aDBzbXp3WFFrREtSd2wtbkY4SE5TQWcifQ.TF6XS2GKmUqqDTFSCju7ZAXIzlgO25fg6E8wP0_0MGA\", \"refresh_token\": null}"
-      },
-      {
-       "request": "POST /api/posts",
-       "status": 201,
-       "body": "{\"author\": {\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-10-02T15:58:59.380330Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, \"id\": 151, \"text\": \"Bob's first post\", \"timestamp\": \"2026-10-02T15:58:59.386175Z\", \"url\": \"/api/posts/151\"}"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Ikd6QkJ6VVZKRDFGaHNBMUZwNUJsZHlCaG5fdndabzN0SW5XUlJZR0pzZWcifQ.d0CwMUejEbcrd5Hp_YbAAscpFl5FQ6K41flaYfZQEoQ\", \"refresh_token\": null}"
       },
       {
        "request": "POST /api/me/following/1",
@@ -1771,19 +1684,9 @@
        "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
       },
       {
-       "request": "GET /api/feed",
-       "status": 200,
-       "body": "{\"data\": [{\"author\": {\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-10-02T15:58:59.404343Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, \"id\": 151, \"text\": \"Bob's first post\", \"timestamp\": \"2026-10-02T15:58:59.386175Z\", \"url\": \"/api/posts/151\"}, {\"author\": {\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\""
-      },
-      {
-       "request": "GET /api/users/1/followers",
-       "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-10-02T15:58:59.420237Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, {\"about_me\": \"I am carol.\", \"avatar_url\": \"https://www.gravatar.com/avatar/d4766e3f21c67b7c786f012d910fa54f?d=identicon\", \"email\": \"carol@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 3, \"last_seen\": \"2026-01-01T09:00"
-      },
-      {
-       "request": "GET /api/users/1/following",
-       "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-10-02T15:58:59.453511Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, {\"about_me\": \"I am carol.\", \"avatar_url\": \"https://www.gravatar.com/avatar/d4766e3f21c67b7c786f012d910fa54f?d=identicon\", \"email\": \"carol@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 3, \"last_seen\": \"2026-01-01T09:00"
+       "request": "DELETE /api/me/following/1",
+       "status": 204,
+       "body": "null"
       }
      ]
     },
@@ -1793,42 +1696,32 @@
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImluYXFvM3pmeEs2YXJoNjhNR0Vkd3c4elI3WUMyR3lRNVB3QVozeXg3RWcifQ.gkKBQBX6bTRa-swtd32ZaYGHHIjkV9HFXGpAR8tePOs\", \"refresh_token\": null}"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Im5iY3plT3Uxbk5PdEczaUFnQ2pzM2JXNkFtS01Ca3ZjQjViX1ZqbjdxYVEifQ._9kHn2VeBqQptH_MQTbpSZxB_J0Ab37YYj3_GmtXw_4\", \"refresh_token\": null}"
       },
       {
-       "request": "POST /api/posts",
+       "request": "POST /api/users",
        "status": 400,
-       "body": "{\"code\": 400, \"description\": \"The server found one or more errors in the information that you sent.\", \"errors\": {\"json\": {\"text\": [\"Length must be between 1 and 280.\"]}}, \"message\": \"Validation Error\"}"
+       "body": "{\"code\": 400, \"description\": \"The server found one or more errors in the information that you sent.\", \"errors\": {\"json\": {\"email\": [\"Not a valid email address.\"], \"username\": [\"Length must be between 3 and 64.\"]}}, \"message\": \"Validation Error\"}"
       },
       {
-       "request": "POST /api/posts",
-       "status": 201,
-       "body": "{\"author\": {\"about_me\": \"I am carol.\", \"avatar_url\": \"https://www.gravatar.com/avatar/d4766e3f21c67b7c786f012d910fa54f?d=identicon\", \"email\": \"carol@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 3, \"last_seen\": \"2026-10-02T15:58:59.365520Z\", \"posts_url\": \"/api/users/3/posts\", \"url\": \"/api/users/3\", \"username\": \"carol\"}, \"id\": 151, \"text\": \"a\", \"timestamp\": \"2026-10-02T15:58:59.370080Z\", \"url\": \"/api/posts/151\"}"
-      },
-      {
-       "request": "POST /api/me/following/999",
-       "status": 404,
-       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
-      },
-      {
-       "request": "GET /api/users/999/followers",
-       "status": 404,
-       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
-      },
-      {
-       "request": "GET /api/users/999/following",
-       "status": 404,
-       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+       "request": "POST /api/users",
+       "status": 400,
+       "body": "{\"code\": 400, \"description\": \"The server found one or more errors in the information that you sent.\", \"errors\": {\"json\": {\"email\": [\"Not a valid email address.\"], \"username\": [\"Username must start with a letter\"]}}, \"message\": \"Validation Error\"}"
       }
      ]
     },
     {
-     "persona": "dave_networker",
+     "persona": "dave_all_follow",
      "steps": [
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Ik5IdHJWMl8tRUM4eW82NEg5bkJRQjNSZ1ZoajBaUHc5dHgyZGFmRHFGUEkifQ.wfXixz-SYY0VOf7Hju5F1Ms4RMaavF-QV3P0KSDei60\", \"refresh_token\": null}"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IjktV1BZU0tMMGRyUW51OE1hZ05kdWlOOE5JTDZNUjI0MHZ5MF9zV2lBajAifQ.1OqsM75WM-9_wfj-veVY7vNO0cx9nc_a7xXU5Dy9DFE\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/me/following/2",
+       "status": 409,
+       "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
       },
       {
        "request": "POST /api/me/following/3",
@@ -1836,12 +1729,7 @@
        "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
       },
       {
-       "request": "POST /api/me/following/4",
-       "status": 204,
-       "body": "null"
-      },
-      {
-       "request": "POST /api/me/following/5",
+       "request": "POST /api/me/following/1",
        "status": 409,
        "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
       },
@@ -1851,74 +1739,44 @@
        "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
       },
       {
-       "request": "GET /api/users/3/followers",
+       "request": "GET /api/users/4/followers",
        "status": 200,
-       "body": "{\"data\": [], \"pagination\": {\"count\": 0, \"limit\": 25, \"offset\": 0, \"total\": 0}}"
-      },
-      {
-       "request": "GET /api/users/6/followers",
-       "status": 200,
-       "body": "{\"data\": [], \"pagination\": {\"count\": 0, \"limit\": 25, \"offset\": 0, \"total\": 0}}"
+       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, {\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-01-01T09:00:00Z\""
       }
      ]
     },
     {
-     "persona": "erin_feeder",
+     "persona": "erin_post_feed",
      "steps": [
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkszaXZQenhsQUlzemJqRnVKdjJIV2oyb1o1YnpTQVZPSmtvbWdDUVc1anMifQ.OhGq38SG8Uz2KDTwY2XzjfZU1sOAhw6SPpB4FyIFHUw\", \"refresh_token\": null}"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkV0ajJNSHNtQ1pWWGE0aVdTbjlLdlREVUt0NXMxRTJPNmNkdGtwalk0OTgifQ.sZU8xU3cnPoMiSsxwZfIhfH0L5xaRCSKf53QWQYmFy0\", \"refresh_token\": null}"
       },
       {
        "request": "POST /api/posts",
        "status": 201,
-       "body": "{\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", \"email\": \"erin@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 5, \"last_seen\": \"2026-10-02T15:58:59.973429Z\", \"posts_url\": \"/api/users/5/posts\", \"url\": \"/api/users/5\", \"username\": \"erin\"}, \"id\": 151, \"text\": \"Erin post one\", \"timestamp\": \"2026-10-02T15:59:00.049473Z\", \"url\": \"/api/posts/151\"}"
+       "body": "{\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", \"email\": \"erin@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 5, \"last_seen\": \"2026-10-03T11:42:18.067562Z\", \"posts_url\": \"/api/users/5/posts\", \"url\": \"/api/users/5\", \"username\": \"erin\"}, \"id\": 151, \"text\": \"Hello from erin\", \"timestamp\": \"2026-10-03T11:42:18.256201Z\", \"url\": \"/api/posts/151\"}"
       },
       {
        "request": "POST /api/posts",
        "status": 201,
-       "body": "{\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", \"email\": \"erin@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 5, \"last_seen\": \"2026-10-02T15:59:00.057113Z\", \"posts_url\": \"/api/users/5/posts\", \"url\": \"/api/users/5\", \"username\": \"erin\"}, \"id\": 152, \"text\": \"Erin post two\", \"timestamp\": \"2026-10-02T15:59:00.061248Z\", \"url\": \"/api/posts/152\"}"
-      },
-      {
-       "request": "POST /api/me/following/1",
-       "status": 204,
-       "body": "null"
+       "body": "{\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", \"email\": \"erin@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 5, \"last_seen\": \"2026-10-03T11:42:18.263848Z\", \"posts_url\": \"/api/users/5/posts\", \"url\": \"/api/users/5\", \"username\": \"erin\"}, \"id\": 152, \"text\": \"Another post\", \"timestamp\": \"2026-10-03T11:42:18.268910Z\", \"url\": \"/api/posts/152\"}"
       },
       {
        "request": "GET /api/feed",
        "status": 200,
-       "body": "{\"data\": [{\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", \"email\": \"erin@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 5, \"last_seen\": \"2026-10-02T15:59:00.076866Z\", \"posts_url\": \"/api/users/5/posts\", \"url\": \"/api/users/5\", \"username\": \"erin\"}, \"id\": 152, \"text\": \"Erin post two\", \"timestamp\": \"2026-10-02T15:59:00.061248Z\", \"url\": \"/api/posts/152\"}, {\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\","
-      },
-      {
-       "request": "GET /api/users/1/following",
-       "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, {\"about_me\": \"I am carol.\", \"avatar_url\": \"https://www.gravatar.com/avatar/d4766e3f21c67b7c786f012d910fa54f?d=identicon\", \"email\": \"carol@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 3, \"last_seen\": \"2026-01-01T09:00:00Z\", "
-      },
-      {
-       "request": "GET /api/users/1/followers",
-       "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, {\"about_me\": \"I am carol.\", \"avatar_url\": \"https://www.gravatar.com/avatar/d4766e3f21c67b7c786f012d910fa54f?d=identicon\", \"email\": \"carol@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 3, \"last_seen\": \"2026-01-01T09:00:00Z\", "
+       "body": "{\"data\": [{\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", \"email\": \"erin@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 5, \"last_seen\": \"2026-10-03T11:42:18.274837Z\", \"posts_url\": \"/api/users/5/posts\", \"url\": \"/api/users/5\", \"username\": \"erin\"}, \"id\": 152, \"text\": \"Another post\", \"timestamp\": \"2026-10-03T11:42:18.268910Z\", \"url\": \"/api/posts/152\"}, {\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", "
       }
      ]
     },
     {
-     "persona": "frank_unfollow",
+     "persona": "frank_unfollow_all",
      "steps": [
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IjZrRk1Ca3BtUnhpZThTT3VONEtaN2VXSlZYRnczTWkyeHI3cDNfNzdFSU0ifQ.k79UvmQtZmAjR2LtmnM5iXZt-_Z-c4Cc19yXSrgw-o8\", \"refresh_token\": null}"
-      },
-      {
-       "request": "POST /api/me/following/2",
-       "status": 204,
-       "body": "null"
-      },
-      {
-       "request": "DELETE /api/me/following/2",
-       "status": 204,
-       "body": "null"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IjFuS1Vla3Jzc2VyZkp4a29EYjN0VWtkZ1NHQjd6UUVHRG5DZjJ0ZTBqencifQ.kAtCn61JOPUBMUx0LYOicjPYGV030ycsszVC4iSxMOA\", \"refresh_token\": null}"
       },
       {
        "request": "GET /api/me/following",
@@ -1926,34 +1784,89 @@
        "body": "{\"data\": [], \"pagination\": {\"count\": 0, \"limit\": 25, \"offset\": 0, \"total\": 0}}"
       },
       {
-       "request": "GET /api/me/followers",
+       "request": "DELETE /api/me/following/2",
+       "status": 409,
+       "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
+      },
+      {
+       "request": "DELETE /api/me/following/3",
+       "status": 409,
+       "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
+      }
+     ]
+    },
+    {
+     "persona": "power_user_full_cycle",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am dave.\", \"avatar_url\": \"https://www.gravatar.com/avatar/6c1265401f75f9840d9c267655954800?d=identicon\", \"email\": \"dave@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 4, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/4/posts\", \"url\": \"/api/users/4\", \"username\": \"dave\"}, {\"about_me\": \"Gun real trial serve fear poor before.\", \"avatar_url\": \"https://www.gravatar.com/avatar/9bb2e235737df4fc221da2b6216e7590?d=identicon\", \"email\": \"user17@example.org\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": false, \"id\": 24, \"las"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Ik55N1QwdTNrY1FTWnNyVklIY2NzRDBxMWdKcmU4OEtPV3J6TDg5Mm5fZ0EifQ.5Yl3grKKziIecDiuDnOZPm3hIXl6vCMWJDl1XJT6NZQ\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/me/following/2",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "DELETE /api/me/following/2",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe s1: alice_normal",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Imt4MTRWZVNMbGN1TnpzQXluQmdXc0ZfVDJHeDgwMUJhYkJvNkVoM2ZobzQifQ.dRMjoPuFO5XgrH143x5bKWxMgQfjBmJkkTZ6HPjLSgo\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 200,
+       "body": "{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T11:42:18.038143Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}"
+      },
+      {
+       "request": "POST /api/me/following/2",
+       "status": 409,
+       "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
       },
       {
        "request": "GET /api/users/2/followers",
        "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}], \"pagination\": {\"count\": 1, \"limit\": 25, \"offset\": 0, \"total\": 1}}"
+       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T11:42:18.051463Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}], \"pagination\": {\"count\": 1, \"limit\": 25, \"offset\": 0, \"total\": 1}}"
+      },
+      {
+       "request": "GET /api/users/2/following",
+       "status": 200,
+       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T11:42:18.059617Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}], \"pagination\": {\"count\": 1, \"limit\": 25, \"offset\": 0, \"total\": 1}}"
       }
      ]
     },
     {
-     "persona": "probe_s1_followers_bug",
+     "persona": "probe_s1_s2_followers_following",
      "steps": [
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6InNvVnVJeUNtX2duQUhVVXV3cENNUWhwd1k1aUlaNzZ2QmJXdGc1VmgtbTQifQ.koFpY45ZjiFQdkJLbDOBzss8JJGNcabA_V4WDqbVxo4\", \"refresh_token\": null}"
-      },
-      {
-       "request": "POST /api/users",
-       "status": 201,
-       "body": "{\"about_me\": null, \"avatar_url\": \"https://www.gravatar.com/avatar/b418773a2c51fb9777a1648346fa7394?d=identicon\", \"email\": \"a@example.com\", \"first_seen\": \"2026-10-02T15:58:59.480790Z\", \"has_password\": true, \"id\": 31, \"last_seen\": \"2026-10-02T15:58:59.480797Z\", \"posts_url\": \"/api/users/31/posts\", \"url\": \"/api/users/31\", \"username\": \"userA\"}"
-      },
-      {
-       "request": "POST /api/users",
-       "status": 201,
-       "body": "{\"about_me\": null, \"avatar_url\": \"https://www.gravatar.com/avatar/d3d7ebb9768eb6f1d6cee6d0cefd341b?d=identicon\", \"email\": \"b@example.com\", \"first_seen\": \"2026-10-02T15:58:59.619256Z\", \"has_password\": true, \"id\": 32, \"last_seen\": \"2026-10-02T15:58:59.619266Z\", \"posts_url\": \"/api/users/32/posts\", \"url\": \"/api/users/32\", \"username\": \"userB\"}"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImQzd1RSWFlFT3ZuUXdlM3FxWmZyV1lGcUNoWElnem95TmI4UnFWT1ZCbUUifQ.p9H8T8k-CqWIM5tK_UTHoMEKWj8Fwzlns1k04hFPE3Y\", \"refresh_token\": null}"
       },
       {
        "request": "POST /api/me/following/3",
@@ -1961,49 +1874,29 @@
        "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
       },
       {
-       "request": "POST /api/me/following/4",
-       "status": 204,
-       "body": "null"
-      },
-      {
-       "request": "POST /api/users/3/followers",
-       "status": 405,
-       "body": "{\"code\": 405, \"description\": \"The method is not allowed for the requested URL.\", \"message\": \"Method Not Allowed\"}"
-      },
-      {
-       "request": "GET /api/users/4/followers",
+       "request": "GET /api/users/3/followers",
        "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-02T15:58:59.684894Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, {\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-01-01T09:"
+       "body": "{\"data\": [], \"pagination\": {\"count\": 0, \"limit\": 25, \"offset\": 0, \"total\": 0}}"
+      },
+      {
+       "request": "GET /api/users/3/following",
+       "status": 200,
+       "body": "{\"data\": [], \"pagination\": {\"count\": 0, \"limit\": 25, \"offset\": 0, \"total\": 0}}"
       }
      ]
     },
     {
-     "persona": "probe_s2_following_bug",
+     "persona": "probe_s1_s2_followers_following2",
      "steps": [
       {
        "request": "POST /api/tokens",
        "status": 200,
-       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6InU0aTZ5d3QtenZ3SUZDVFpkWS15WnV3TlZaOUhmMXo4SUhaQlBBR3BFUEkifQ.OsXlh-MYzQ7QHDRm1O15ezL6OqXR2gX9mcATE1zjtUU\", \"refresh_token\": null}"
-      },
-      {
-       "request": "POST /api/users",
-       "status": 201,
-       "body": "{\"about_me\": null, \"avatar_url\": \"https://www.gravatar.com/avatar/b418773a2c51fb9777a1648346fa7394?d=identicon\", \"email\": \"a@example.com\", \"first_seen\": \"2026-10-02T15:58:59.438626Z\", \"has_password\": true, \"id\": 31, \"last_seen\": \"2026-10-02T15:58:59.438634Z\", \"posts_url\": \"/api/users/31/posts\", \"url\": \"/api/users/31\", \"username\": \"userA\"}"
-      },
-      {
-       "request": "POST /api/users",
-       "status": 201,
-       "body": "{\"about_me\": null, \"avatar_url\": \"https://www.gravatar.com/avatar/d3d7ebb9768eb6f1d6cee6d0cefd341b?d=identicon\", \"email\": \"b@example.com\", \"first_seen\": \"2026-10-02T15:58:59.618300Z\", \"has_password\": true, \"id\": 32, \"last_seen\": \"2026-10-02T15:58:59.618311Z\", \"posts_url\": \"/api/users/32/posts\", \"url\": \"/api/users/32\", \"username\": \"userB\"}"
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImpHNHdWUWRodkt1d01uZW5DVFJhTFJGbnVtekU3RWRYQ0l6bDAxdlhmZDgifQ.Gfo71_ja47FqXAEm54YN-DYeKlNAfMHF7knGIwXBm8g\", \"refresh_token\": null}"
       },
       {
        "request": "POST /api/me/following/3",
        "status": 409,
        "body": "{\"code\": 409, \"description\": \"A conflict happened while processing the request. The resource might have been modified while the request was being processed.\", \"message\": \"Conflict\"}"
-      },
-      {
-       "request": "POST /api/me/following/4",
-       "status": 204,
-       "body": "null"
       },
       {
        "request": "GET /api/users/3/following",
@@ -2011,52 +1904,62 @@
        "body": "{\"data\": [], \"pagination\": {\"count\": 0, \"limit\": 25, \"offset\": 0, \"total\": 0}}"
       },
       {
-       "request": "GET /api/users/4/following",
+       "request": "GET /api/users/3/followers",
        "status": 200,
-       "body": "{\"data\": [{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-02T15:58:59.694977Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, {\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-01-01T09:"
+       "body": "{\"data\": [], \"pagination\": {\"count\": 0, \"limit\": 25, \"offset\": 0, \"total\": 0}}"
       }
      ]
     }
    ]
   },
-  "steps": 52,
+  "steps": 43,
   "suspicions": [
    {
     "id": "s1",
-    "claim": "The followers endpoint returns the following list instead of the followers list due to a typo in the helper function's condition.",
+    "claim": "The followers endpoint returns the following list instead of the followers list due to a typo in the helper function parameter check.",
     "route": "GET /api/users/<int:id>/followers",
-    "trigger": "Create user A and user B. Make user A follow user B. Authenticate as any user. GET /api/users/B/followers. Observe that the response data contains user A (correct) or user B (incorrect). If it returns user B, the bug is confirmed.",
-    "status": "untested",
-    "evidence": "No probe request matched the trigger scenario of creating user A and B, making A follow B, and querying B's followers; the observed follower requests (f1, f3, f4, f5, f6, f7) involve different user IDs and do not establish the specific follow relationship.",
-    "changes": []
+    "trigger": "Create user A and user B. Make user A follow user B. Authenticate as any user. GET /api/users/<B_id>/followers. Read back the response data array: it will contain user A (correct) only if the bug is not present; with the bug it returns user B's following list (empty or other users).",
+    "status": "confirmed",
+    "evidence": "Probe 'probe_s1_s2_followers_following' for s1 shows GET /api/users/3/followers returned alice as follower in base but empty list in head, confirming the followers endpoint returns following list instead of followers list.",
+    "changes": [
+     "f2",
+     "f3",
+     "f4"
+    ]
    },
    {
     "id": "s2",
-    "claim": "The following endpoint returns the followers list instead of the following list due to a typo in the helper function's condition.",
+    "claim": "The following endpoint returns the followers list instead of the following list due to the same typo in the helper function.",
     "route": "GET /api/users/<int:id>/following",
-    "trigger": "Create user A and user B. Make user A follow user B. Authenticate as any user. GET /api/users/A/following. Observe that the response data contains user B (correct) or user A (incorrect). If it returns user A, the bug is confirmed.",
-    "status": "untested",
-    "evidence": "No probe request targeted the /following endpoint at all; all observed changes (f1-f7) are for /followers routes, so the following endpoint behavior is completely untested.",
+    "trigger": "Create user A and user B. Make user A follow user B. Authenticate as any user. GET /api/users/<A_id>/following. Read back the response data array: it should contain user B; with the bug it returns user A's followers list (empty or other users).",
+    "status": "refuted",
+    "evidence": "Probe 'probe_s1_s2_followers_following2' for s2 shows GET /api/users/3/following returned empty list in both base and head, so the following endpoint does not return followers list.",
     "changes": []
    }
   ],
-  "probes": 0,
+  "probes": 3,
+  "rounds": 1,
+  "generation": {
+   "model": "nvidia/Nemotron-3_5-Lightning",
+   "probe_model": "nvidia/Nemotron-3_5-Lightning"
+  },
   "usd": {
-   "suspect": 0.028894,
-   "check": 0.002595,
-   "personas": 0.0022256999999999997,
-   "rehearsal": 0.0,
-   "judge": 0.001791,
-   "sandbox_reported": 0.09936041999999996
+   "suspect": 0.028933,
+   "check": 0.003797,
+   "personas": 0.00391242,
+   "rehearsal": 0.029037,
+   "judge": 0.001968,
+   "sandbox_reported": 0.10645073000000001,
+   "rejudge": 0.003091
   },
   "seconds": {
-   "personas": 16.9,
-   "twin": 39.4,
-   "judge": 3.0
+   "personas": 15.8,
+   "twin": 42.3,
+   "judge": 3.1
   },
-  "backend": "nebius"
+  "backend": "nebius",
+  "judge_version": 2
  },
- "errors": {
-  "doppel_guided": "ApiTimeoutError: ApiTimeoutError(request=RequestInfo(url='https://api.tokenfactory.nebius.com/sandboxes/v1/files/60a41cc83d98399d6fa11867a98602fcfe377c48396cb8e98da5515d6c321ea0', method='GET'), response=None, timeout_type='connect')"
- }
+ "errors": {},
+ "set": "main"
 }

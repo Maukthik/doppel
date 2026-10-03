@@ -85,3 +85,44 @@ def test_a_single_slow_sample_is_never_an_automatic_regression():
         return json.dumps({"verdicts": [{"id": "c1", "label": "regression", "why": "slower"}]}), 1, 1
     v = judge([slow], "refactor", "diff", chat=says_regression)["verdicts"][0]
     assert v.label == "needs_human" and "one sample" in v.why
+
+
+def test_probes_keep_their_tag_even_when_the_model_drops_it():
+    sus = [{"id": "s1", "claim": "a"}, {"id": "s2", "claim": "b"}]
+    reply = {"personas": [{"name": "x", "steps": [{"method": "GET", "path": "/products"}]},
+                          {"name": "y", "steps": [{"method": "GET", "path": "/products"}]}]}
+    out = gen.generate(SHOP / "base", chat=lambda m, p, temperature=0.7: (json.dumps(reply), 1, 1),
+                       suspicions=sus, probes_only=True)["personas"]
+    assert [(p["probe"], p["name"]) for p in out] == [("s1", "probe s1: x"), ("s2", "probe s2: y")]
+
+
+def test_suspect_asks_again_when_the_reply_is_unreadable():
+    replies = iter(["sorry, something went wrong", json.dumps({"suspicions": [{"claim": "x", "route": "GET /"}]})])
+    out = suspect("pr", "diff", "src", chat=lambda m, p, temperature=0.7: (next(replies), 1, 1))
+    assert [s["claim"] for s in out["suspicions"]] == ["x"]
+    # a readable "nothing suspicious" is an answer, not a failure: no second call
+    calls = []
+    suspect("pr", "diff", "src", chat=lambda m, p, temperature=0.7: (calls.append(1) or '{"suspicions": []}', 1, 1))
+    assert len(calls) == 1
+
+
+def test_intended_needs_a_real_quote_and_confirmed_suspicions_escalate():
+    from doppel.diff import Finding
+    from doppel.judge import Verdict, escalate, judge
+    f = [Finding("status", "p", 1, "POST /api/me/following/2", "status 409 -> 204", 409, 204),
+         Finding("body", "q", 0, "GET /products", "changed: in_stock (added)", {}, {})]
+    pr = ("# Simplify follow\n\n`User.follow` already ignores duplicates, so the endpoint doesn't need its "
+          "own check.\nAdds an `in_stock` flag.")
+
+    def judge_says_intended(model, prompt, temperature=0.7):
+        if "Observed changes:" in prompt:  # without the diff: only in_stock is announced
+            return json.dumps({"checks": [{"id": "c1", "announced": False},
+                                          {"id": "c2", "announced": True, "quote": "Adds an in_stock flag"}]}), 1, 1
+        return json.dumps({"verdicts": [
+            {"id": "c1", "label": "intended", "quote": "follow now answers 204 for duplicates", "why": "matches diff"},
+            {"id": "c2", "label": "intended", "quote": "Adds an in_stock flag", "why": "announced"}]}), 1, 1
+    v = judge(f, pr, "diff", chat=judge_says_intended)["verdicts"]
+    # the judge saw the diff and excused the 409 -> 204; asked without the diff, nothing announces it
+    assert [x.label for x in v] == ["regression", "intended"]
+    checks = {"s1": {"status": "confirmed", "changes": ["f1"]}, "s2": {"status": "refuted", "changes": ["f2"]}}
+    assert [x.label for x in escalate([Verdict("needs_human", "?"), v[1]], checks)] == ["regression", "intended"]

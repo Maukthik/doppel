@@ -28,11 +28,17 @@ def shop_findings():
 
 def fake_ultra(model, prompt, temperature=0.7):
     """Labels like a good judge would: in_stock is in the PR text, the rest isn't."""
+    if "Observed changes:\n" in prompt:  # the description-only "is it announced?" question
+        checks = [{"id": c["id"], "announced": "in_stock" in c["what"],
+                   "quote": "Adds an `in_stock` flag to every product" if "in_stock" in c["what"] else ""}
+                  for c in map(json.loads, prompt.split("Observed changes:\n", 1)[1].strip().splitlines())]
+        return json.dumps({"checks": checks}), 500, 100
     verdicts = []
     for line in prompt.split("Behavior changes:\n", 1)[1].splitlines():
         c = json.loads(line)
         label = "intended" if "in_stock" in c["what"] else "regression"
-        verdicts.append({"id": c["id"], "label": label, "why": f"because {c['what']}"})
+        verdicts.append({"id": c["id"], "label": label, "why": f"because {c['what']}",
+                         "quote": "Adds an `in_stock` flag to every product" if label == "intended" else ""})
     return json.dumps({"verdicts": verdicts, "summary": "Two unmentioned changes."}), 3000, 400
 
 

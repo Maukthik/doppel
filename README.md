@@ -29,7 +29,7 @@ slower requests. Then it tells you which differences the PR meant to make and wh
 | 2 | Nebius Sandboxes backend (checkpoint + parallel forks) and Nemotron personas | done: live run found all 6 changes in 7.4 s |
 | 3 | Nemotron judge: intended vs regression, using the PR description; writes a test per regression | done |
 | 4 | GitHub Action: comment on every PR, artifacts, fails the check on regressions | done: live on a demo repo |
-| 5 | Benchmark on a real app: 30 PRs to microblog-api; tests 12/20, AI review 17/20, Doppel 11/20 (0 false alarms); review-guided Doppel next | in progress |
+| 5 | Benchmark on a real app (30 PRs to microblog-api + 10 held out): tests 12/20, AI review 17/20, review-guided Doppel 16/20 with 0 false alarms; tests + Doppel together 20/20 | done |
 | 6 | README results, video, submission | |
 
 ## Try it (stage 1, offline)
@@ -104,7 +104,10 @@ runs on branches of the repo itself. `examples/demo-repo` sets up a repo to watc
 
 30 pull requests to [microblog-api](https://github.com/miguelgrinberg/microblog-api) (Flask, 44 tests):
 20 carry a regression (3 are reverted upstream bug fixes), 10 are safe. Its own test suite catches
-12 of the 20. Doppel and an AI code reviewer (Nemotron 3 Ultra reading the diff) run on the same PRs.
+12 of the 20, an AI code reviewer (Nemotron 3 Ultra reading the diff) 17 with 1 false alarm, and
+review-guided Doppel 16 with no false alarms. They catch different bugs: the app's tests plus Doppel
+catch all 20. On 10 held-out PRs written afterwards: tests 6/7, AI review 5/7, Doppel 6/7, no false alarms.
+Results vary between runs, and the judge was improved after the held-out run; both are disclosed in the method.
 Method and honest limits: [bench/README.md](bench/README.md). Results: [bench/results/results.md](bench/results/results.md).
 
 Personas can log in: a step can send HTTP Basic credentials (`"auth": ["alice", "pw"]`), save the

@@ -1,0 +1,1791 @@
+{
+ "id": "h06-token-lifetime",
+ "kind": "regression",
+ "title": "Read token lifetimes from the environment consistently",
+ "source": "planted",
+ "bug": "Access tokens expire immediately: every request after login answers 401.",
+ "expect": ".",
+ "set": "heldout",
+ "tests": {
+  "caught": true,
+  "failed": [
+   "tests/test_auth.py::AuthTests::test_get_token",
+   "tests/test_auth.py::AuthTests::test_oauth",
+   "tests/test_auth.py::AuthTests::test_refresh_revoke_all",
+   "tests/test_auth.py::AuthTests::test_refresh_token",
+   "tests/test_auth.py::AuthTests::test_revoke"
+  ],
+  "summary": "5 failed, 39 passed in 9.50s",
+  "seconds": 10.0
+ },
+ "review": {
+  "caught": true,
+  "verdict": "regression",
+  "why": "The PR changes the default ACCESS_TOKEN_MINUTES from 15 to 0, making access tokens expire immediately and breaking authentication for all users who rely on the documented default.",
+  "usd": 0.028182,
+  "seconds": 3.9
+ },
+ "doppel_guided": {
+  "detected": true,
+  "caught": true,
+  "any_regression": true,
+  "needs_human": 0,
+  "findings": [
+   {
+    "kind": "status",
+    "persona": "alice_feed_after",
+    "request": "GET /api/feed",
+    "detail": "status 200 -> 401",
+    "label": "regression",
+    "why": "Changing the default ACCESS_TOKEN_MINUTES from 15 to 0 makes access tokens expire immediately, causing previously authenticated requests to return 401 Unauthorized instead of 200 OK.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "alice_power",
+    "request": "POST /api/posts",
+    "detail": "status 201 -> 401",
+    "label": "regression",
+    "why": "The same token expiration change causes POST /api/posts to return 401 instead of 201 Created for authenticated users.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "alice_power",
+    "request": "GET /api/feed",
+    "detail": "status 200 -> 401",
+    "label": "regression",
+    "why": "Changing the default ACCESS_TOKEN_MINUTES from 15 to 0 makes access tokens expire immediately, causing previously authenticated requests to return 401 Unauthorized instead of 200 OK.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "bob_minimal",
+    "request": "GET /api/users/me",
+    "detail": "status 404 -> 401",
+    "label": "regression",
+    "why": "Expired tokens cause GET /api/users/me to return 401 Unauthorized instead of 404 Not Found for users without proper authentication.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "carol_negative",
+    "request": "POST /api/posts",
+    "detail": "status 400 -> 401",
+    "label": "regression",
+    "why": "Token expiration masks validation errors, returning 401 Unauthorized instead of 400 Validation Error for invalid post data.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "carol_negative",
+    "request": "GET /api/posts",
+    "detail": "status 200 -> 401",
+    "label": "regression",
+    "why": "Changing the default ACCESS_TOKEN_MINUTES from 15 to 0 makes access tokens expire immediately, causing previously authenticated requests to return 401 Unauthorized instead of 200 OK.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "dave_power",
+    "request": "GET /api/users/1/followers",
+    "detail": "status 200 -> 401",
+    "label": "regression",
+    "why": "Changing the default ACCESS_TOKEN_MINUTES from 15 to 0 makes access tokens expire immediately, causing previously authenticated requests to return 401 Unauthorized instead of 200 OK.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "erin_careless",
+    "request": "POST /api/posts",
+    "detail": "status 201 -> 401",
+    "label": "regression",
+    "why": "The same token expiration change causes POST /api/posts to return 401 instead of 201 Created for authenticated users.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "erin_careless",
+    "request": "PUT /api/posts/1",
+    "detail": "status 403 -> 401",
+    "label": "regression",
+    "why": "Expired tokens cause DELETE/PUT /api/posts/1 to return 401 Unauthorized instead of 403 Forbidden for unauthorized but authenticated users.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "erin_careless",
+    "request": "DELETE /api/posts/1",
+    "detail": "status 403 -> 401",
+    "label": "regression",
+    "why": "Expired tokens cause DELETE/PUT /api/posts/1 to return 401 Unauthorized instead of 403 Forbidden for unauthorized but authenticated users.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "frank_duplicate",
+    "request": "GET /api/users/me",
+    "detail": "status 404 -> 401",
+    "label": "regression",
+    "why": "Expired tokens cause GET /api/users/me to return 401 Unauthorized instead of 404 Not Found for users without proper authentication.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "probe s1: alice_normal",
+    "request": "GET /api/me",
+    "detail": "status 200 -> 401",
+    "label": "regression",
+    "why": "Changing the default ACCESS_TOKEN_MINUTES from 15 to 0 makes access tokens expire immediately, causing previously authenticated requests to return 401 Unauthorized instead of 200 OK.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "probe s2: bob_refresh",
+    "request": "GET /api/me",
+    "detail": "status 200 -> 401",
+    "label": "regression",
+    "why": "Changing the default ACCESS_TOKEN_MINUTES from 15 to 0 makes access tokens expire immediately, causing previously authenticated requests to return 401 Unauthorized instead of 200 OK.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "probe s2: bob_refresh",
+    "request": "GET /api/me",
+    "detail": "status 200 -> 401",
+    "label": "regression",
+    "why": "Changing the default ACCESS_TOKEN_MINUTES from 15 to 0 makes access tokens expire immediately, causing previously authenticated requests to return 401 Unauthorized instead of 200 OK.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "probe s3: carol_careless",
+    "request": "GET /api/me",
+    "detail": "status 200 -> 401",
+    "label": "regression",
+    "why": "Changing the default ACCESS_TOKEN_MINUTES from 15 to 0 makes access tokens expire immediately, causing previously authenticated requests to return 401 Unauthorized instead of 200 OK.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "probe s3: carol_careless",
+    "request": "GET /api/me",
+    "detail": "status 200 -> 401",
+    "label": "regression",
+    "why": "Changing the default ACCESS_TOKEN_MINUTES from 15 to 0 makes access tokens expire immediately, causing previously authenticated requests to return 401 Unauthorized instead of 200 OK.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "probe_s1_expire_immediately",
+    "request": "GET /api/me",
+    "detail": "status 200 -> 401",
+    "label": "regression",
+    "why": "Changing the default ACCESS_TOKEN_MINUTES from 15 to 0 makes access tokens expire immediately, causing previously authenticated requests to return 401 Unauthorized instead of 200 OK.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "round2 probe-s3-token-revocation-delay",
+    "request": "GET /api/me",
+    "detail": "status 200 -> 401",
+    "label": "regression",
+    "why": "Changing the default ACCESS_TOKEN_MINUTES from 15 to 0 makes access tokens expire immediately, causing previously authenticated requests to return 401 Unauthorized instead of 200 OK.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "round2 probe-s3-token-revocation-delay",
+    "request": "DELETE /api/tokens",
+    "detail": "status 204 -> 401",
+    "label": "regression",
+    "why": "Token expiration causes DELETE /api/tokens to return 401 Unauthorized instead of 204 No Content for token revocation.",
+    "on_target": true,
+    "label_v1": "regression"
+   },
+   {
+    "kind": "status",
+    "persona": "round2 probe-s3-token-revocation-delay",
+    "request": "GET /api/me",
+    "detail": "status 200 -> 401",
+    "label": "regression",
+    "why": "Changing the default ACCESS_TOKEN_MINUTES from 15 to 0 makes access tokens expire immediately, causing previously authenticated requests to return 401 Unauthorized instead of 200 OK.",
+    "on_target": true,
+    "label_v1": "regression"
+   }
+  ],
+  "summary": "Changing the default ACCESS_TOKEN_MINUTES from 15 to 0 causes all access tokens to expire immediately, breaking authentication across all endpoints and masking other error conditions with 401 Unauthorized responses.",
+  "personas": [
+   {
+    "name": "alice_power",
+    "goal": "Post several times and check feed",
+    "vars": {
+     "name": "alice"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "json": {
+       "access_token": "{token}",
+       "refresh_token": "dummy"
+      },
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/api/posts",
+      "json": {
+       "text": "Hello from alice"
+      },
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/feed",
+      "save": {
+       "feed_items": "data"
+      },
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/users/me/following",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/users/me/followers",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "bob_minimal",
+    "goal": "Just login and get user info",
+    "vars": {
+     "name": "bob"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "bob",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "GET",
+      "path": "/api/users/me",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "carol_negative",
+    "goal": "Try to post empty text",
+    "vars": {
+     "name": "carol"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "carol",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "POST",
+      "path": "/api/posts",
+      "json": {
+       "text": ""
+      },
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/posts",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "dave_power",
+    "goal": "Follow many users and check following list",
+    "vars": {
+     "name": "dave"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "dave",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "json": {
+       "access_token": "{token}",
+       "refresh_token": "dummy"
+      },
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/api/users/me/following/2",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/api/users/me/following/3",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/users/me/following",
+      "save": {
+       "following": "data"
+      },
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/users/1/followers",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "erin_careless",
+    "goal": "Post with too long text and negative like",
+    "vars": {
+     "name": "erin"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "erin",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "POST",
+      "path": "/api/posts",
+      "json": {
+       "text": "x"
+      },
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "PUT",
+      "path": "/api/posts/1",
+      "json": {
+       "text": "y"
+      },
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "DELETE",
+      "path": "/api/posts/1",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "frank_duplicate",
+    "goal": "Try to register duplicate username",
+    "vars": {
+     "name": "frank"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/users",
+      "json": {
+       "username": "alice",
+       "email": "alice2@example.com",
+       "password": "doppel-pass"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "frank",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "GET",
+      "path": "/api/users/me",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ]
+   },
+   {
+    "name": "power_user_1",
+    "goal": "Full CRUD cycle on posts with pagination",
+    "vars": {
+     "name": "alice"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "POST",
+      "path": "/api/posts",
+      "json": {
+       "text": "Post A"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/posts?limit=2"
+     },
+     {
+      "method": "PUT",
+      "path": "/api/posts/1",
+      "json": {
+       "text": "Post A edited"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/posts/1"
+     },
+     {
+      "method": "DELETE",
+      "path": "/api/posts/1"
+     }
+    ]
+   },
+   {
+    "name": "careless_user_1",
+    "goal": "Send malformed requests to probe validation",
+    "vars": {
+     "name": "bob"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "bob",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "POST",
+      "path": "/api/users",
+      "json": {
+       "username": "",
+       "email": "bad",
+       "password": "doppel-pass"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/api/posts",
+      "json": {
+       "text": "a"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/users/me"
+     }
+    ]
+   },
+   {
+    "name": "alice_feed_after",
+    "goal": "Check feed after unfollowing",
+    "vars": {
+     "name": "alice"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "DELETE",
+      "path": "/api/users/me/following/2",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/feed",
+      "save": {
+       "feed_after_unfollow": "data"
+      },
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/users/me/following",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "bob_token_refresh",
+    "goal": "Refresh access token using refresh token",
+    "vars": {
+     "name": "bob"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "access_token": "access_token",
+       "refresh_token": "refresh_token"
+      },
+      "auth": [
+       "bob",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "PUT",
+      "path": "/api/tokens",
+      "json": {
+       "access_token": "{access_token}",
+       "refresh_token": "{refresh_token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/users/me"
+     }
+    ]
+   },
+   {
+    "name": "probe s1: alice_normal",
+    "goal": "Normal user activity with valid tokens",
+    "vars": {
+     "username": "alice",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "GET",
+      "path": "/api/me",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/users/me/following"
+     },
+     {
+      "method": "GET",
+      "path": "/api/users/me/followers"
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    },
+    "probe": "s1"
+   },
+   {
+    "name": "probe s2: bob_refresh",
+    "goal": "Token refresh flow with existing token",
+    "vars": {
+     "username": "bob",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "bob",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "GET",
+      "path": "/api/me",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "PUT",
+      "path": "/api/tokens",
+      "json": {
+       "access_token": "{token}",
+       "refresh_token": "{refresh_token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/me",
+      "headers": {
+       "Authorization": "Bearer {new_token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    },
+    "probe": "s2"
+   },
+   {
+    "name": "probe s3: carol_careless",
+    "goal": "Careless user sending bad input to find validation bugs",
+    "vars": {
+     "username": "carol",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "carol",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "GET",
+      "path": "/api/me",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "PUT",
+      "path": "/api/tokens",
+      "json": {
+       "access_token": "{token}",
+       "refresh_token": "invalid_refresh"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/me",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    },
+    "probe": "s3"
+   },
+   {
+    "name": "probe_s1_expire_immediately",
+    "goal": "Probe s1: tokens expire immediately breaking auth",
+    "vars": {
+     "username": "alice",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "GET",
+      "path": "/api/me",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    },
+    "probe": "s1"
+   },
+   {
+    "name": "round2 probe-s3-token-revocation-delay",
+    "goal": "Test that DELETE /api/tokens revokes the access token and sets access_expiration to ~5 seconds in the future when ACCESS_TOKEN_MINUTES is not configured.",
+    "vars": {
+     "username": "alice",
+     "password": "doppel-pass"
+    },
+    "steps": [
+     {
+      "method": "POST",
+      "path": "/api/tokens",
+      "save": {
+       "token": "access_token"
+      },
+      "auth": [
+       "alice",
+       "doppel-pass"
+      ]
+     },
+     {
+      "method": "GET",
+      "path": "/api/me",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "DELETE",
+      "path": "/api/tokens",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/api/me",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "probe": "s3"
+   },
+   {
+    "name": "round2 probe-s4-startup-crash-nonint-config",
+    "goal": "Verify application crashes on startup when ACCESS_TOKEN_MINUTES is set to a non-integer value.",
+    "vars": {},
+    "steps": [
+     {
+      "method": "GET",
+      "path": "/docs"
+     }
+    ],
+    "probe": "s4"
+   }
+  ],
+  "persona_count": 16,
+  "failed_personas": [],
+  "coverage": {
+   "requests": 60,
+   "served": 31,
+   "blocked": 26,
+   "stuck_personas": [
+    "power_user_1",
+    "bob_token_refresh"
+   ],
+   "personas": 16
+  },
+  "coverage_before_rehearsal": {
+   "requests": 55,
+   "served": 24,
+   "blocked": 28,
+   "stuck_personas": [
+    "power_user_1",
+    "careless_user_1",
+    "bob_token_refresh"
+   ],
+   "personas": 14
+  },
+  "repaired": [
+   "bob_token_refresh",
+   "careless_user_1",
+   "power_user_1"
+  ],
+  "recordings": {
+   "base": [
+    {
+     "persona": "alice_power",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Ilg4anFYRW9BZ2J6WUdjNmdqbmJYX2RNaExhTzU2MmNqNklXVWZlOWVoY28ifQ.ifzkqoQMeM4VlvjNrn63r8fodLV-j1FmAdQMG76hefg\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 201,
+       "body": "{\"author\": {\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T10:30:33.209651Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, \"id\": 151, \"text\": \"Hello from alice\", \"timestamp\": \"2026-10-03T10:30:33.231658Z\", \"url\": \"/api/posts/151\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 200,
+       "body": "{\"data\": [{\"author\": {\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T10:30:33.239335Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, \"id\": 151, \"text\": \"Hello from alice\", \"timestamp\": \"2026-10-03T10:30:33.231658Z\", \"url\": \"/api/posts/151\"}, {\"author\": {\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=iden"
+      },
+      {
+       "request": "GET /api/users/me/following",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      },
+      {
+       "request": "GET /api/users/me/followers",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      }
+     ]
+    },
+    {
+     "persona": "bob_minimal",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkNYR1BaUUNhaU92a1FteHowV0N0YXRFVlNfaDFQTFZaQTNweTlmUWhnU28ifQ.j_d8gjJa0PEKV2Q3jJdT35RjNMkdBOgJiPfAiD73874\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/users/me",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      }
+     ]
+    },
+    {
+     "persona": "carol_negative",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IjRMdWc3eG1tYTVFaUNXOGQxOWJqRzYyTTFuaGpkeTFTUDk4VEIwZy11V1UifQ.zK3_E90sVsLmP88MCQyHotbK9b75uVqdZzLsfmniCHE\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 400,
+       "body": "{\"code\": 400, \"description\": \"The server found one or more errors in the information that you sent.\", \"errors\": {\"json\": {\"text\": [\"Length must be between 1 and 280.\"]}}, \"message\": \"Validation Error\"}"
+      },
+      {
+       "request": "GET /api/posts",
+       "status": 200,
+       "body": "{\"data\": [{\"author\": {\"about_me\": \"Officer however wish another.\", \"avatar_url\": \"https://www.gravatar.com/avatar/10fc7f102be8de7657fb4d80898bbfe3?d=identicon\", \"email\": \"user2@example.org\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": false, \"id\": 9, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/9/posts\", \"url\": \"/api/users/9\", \"username\": \"crystalaguilar2\"}, \"id\": 150, \"text\": \"Successful whose realize large director when. Away forget describe thus operation analysis college. Road former life visit fire friend. Free after least worry animal certainly provide.\", \"time"
+      }
+     ]
+    },
+    {
+     "persona": "dave_power",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IjJmcXV4OXprM0l4Q1dEMTI5NlZiTEtITDFYbU1KYnRRdFNuZl9yWjFYelEifQ.dRfi2d6cibfDMIVja7Pu2TANW4CR3Dpu8aB9tlaxXUw\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/users/me/following/2",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      },
+      {
+       "request": "POST /api/users/me/following/3",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      },
+      {
+       "request": "GET /api/users/me/following",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      },
+      {
+       "request": "GET /api/users/1/followers",
+       "status": 200,
+       "body": "{\"data\": [{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-01-01T09:00:00Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}, {\"about_me\": \"I am dave.\", \"avatar_url\": \"https://www.gravatar.com/avatar/6c1265401f75f9840d9c267655954800?d=identicon\", \"email\": \"dave@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 4, \"last_seen\": \"2026-10-03T10:30:32.99921"
+      }
+     ]
+    },
+    {
+     "persona": "erin_careless",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkMzU3RpOF80dktUa0VtMWtiRkExSUx5WjBsbVhSYUdVQWI4Uk04cTFFY0EifQ.akcm5drrRysdYLDEr-A70mskdiVb-rbRZm2uc71ZZtE\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 201,
+       "body": "{\"author\": {\"about_me\": \"I am erin.\", \"avatar_url\": \"https://www.gravatar.com/avatar/dac5c03207fdb77724d9fe04da2d7689?d=identicon\", \"email\": \"erin@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 5, \"last_seen\": \"2026-10-03T10:30:33.055220Z\", \"posts_url\": \"/api/users/5/posts\", \"url\": \"/api/users/5\", \"username\": \"erin\"}, \"id\": 151, \"text\": \"x\", \"timestamp\": \"2026-10-03T10:30:33.060773Z\", \"url\": \"/api/posts/151\"}"
+      },
+      {
+       "request": "PUT /api/posts/1",
+       "status": 403,
+       "body": "{\"code\": 403, \"description\": \"You don't have the permission to access the requested resource. It is either read-protected or not readable by the server.\", \"message\": \"Forbidden\"}"
+      },
+      {
+       "request": "DELETE /api/posts/1",
+       "status": 403,
+       "body": "{\"code\": 403, \"description\": \"You don't have the permission to access the requested resource. It is either read-protected or not readable by the server.\", \"message\": \"Forbidden\"}"
+      }
+     ]
+    },
+    {
+     "persona": "frank_duplicate",
+     "steps": [
+      {
+       "request": "POST /api/users",
+       "status": 400,
+       "body": "{\"code\": 400, \"description\": \"The server found one or more errors in the information that you sent.\", \"errors\": {\"json\": {\"username\": [\"Use a different username.\"]}}, \"message\": \"Validation Error\"}"
+      },
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IjBHM3dROUhPWHctdDlPenpUTlFLSVF6RXQ3eDlKeXFybmpCZzJUNXJmS1UifQ.Elbni-Zb2AlZRTZY05euHQRcKMPf7-wh5bLLTejWs1M\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/users/me",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      }
+     ]
+    },
+    {
+     "persona": "power_user_1",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IlBxd1BIdlBVUEcySDhZMm1udldnYkw0d2dLNjBtVFRZRnUxQ2FhemxvQk0ifQ.bfdbKbFydcoWIDMXWT5Xf7hPgACQiHT30bGMVENCyJc\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/posts?limit=2",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "PUT /api/posts/1",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/posts/1",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "DELETE /api/posts/1",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "careless_user_1",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Im5DUFY4T3Z1U0JtdUpBR2pyOVEzNlBOZ0F4ZDRkaElvekNuaEhZNVNXOEkifQ.pYLr44rAmmcOQOJ3HW0KhDen0GdtjAfziiA96rg1Kkc\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/users",
+       "status": 400,
+       "body": "{\"code\": 400, \"description\": \"The server found one or more errors in the information that you sent.\", \"errors\": {\"json\": {\"email\": [\"Not a valid email address.\"], \"username\": [\"Length must be between 3 and 64.\"]}}, \"message\": \"Validation Error\"}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/users/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "alice_feed_after",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Ik8xRGsxRXIwcjBUc2dVUXlnd1U0MmVNMXY1NEVlaTRPd3ZfSWdqUVB4SG8ifQ.HLEYUCkPGB6uzOfJkQT5nBa4y46ihYzXfA_CgHidI28\", \"refresh_token\": null}"
+      },
+      {
+       "request": "DELETE /api/users/me/following/2",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 200,
+       "body": "{\"data\": [{\"author\": {\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T10:30:33.012281Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}, \"id\": 145, \"text\": \"Bag impact available keep tell nearly research. Phone whether middle least. Name whose court little behavior health. Arm down head address organization defense feel religious.\", \"timestamp\": \"2026-01-03T01:48:00Z\","
+      },
+      {
+       "request": "GET /api/users/me/following",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      }
+     ]
+    },
+    {
+     "persona": "bob_token_refresh",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Im9CR0R1VENKT2FSWUswUzRlU01jU3FnbHlSNWtob3VNODBHZGxiNlIzY0EifQ.TyqrD0odlk46VBXCSW7hPjiA37QfAltDUeyI0BJV5OA\", \"refresh_token\": null}"
+      },
+      {
+       "request": "PUT /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/users/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe s1: alice_normal",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkJVOEd6VnVOdl9HSzFQOWl3VHlzak5ndkQ4QnpfTWpmWTM1V0NfcFE0NFUifQ.6GwqizJqdKht0fk6MeMQ6aRq7DHyt4mh9GMpstq34XQ\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 200,
+       "body": "{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T10:30:45.629070Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}"
+      },
+      {
+       "request": "GET /api/users/me/following",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      },
+      {
+       "request": "GET /api/users/me/followers",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe s2: bob_refresh",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IjVfN05CLWM2Y01HWGpsci01QjI2b3pvUzUxZ2FSNzRwai1JQ0szUkxaX0EifQ.nmwsoKMzC-et07v8BjJtU7HEnAPXk4of8RdYZ1cNoQk\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 200,
+       "body": "{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-10-03T10:35:35.801683Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}"
+      },
+      {
+       "request": "PUT /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 200,
+       "body": "{\"about_me\": \"I am bob.\", \"avatar_url\": \"https://www.gravatar.com/avatar/4b9bb80620f03eb3719e0a061c14283d?d=identicon\", \"email\": \"bob@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 2, \"last_seen\": \"2026-10-03T10:35:35.808529Z\", \"posts_url\": \"/api/users/2/posts\", \"url\": \"/api/users/2\", \"username\": \"bob\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe s3: carol_careless",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImgwZkVRRFZpdFNBdkFkU0RBTmZXYUtHQ0MwQnVSa3ZyRmVLdV9IS3h2N28ifQ.I0POs7citKFdyPh3p3Rx-8xwOxaTNYot54Qi8HSk9W4\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 200,
+       "body": "{\"about_me\": \"I am carol.\", \"avatar_url\": \"https://www.gravatar.com/avatar/d4766e3f21c67b7c786f012d910fa54f?d=identicon\", \"email\": \"carol@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 3, \"last_seen\": \"2026-10-03T10:30:32.974769Z\", \"posts_url\": \"/api/users/3/posts\", \"url\": \"/api/users/3\", \"username\": \"carol\"}"
+      },
+      {
+       "request": "PUT /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 200,
+       "body": "{\"about_me\": \"I am carol.\", \"avatar_url\": \"https://www.gravatar.com/avatar/d4766e3f21c67b7c786f012d910fa54f?d=identicon\", \"email\": \"carol@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 3, \"last_seen\": \"2026-10-03T10:30:32.982301Z\", \"posts_url\": \"/api/users/3/posts\", \"url\": \"/api/users/3\", \"username\": \"carol\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe_s1_expire_immediately",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IlNzOHAyakt5YzlnRHRNdnRxbmZLVHotZlZzQXVQY3gyS21qdTF3RzBvOUkifQ.q3-2FnUhTRuqprCGulT-zyr5tMB8R55jpOo9WvBtGus\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 200,
+       "body": "{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T10:30:33.145961Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}"
+      }
+     ]
+    },
+    {
+     "persona": "round2 probe-s3-token-revocation-delay",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IlY4VkExcEJhR2w3a09oTFU0eGtqSmFGNzdyUVF6S25iMTBxV1o0Q0swN0EifQ.oTjQAEf9NFnE0q4dmP4iFxI25P4zSKgml_n3kmzTpAs\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 200,
+       "body": "{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T10:36:18.117328Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}"
+      },
+      {
+       "request": "DELETE /api/tokens",
+       "status": 204,
+       "body": "null"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 200,
+       "body": "{\"about_me\": \"I am alice.\", \"avatar_url\": \"https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060?d=identicon\", \"email\": \"alice@example.com\", \"first_seen\": \"2026-01-01T09:00:00Z\", \"has_password\": true, \"id\": 1, \"last_seen\": \"2026-10-03T10:36:18.130423Z\", \"posts_url\": \"/api/users/1/posts\", \"url\": \"/api/users/1\", \"username\": \"alice\"}"
+      }
+     ]
+    },
+    {
+     "persona": "round2 probe-s4-startup-crash-nonint-config",
+     "steps": [
+      {
+       "request": "GET /docs",
+       "status": 200,
+       "body": "\"<!doctype html>\\n<html lang=\\\"en\\\">\\n  <head>\\n    <meta charset=\\\"utf-8\\\">\\n    <meta name=\\\"viewport\\\" content=\\\"width=device-width, initial-scale=1, shrink-to-fit=no\\\">\\n    <title>Microblog API 1.0</title>\\n    <!-- Embed elements Elements via Web Component -->\\n    <script src=\\\"https://unpkg.com/@stoplight/elements/web-components.min.js\\\"></script>\\n    <link rel=\\\"stylesheet\\\" href=\\\"https://unpkg.com/@stoplight/elements/styles.min.css\\\">\\n  </head>\\n  <body>\\n    <elements-api\\n      apiDescriptionUrl=\\\"/apispec.json\\\"\\n      router=\\\"hash\\\"\\n      layout=\\\"sidebar\\\"\\n    />\\n  </body"
+      }
+     ]
+    }
+   ],
+   "head": [
+    {
+     "persona": "alice_power",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkpTOGZKYXg4cTdxS1ZsQnNGS1FraDd3MGNGVUFrejFoMmhHOU1uMHFFS1UifQ.UahefT6bZmBxYiAZ5YryDyG1dd14CyBoQ31WX5qLfN0\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/users/me/following",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      },
+      {
+       "request": "GET /api/users/me/followers",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      }
+     ]
+    },
+    {
+     "persona": "bob_minimal",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6InNFWU5iZ1ZkRjVRN1FqVXpFazNjLS1BZnVOQkJVZ0J1SUZtaGJZaHd4QU0ifQ.SW8-P56z_D__N8_p62u9cK95-bn7uxnBzFjIkWXidx8\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/users/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "carol_negative",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImZPWWV4bUZwMXoxbG80a3pPa3F3R2lkaF9JUWpSbUlINE1XY01uYkhlQW8ifQ.KK-hO18Gyz3IWRLDZGXlVZgupVPlWrma-z50NygjwUI\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "dave_power",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IllsQVM5ZlkwTEJGSTFSWloyT1FOZDVYM2Itb0p3X2dUbEZGU2dGSU52YkUifQ.UFGED297-UG1OnxUJ0A5UCM1iW8DCRFXAHUg-J3_SrU\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "POST /api/users/me/following/2",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      },
+      {
+       "request": "POST /api/users/me/following/3",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      },
+      {
+       "request": "GET /api/users/me/following",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      },
+      {
+       "request": "GET /api/users/1/followers",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "erin_careless",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImdMQ3l6YVFCWHNITmJZemliZnIwY3V4MXU3V2NxN1ZJc1dLVTd2Q0MzdWcifQ.Uk6yx4g6kUlGr8ANqzJyqiTfSuJJq5kR9jvwSKJzqmU\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "PUT /api/posts/1",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "DELETE /api/posts/1",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "frank_duplicate",
+     "steps": [
+      {
+       "request": "POST /api/users",
+       "status": 400,
+       "body": "{\"code\": 400, \"description\": \"The server found one or more errors in the information that you sent.\", \"errors\": {\"json\": {\"username\": [\"Use a different username.\"]}}, \"message\": \"Validation Error\"}"
+      },
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkFEc1A3WFVHZDVvTXJIMlpQOFFNc2duei1MU3lkU3FUUENtVG51MmZNOEEifQ.ZW6ym8cFdjuoH_8IHFPPo353bjL5s1f1lYOONrkln4k\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/users/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "power_user_1",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImtacGVXTG5WN2xXMldlSzNhdjNJV0xNR0NqbVg0bHFkdUo0aE9ILWtyQ3cifQ.AwZpq5mt8eJw9e52j9RQWabPprbWwukg-fKATE-lSDA\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/posts?limit=2",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "PUT /api/posts/1",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/posts/1",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "DELETE /api/posts/1",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "careless_user_1",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IjRNcE1mNkZZaGJBeFhwS1dvcXBNdkJFYldaMGFJUTFOTlVrelZHNnR1aG8ifQ.Tw-FtUt-ZoPNJeV-ciNUtmuCfB3xuW2rV9WqNpP7PbA\", \"refresh_token\": null}"
+      },
+      {
+       "request": "POST /api/users",
+       "status": 400,
+       "body": "{\"code\": 400, \"description\": \"The server found one or more errors in the information that you sent.\", \"errors\": {\"json\": {\"email\": [\"Not a valid email address.\"], \"username\": [\"Length must be between 3 and 64.\"]}}, \"message\": \"Validation Error\"}"
+      },
+      {
+       "request": "POST /api/posts",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/users/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "alice_feed_after",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImFnTWZOczE0MXdJb3pPX1NJNUczemVpTW9ZWUhXUGNLSHZRTXRfd2h4aXMifQ.GqJjlNhCvz_sGVaOfhNVOXGnPziwOXt_o0l1TTjOXzY\", \"refresh_token\": null}"
+      },
+      {
+       "request": "DELETE /api/users/me/following/2",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      },
+      {
+       "request": "GET /api/feed",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/users/me/following",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      }
+     ]
+    },
+    {
+     "persona": "bob_token_refresh",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IlNlSG9SR1FmUE1qMU5iMEJBaUlrMkk0YkRtRDZFZnJmR1pBdkgzUC1KOG8ifQ.8hhFOq7TOYSzzgdN1HCJBkJcTsx13YO27B3_OtJEPW4\", \"refresh_token\": null}"
+      },
+      {
+       "request": "PUT /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/users/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe s1: alice_normal",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6Ink4X3RRSXR0aUVORXFMVXZlUGlDNTVnb0hxRUtsVnpUZTY0T1VmVmh4VTQifQ.tLnHNq8ggWeEAknNurdw-T8mtpMkEZPwf_g9YT6_aOE\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/users/me/following",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      },
+      {
+       "request": "GET /api/users/me/followers",
+       "status": 404,
+       "body": "{\"code\": 404, \"description\": \"The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.\", \"message\": \"Not Found\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe s2: bob_refresh",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IlJSVUZuRFRJdDYtZkZOZTlzYm1KUW9PWkRjTlZuS19EcjVRQ0xoQk4zcFkifQ.c2xWoKm92CTFvwjzIki54hvVve66iRaHtUI55Jeg-hY\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "PUT /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe s3: carol_careless",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6InVvRXVOWUFrT29DQjdrcl9YZ2h2enZjQmZhRk84a2FHYWsyQ3FTNnhRQkkifQ.Jl9PDc1Q0qjze8t1KOelkUDKQUK1ejTuz7HJGPf9iro\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "PUT /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "probe_s1_expire_immediately",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6IkxhUmNEdVdyVU5LZ3JfMm9UM1JWZHFvc2dBUHU3QjN6MGlLOWVRbFRIYm8ifQ.dgjvAiG6vqcLLApgKZXiAM6xkEuM2LMLd8P1MwNKbiA\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "round2 probe-s3-token-revocation-delay",
+     "steps": [
+      {
+       "request": "POST /api/tokens",
+       "status": 200,
+       "body": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbiI6ImVid3J2bnJKSGdwZnpwMEdxYWVOaUo4S01mTTFFYWVMZVhFOWwyUGpCZjAifQ.G7E6WKlwbk7tOH6MzCII_m6i5U8tf-x0V0IR6BUWuOg\", \"refresh_token\": null}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "DELETE /api/tokens",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      },
+      {
+       "request": "GET /api/me",
+       "status": 401,
+       "body": "{\"code\": 401, \"description\": \"The server could not verify that you are authorized to access the URL requested. You either supplied the wrong credentials (e.g. a bad password), or your browser doesn't understand how to supply the credentials required.\", \"message\": \"Unauthorized\"}"
+      }
+     ]
+    },
+    {
+     "persona": "round2 probe-s4-startup-crash-nonint-config",
+     "steps": [
+      {
+       "request": "GET /docs",
+       "status": 200,
+       "body": "\"<!doctype html>\\n<html lang=\\\"en\\\">\\n  <head>\\n    <meta charset=\\\"utf-8\\\">\\n    <meta name=\\\"viewport\\\" content=\\\"width=device-width, initial-scale=1, shrink-to-fit=no\\\">\\n    <title>Microblog API 1.0</title>\\n    <!-- Embed elements Elements via Web Component -->\\n    <script src=\\\"https://unpkg.com/@stoplight/elements/web-components.min.js\\\"></script>\\n    <link rel=\\\"stylesheet\\\" href=\\\"https://unpkg.com/@stoplight/elements/styles.min.css\\\">\\n  </head>\\n  <body>\\n    <elements-api\\n      apiDescriptionUrl=\\\"/apispec.json\\\"\\n      router=\\\"hash\\\"\\n      layout=\\\"sidebar\\\"\\n    />\\n  </body"
+      }
+     ]
+    }
+   ]
+  },
+  "steps": 60,
+  "suspicions": [
+   {
+    "id": "s1",
+    "claim": "Access tokens now expire immediately (0 minutes) by default instead of 15 minutes, breaking authentication for users who rely on the default.",
+    "route": "POST /api/tokens",
+    "trigger": "Start the API without setting ACCESS_TOKEN_MINUTES. POST /api/tokens with HTTP Basic auth (e.g., alice:doppel-pass). Save the access_token. Immediately GET /api/me with Authorization: Bearer <token>. Observe 401 Unauthorized because the token expired at issuance.",
+    "status": "confirmed",
+    "evidence": "Probes 'probe s1: alice_normal' and 'probe_s1_expire_immediately' show POST /api/tokens returns 200 in both base and head, but immediate GET /api/me returns 200 in base and 401 in head, confirming tokens expire immediately in head.",
+    "changes": [
+     "f12",
+     "f13",
+     "f14",
+     "f15",
+     "f16",
+     "f17",
+     "f18",
+     "f20"
+    ]
+   },
+   {
+    "id": "s2",
+    "claim": "Token refresh fails for tokens issued before the change because their access_expiration was calculated with the old 15-minute default, while verification now uses the new 0-minute default.",
+    "route": "PUT /api/tokens",
+    "trigger": "Start the API with the old code (ACCESS_TOKEN_MINUTES=15). POST /api/tokens to get a token pair. Upgrade to the new code (ACCESS_TOKEN_MINUTES=0). Immediately PUT /api/tokens with the expired access_token in JSON body and refresh_token in cookie or body. Observe 401 because verify_access_token compares against naive_utcnow() with 0-minute config.",
+    "status": "confirmed",
+    "evidence": "Probe 'probe s2: bob_refresh' shows POST /api/tokens returns 200 in both, GET /api/me returns 200 in base and 401 in head, and PUT /api/tokens returns 401 in both, confirming refresh fails for tokens issued under old config when head uses new config.",
+    "changes": [
+     "f12",
+     "f13",
+     "f14",
+     "f15",
+     "f16",
+     "f17",
+     "f18",
+     "f20"
+    ]
+   },
+   {
+    "id": "s3",
+    "claim": "The Token.expire() method uses current_app.config['ACCESS_TOKEN_MINUTES'] for the delay calculation, so revoked tokens now get a 5-second access_expiration delay instead of 15 minutes + 5 seconds.",
+    "route": "DELETE /api/tokens",
+    "trigger": "Start the API without ACCESS_TOKEN_MINUTES. POST /api/tokens to get tokens. DELETE /api/tokens with the access_token as Bearer token. Inspect the token row in the database (or use a subsequent GET /api/me with the same access_token) and observe the access_expiration is only ~5 seconds in the future instead of ~15 minutes.",
+    "status": "refuted",
+    "evidence": "Probe 'round2 probe-s3-token-revocation-delay' shows DELETE /api/tokens returns 204 in base but 401 in head, so the revocation request itself fails in head and the expiration delay cannot be observed.",
+    "changes": []
+   },
+   {
+    "id": "s4",
+    "claim": "If ACCESS_TOKEN_MINUTES is set to a non-integer value (e.g., 'abc'), the application crashes on startup with ValueError instead of falling back to a default.",
+    "route": "N/A (startup)",
+    "trigger": "Set ACCESS_TOKEN_MINUTES=abc in the environment. Start the API (gunicorn/flask run). Observe crash traceback from int('abc') during config loading.",
+    "status": "untested",
+    "evidence": "Probe 'round2 probe-s4-startup-crash-nonint-config' only shows GET /docs returning 200 in both base and head, with no evidence of startup crash or config loading behavior.",
+    "changes": []
+   }
+  ],
+  "probes": 6,
+  "rounds": 2,
+  "generation": {
+   "model": "nvidia/Nemotron-3_5-Lightning",
+   "probe_model": "nvidia/Nemotron-3_5-Lightning"
+  },
+  "usd": {
+   "suspect": 0.02971,
+   "check": 0.010787,
+   "personas": 0.03378442,
+   "rehearsal": 0.031398,
+   "judge": 0.003944,
+   "sandbox_reported": 0.20083293000000002,
+   "rejudge": 0.005062
+  },
+  "seconds": {
+   "personas": 19.0,
+   "twin": 344.6,
+   "judge": 46.9
+  },
+  "backend": "nebius",
+  "judge_version": 2
+ },
+ "errors": {
+  "doppel_guided": "RuntimeError: nvidia/Nemotron-3-Ultra-550b-a55b returned no usable personas. Reply started with: ''"
+ }
+}

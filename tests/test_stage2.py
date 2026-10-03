@@ -171,8 +171,8 @@ def test_generate_sends_source_and_diff_and_prices_the_call():
     assert out["personas"][0]["name"] == "coupon fan"
     assert "### app.py" in seen["prompt"] and "exactly 3 personas" in seen["prompt"]
     assert "with_tax" in seen["prompt"]                      # the PR diff is in the prompt
-    # 1 persona of the 3 asked for is too few, so it asked a second time: two calls priced
-    assert out["usd"] == pytest.approx(2 * (20000 * 0.06 + 1500 * 0.24) / 1e6)
+    # 1 persona of the 3 asked for is too few: Lightning is asked twice, then Ultra once, all priced
+    assert out["usd"] == pytest.approx((2 * (20000 * 0.06 + 1500 * 0.24) + 20000 * 1.0 + 1500 * 3.0) / 1e6)
 
 
 def test_generate_fails_loudly_on_unusable_output():

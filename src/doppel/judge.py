@@ -24,14 +24,20 @@ PROMPT = """You review a pull request. A twin of the app replayed the same synth
 code before the PR (base) and after it (head). Below are the behavior changes it observed.
 
 For EACH change id, decide:
-- "intended": the PR description says it, or it follows directly from what it says.
-- "regression": a behavior change the description does not mention and a user or client would
-  notice (different money amounts, lost validation, new errors, removed or renamed fields, slower).
-  "Tidies up" or "refactor" in the description never makes a behavior change intended.
+- "intended": the PR DESCRIPTION announces this observable behavior (the status code, field, value or
+  ordering a client sees), or it is a direct consequence of something it announces. Quote the
+  sentence from the description that announces it, word for word, in "quote". Matching the diff is
+  not enough: the diff shows what the code does, the description shows what the author meant.
+  A description that says "refactor", "tidy", "simplify", "no behavior change", or that the code
+  "doesn't need" something, announces no behavior change at all.
+- "regression": a behavior change the description does not announce that a user or client would
+  notice (different money amounts, lost validation, new errors, changed status codes, removed or
+  renamed fields, different ordering, data not saved).
 - "needs_human": you cannot tell from the description and the diff.
 
 Return ONLY JSON:
 {{"verdicts": [{{"id": "c1", "label": "intended|regression|needs_human",
+                "quote": "the announcing sentence from the PR description (only for intended)",
                 "why": "one sentence a reviewer can check, naming the code that causes it"}}],
  "summary": "one sentence for the top of the PR comment"}}
 
@@ -46,10 +52,55 @@ Behavior changes:
 """
 
 
+ANNOUNCE_PROMPT = """Below is a pull request DESCRIPTION, written by its author, and behavior changes that were
+observed when the same users used the app before and after the PR. You do not see the code on purpose:
+decide only from what the description tells a reader to expect.
+
+For EACH change id: does the description announce this change, so that a client reading it would
+expect exactly this (this status code, field, value, ordering or error)? A description that only
+explains a code edit ("removes a check", "simplify the query", "tidy the validators", "no behavior
+change", "doesn't need its own check") does NOT announce the resulting behavior.
+
+Return ONLY JSON:
+{{"checks": [{{"id": "c1", "announced": true|false,
+               "quote": "the sentence from the description that announces it, word for word (if announced)"}}]}}
+
+PR description:
+{pr}
+
+Observed changes:
+{changes}
+"""
+
+
 @dataclass
 class Verdict:
     label: str
     why: str
+
+
+def _norm(text: str) -> str:
+    return " ".join(re.sub(r"[`*_>#\"']", " ", text.lower()).split())
+
+
+def announced(quote: str, pr_text: str) -> bool:
+    """The quote really is in the PR description (ignoring case, whitespace and Markdown marks)."""
+    q = _norm(quote).strip(" .")
+    return len(q) >= 8 and q in _norm(pr_text)
+
+
+def escalate(verdicts: list, checks: dict) -> list:
+    """A change the reviewer suspected and the twin confirmed is a regression unless the judge could
+    quote the description announcing it. Returns new verdicts (same order)."""
+    hit = {int(c[1:]) - 1 for chk in checks.values() if chk.get("status") == "confirmed"
+           for c in chk.get("changes", []) if str(c).startswith("f") and str(c)[1:].isdigit()}
+    out = []
+    for i, v in enumerate(verdicts):
+        if i in hit and v is not None and v.label == "needs_human":
+            v = Verdict("regression", "The reviewer suspected it, the twin confirmed it, and the PR description "
+                                      "doesn't announce it. " + v.why.removeprefix("Not found in the PR description: "))
+        out.append(v)
+    return out
 
 
 def group(findings: list[Finding]) -> dict[str, list[int]]:
@@ -91,7 +142,11 @@ def judge(findings: list[Finding], pr_text: str, diff: str, model: str | None = 
     by_id = {}
     for v in raw.get("verdicts", []) if isinstance(raw, dict) else []:
         if isinstance(v, dict) and v.get("label") in LABELS:
-            by_id[str(v.get("id"))] = Verdict(v["label"], str(v.get("why", ""))[:400])
+            verdict = Verdict(v["label"], str(v.get("why", ""))[:400])
+            if verdict.label == "intended" and not announced(str(v.get("quote") or ""), pr_text):
+                # "intended" has to point at the description; without a real quote it is a guess
+                verdict = Verdict("needs_human", "Not found in the PR description: " + verdict.why)
+            by_id[str(v.get("id"))] = verdict
     verdicts: list[Verdict | None] = [None] * len(findings)
     for cid, idx in groups.items():
         verdict = by_id.get(cid, Verdict("needs_human", "The judge gave no verdict for this change."))
@@ -101,9 +156,30 @@ def judge(findings: list[Finding], pr_text: str, diff: str, model: str | None = 
                                              + verdict.why)
         for i in idx:
             verdicts[i] = verdict
+    # second, narrow question asked WITHOUT the diff: is it announced? The diff lets a model explain
+    # any change away ("the code removes the check, so 204 is expected"); intent lives in the description
+    atext, ain, aout = chat(model, ANNOUNCE_PROMPT.format(pr=pr_text.strip() or "(no description)",
+                                                          changes=describe(findings, groups)), temperature=0.1)
+    araw = parse_json(atext, key="checks") or {}
+    said = {str(c.get("id")): c for c in (araw.get("checks", []) if isinstance(araw, dict) else [])
+            if isinstance(c, dict)}
+    for cid, idx in groups.items():
+        v, c = verdicts[idx[0]], said.get(cid, {})
+        if findings[idx[0]].kind == "slow":
+            continue
+        is_announced = c.get("announced") is True and announced(str(c.get("quote") or ""), pr_text)
+        if is_announced:
+            new = Verdict("intended", f"Announced in the PR description: \"{str(c['quote'])[:160]}\". {v.why}")
+        elif v.label == "needs_human" and not v.why.startswith("Not found in the PR description"):
+            new = v
+        else:
+            new = Verdict("regression", v.why.removeprefix("Not found in the PR description: ") if v.label != "intended"
+                          else "The PR description doesn't announce this change. " + v.why)
+        for i in idx:
+            verdicts[i] = new
     summary = str(raw.get("summary", "")) if isinstance(raw, dict) else ""
-    return {"verdicts": verdicts, "summary": summary[:500], "model": model, "usd": cost_usd(model, tin, tout),
-            "groups": len(groups)}
+    return {"verdicts": verdicts, "summary": summary[:500], "model": model,
+            "usd": cost_usd(model, tin, tout) + cost_usd(model, ain, aout), "groups": len(groups)}
 
 
 # --- regression tests -----------------------------------------------------------
