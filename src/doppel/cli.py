@@ -73,6 +73,9 @@ def cmd_run(a) -> int:
         from doppel.suspects import check
         checks = check(sus, findings, judged["verdicts"] if judged else None, personas,
                        worlds["base"], worlds["head"])["checks"]
+        if judged:
+            from doppel.judge import escalate
+            judged["verdicts"] = escalate(judged["verdicts"], checks)
     md = markdown(findings, len(worlds["base"]), steps, judged, cov,
                   [{**x, **checks.get(x["id"], {})} for x in sus])
     print(md)

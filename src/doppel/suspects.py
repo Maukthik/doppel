@@ -80,16 +80,20 @@ def suspect(pr_text: str, diff: str, source: str, model: str | None = None, max_
     model = model or os.getenv("SUSPECT_MODEL", MODEL)
     prompt = SUSPECT_PROMPT.format(max_n=max_n, pr=pr_text.strip() or "(no description)",
                                    diff=diff[:60_000] or "(no diff)", source=source)
-    text, tin, tout = chat(model, prompt, temperature=0.2)
-    raw = parse_json(text, key="suspicions") or {}
-    out = []
-    for i, s in enumerate(raw.get("suspicions", []) if isinstance(raw, dict) else []):
-        if isinstance(s, dict) and s.get("claim"):
-            out.append({"id": f"s{len(out) + 1}", "claim": str(s["claim"])[:300],
-                        "route": str(s.get("route", ""))[:80], "trigger": str(s.get("trigger", ""))[:400]})
-        if len(out) >= max_n or i > 3 * max_n:
-            break
-    return {"suspicions": out, "usd": cost_usd(model, tin, tout), "model": model}
+    out, usd = [], 0.0
+    for _ in range(2):  # an unreadable reply would silently turn guided mode off: ask once more
+        text, tin, tout = chat(model, prompt, temperature=0.2)
+        usd += cost_usd(model, tin, tout)
+        raw = parse_json(text, key="suspicions")
+        for i, s in enumerate(raw.get("suspicions", []) if isinstance(raw, dict) else []):
+            if isinstance(s, dict) and s.get("claim"):
+                out.append({"id": f"s{len(out) + 1}", "claim": str(s["claim"])[:300],
+                            "route": str(s.get("route", ""))[:80], "trigger": str(s.get("trigger", ""))[:400]})
+            if len(out) >= max_n or i > 3 * max_n:
+                break
+        if out or (isinstance(raw, dict) and isinstance(raw.get("suspicions"), list)):
+            break  # got suspicions, or a readable "none": a pure refactor
+    return {"suspicions": out, "usd": usd, "model": model}
 
 
 def _probe_lines(personas: list[dict], base: list[dict], head: list[dict], limit: int = 30_000) -> str:
@@ -97,10 +101,10 @@ def _probe_lines(personas: list[dict], base: list[dict], head: list[dict], limit
     head_by = {r["persona"]: r for r in head}
     lines = []
     for p, rb in ((p, rb) for rb in base for p in personas if p["name"] == rb["persona"]):
-        if not p.get("probe"):
+        if not (p.get("probe") or p["name"].lower().startswith("probe")):
             continue
         rh = head_by.get(rb["persona"], {"steps": []})
-        lines.append(f"probe '{p['name']}' for {p['probe']}:")
+        lines.append(f"probe '{p['name']}' for {p.get('probe', 'a suspicion')}:")
         for sb, sh in zip(rb["steps"], rh["steps"], strict=False):
             b = json.dumps(sb["body"], ensure_ascii=False, default=str)[:140]
             h = json.dumps(sh["body"], ensure_ascii=False, default=str)[:140]

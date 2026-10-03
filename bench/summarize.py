@@ -85,6 +85,8 @@ def main() -> int:
     if not rows:
         print("no results yet: run bench/run_bench.py first", file=sys.stderr)
         return 1
+    held = [r for r in rows if r.get("set") == "heldout"]
+    rows = [r for r in rows if r.get("set", "main") == "main"]
     scores = {k: score(rows, k) for k, _ in ARMS}
     md = ["# Stage 5 benchmark: microblog-api", "",
           "30 pull requests against [miguelgrinberg/microblog-api](https://github.com/miguelgrinberg/microblog-api) "
@@ -115,6 +117,17 @@ def main() -> int:
         src = f" *({r['source']})*" if r.get("source", "planted") != "planted" else ""
         md.append(f"| `{r['id']}` | {r['kind']} | {what}{src} | {mark(r, 'tests')} | {mark(r, 'review')} | "
                   f"{mark(r, 'doppel')} | {mark(r, 'doppel_guided')} |")
+    if held:
+        hs = {k: score(held, k) for k, _ in ARMS}
+        md += ["", "## Held-out set", "",
+               f"{len(held)} more PRs written after the results above were in, and run once on the final version.", "",
+               "| | Regressions caught | False alarms on safe PRs |", "|---|---|---|"]
+        md += [f"| {label} | " + (f"**{hs[k]['caught']}/{hs[k]['regressions']}** | {hs[k]['alarms']}/{hs[k]['safe']} |"
+                                   if hs[k] else "not run | |") for k, label in ARMS]
+        md += ["", "| PR | Kind | What it really does | Tests | AI review | Doppel | Guided |",
+               "|---|---|---|---|---|---|---|"]
+        md += [f"| `{r['id']}` | {r['kind']} | {r.get('bug') or '(safe)'} | {mark(r, 'tests')} | {mark(r, 'review')} | "
+               f"{mark(r, 'doppel')} | {mark(r, 'doppel_guided')} |" for r in held]
     md += ["", "✅ right call · ❌ missed the regression · ⚠️ flagged a safe PR · · not run"]
     (RESULTS / "results.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     (RESULTS / "chart.svg").write_text(chart({k: v for k, v in scores.items() if v}), encoding="utf-8")

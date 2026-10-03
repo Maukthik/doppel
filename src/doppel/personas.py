@@ -179,9 +179,16 @@ ATTEMPTS = (
 
 def nemotron_chat(model: str, prompt: str, temperature: float = 0.7) -> tuple[str, int, int]:
     """One Token Factory call. Returns (text, input tokens, output tokens). Tests replace this."""
-    from openai import BadRequestError, OpenAI, UnprocessableEntityError
+    from openai import (
+        APIConnectionError,
+        APITimeoutError,
+        BadRequestError,
+        InternalServerError,
+        OpenAI,
+        UnprocessableEntityError,
+    )
     client = OpenAI(base_url=os.getenv("NEBIUS_BASE_URL", "https://api.tokenfactory.nebius.com/v1"),
-                    api_key=os.environ["NEBIUS_API_KEY"])
+                    api_key=os.environ["NEBIUS_API_KEY"], max_retries=3, timeout=600)
     messages = [{"role": "system", "content": "Reply with the JSON object only. No reasoning, no prose."},
                 {"role": "user", "content": prompt}]
     last_error = None
@@ -190,6 +197,13 @@ def nemotron_chat(model: str, prompt: str, temperature: float = 0.7) -> tuple[st
             resp = client.chat.completions.create(model=model, temperature=temperature, max_tokens=16000,
                                                   messages=messages, **extra)
         except (BadRequestError, UnprocessableEntityError) as e:  # option not supported here: try the next
+            last_error = e
+            continue
+        except (InternalServerError, APIConnectionError, APITimeoutError) as e:
+            # the client already retried; a 500 that repeats can be tied to an option (JSON mode,
+            # reasoning off) for this prompt, so carry on with the next, plainer request
+            print(f"[nemotron] {type(e).__name__} with {sorted(extra) or 'plain request'}, trying the next option",
+                  file=sys.stderr)
             last_error = e
             continue
         choice, u = resp.choices[0], resp.usage
@@ -216,20 +230,28 @@ def generate(app_dir, n: int = 12, head_dir=None, model: str | None = None, chat
                                total=n if probes_only else n + len(suspicions), suspicions=listed)
     notes = f"- Notes from the app's owner: {guide}\n" if guide else ""
     prompt = PROMPT.format(n=n, guide=notes, focus=focus, source=read_source(app_dir))
-    best, usd, tokens = ([], "", 0), 0.0, [0, 0]
-    for _ in range(2):
-        text, tin, tout = chat(model, prompt)
-        usd += cost_usd(model, tin, tout)
+    best, usd, tokens, used = ([], "", 0), 0.0, [0, 0], model
+    # Lightning first (cheap); if it twice returns too few usable personas, the strong model tries once
+    fallback = os.getenv("PERSONA_FALLBACK_MODEL", "nvidia/Nemotron-3-Ultra-550b-a55b")
+    for m in [model, model] + ([fallback] if fallback and fallback != model else []):
+        text, tin, tout = chat(m, prompt)
+        usd += cost_usd(m, tin, tout)
         tokens = [tokens[0] + tin, tokens[1] + tout]
         raw = parse_json(text)
         personas = validate(raw)
         asked = len(raw.get("personas", [])) if isinstance(raw, dict) else 0
         if len(personas) > len(best[0]):
-            best = (personas, text, asked)
-        if len(personas) * 2 >= n:
+            best, used = (personas, text, asked), m
+        if len(best[0]) * 2 >= n:
             break
     personas, text, asked = best
     if not personas:
         raise RuntimeError(f"{model} returned no usable personas. Reply started with: {text[:300]!r}")
-    return {"personas": personas, "model": model, "usd": usd, "tokens": tokens,
+    if probes_only and suspicions:  # every persona from this call is a probe, even if the tag was dropped
+        ids = [x["id"] for x in suspicions]
+        for i, p in enumerate(personas):
+            p.setdefault("probe", ids[i] if i < len(ids) else "probe")
+            if not p["name"].lower().startswith("probe"):
+                p["name"] = f"probe {p['probe']}: {p['name']}"
+    return {"personas": personas, "model": used, "usd": usd, "tokens": tokens,
             "dropped": max(asked - len(personas), 0) if isinstance(asked, int) else 0}

@@ -35,7 +35,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from doppel.diff import compare
-from doppel.judge import Verdict, judge
+from doppel.judge import Verdict, escalate, judge
 from doppel.personas import code_diff, cost_usd, generate, nemotron_chat, parse_json, read_source
 from doppel.rehearsal import coverage, repair
 from doppel.spec import TwinSpec
@@ -129,9 +129,22 @@ def arm_doppel(base: Path, head: Path, pr: dict, backend: str, n: int, personas_
     if personas_file:
         personas = json.loads(Path(personas_file).read_text(encoding="utf-8"))
         gen = {"model": "fixed file", "usd": 0.0, "tokens": [0, 0]}
+        probe_of = {}
     else:
-        gen = generate(base, n=n, head_dir=head, guide=spec.persona_guide, suspicions=sus["suspicions"])
+        gen = generate(base, n=n, head_dir=head, guide=spec.persona_guide)
+        if sus["suspicions"]:  # probes in their own call: one long reply with both got cut off
+            probes = generate(base, head_dir=head, guide=spec.persona_guide, suspicions=sus["suspicions"],
+                              probes_only=True)
+            names = {p["name"] for p in gen["personas"]}
+            for p in probes["personas"]:  # never drop a probe over a name clash
+                while p["name"] in names:
+                    p["name"] += "'"
+                names.add(p["name"])
+            gen["personas"] += probes["personas"]
+            gen["usd"] += probes["usd"]
+            gen["probe_model"] = probes["model"]
         personas = gen["personas"]
+    probe_of = {p["name"]: p.get("probe", "probe") for p in personas if p.get("probe")}
     t1 = time.perf_counter()
     if backend == "local":
         from doppel.backends.local import run_twin
@@ -140,10 +153,15 @@ def arm_doppel(base: Path, head: Path, pr: dict, backend: str, n: int, personas_
     fix = {"repaired": [], "usd": 0.0}
 
     def refine(ps, recordings):
-        fix.update(repair(ps, recordings, base, guide=spec.persona_guide, login=spec.login))
-        return fix["personas"]
+        out = repair(ps, recordings, base, guide=spec.persona_guide, login=spec.login)
+        fix["repaired"] = sorted(set(fix["repaired"]) | set(out["repaired"]))
+        fix["usd"] += out["usd"]
+        return out["personas"]
     worlds = run_twin(base, head, spec, personas, refine=refine if rehearse else None)
     personas = worlds.get("personas", personas)
+    for p in personas:  # a repaired probe is still a probe
+        if p["name"] in probe_of:
+            p.setdefault("probe", probe_of[p["name"]])
     cov = coverage(worlds["base"])
     before = coverage(worlds["rehearsal"]) if worlds.get("rehearsal") is not None else None
     t2 = time.perf_counter()
@@ -154,6 +172,43 @@ def arm_doppel(base: Path, head: Path, pr: dict, backend: str, n: int, personas_
         judged = {"verdicts": [Verdict("unjudged", "") for _ in findings], "summary": "", "usd": 0.0}
     chk = check(sus["suspicions"], findings, judged["verdicts"], personas, worlds["base"], worlds["head"]) \
         if guided else {"checks": {}, "usd": 0.0}
+    rounds = 1
+    untested = [x for x in sus["suspicions"] if chk["checks"].get(x["id"], {}).get("status") == "untested"]
+    if guided and untested and not personas_file:
+        # second round: the strong model writes new probes for what the first ones never reached,
+        # seeing what they sent and what the app answered; the twin replays only those
+        rounds = 2
+        more = generate(base, head_dir=head, guide=spec.persona_guide, probes_only=True,
+                        model=os.getenv("JUDGE_MODEL", "nvidia/Nemotron-3-Ultra-550b-a55b"),
+                        suspicions=[{**x, "trigger": f"{x.get('trigger', '')} | earlier probes did not reach it: "
+                                     f"{chk['checks'][x['id']]['evidence']}"} for x in untested])
+        names = {p["name"] for p in personas}
+        for p in more["personas"]:
+            p["name"] = "round2 " + p["name"]
+            while p["name"] in names:
+                p["name"] += "'"
+            names.add(p["name"])
+        gen["usd"] += more["usd"]
+        w2 = run_twin(base, head, spec, more["personas"], refine=refine if rehearse else None)
+        for p in w2.get("personas", more["personas"]):
+            p.setdefault("probe", "round2")
+            personas.append(p)
+        worlds = {**worlds, "base": worlds["base"] + w2["base"], "head": worlds["head"] + w2["head"],
+                  "failed": worlds.get("failed", []) + w2.get("failed", []),
+                  "sandbox_cost": worlds.get("sandbox_cost", 0.0) + w2.get("sandbox_cost", 0.0)}
+        cov = coverage(worlds["base"])
+        findings = compare(worlds["base"], worlds["head"], spec.ignore, spec.slow_ratio, spec.slow_min_ms)
+        usd_j = judged.get("usd", 0.0)
+        if findings and use_judge:
+            judged = judge(findings, pr_text(pr), code_diff(base, head))
+        else:
+            judged = {"verdicts": [Verdict("unjudged", "") for _ in findings], "summary": "", "usd": 0.0}
+        judged["usd"] = judged.get("usd", 0.0) + usd_j
+        usd_c = chk["usd"]
+        chk = check(sus["suspicions"], findings, judged["verdicts"], personas, worlds["base"], worlds["head"])
+        chk["usd"] += usd_c
+    if guided and use_judge:  # suspected + confirmed + not announced = regression
+        judged["verdicts"] = escalate(judged["verdicts"], chk["checks"])
     t3 = time.perf_counter()
     expect = re.compile(pr["expect"]) if pr.get("expect") else None
     rows = [{"kind": f.kind, "persona": f.persona, "request": f.request, "detail": f.detail,
@@ -174,7 +229,8 @@ def arm_doppel(base: Path, head: Path, pr: dict, backend: str, n: int, personas_
             for r in worlds[w]] for w in ("base", "head")},
         "steps": sum(len(r["steps"]) for r in worlds["base"]),
         "suspicions": [{**x, **chk["checks"].get(x["id"], {})} for x in sus["suspicions"]],
-        "probes": sum(bool(p.get("probe")) for p in personas),
+        "probes": sum(bool(p.get("probe")) for p in personas), "rounds": rounds,
+        "generation": {"model": gen.get("model"), "probe_model": gen.get("probe_model")},
         "usd": {"suspect": sus["usd"], "check": chk["usd"],
                 "personas": gen["usd"], "rehearsal": fix["usd"], "judge": judged.get("usd", 0.0),
                 "sandbox_reported": worlds.get("sandbox_cost", 0.0)},
@@ -201,6 +257,8 @@ def main(argv=None) -> int:
     ap.add_argument("--arms", default="tests,doppel,review")
     ap.add_argument("--backend", choices=["local", "nebius"], default="nebius")
     ap.add_argument("--only", help="comma-separated PR ids")
+    ap.add_argument("--set", choices=["main", "heldout", "all"], default="main",
+                    help="main: the 30 PRs; heldout: 10 PRs written after the main results were in")
     ap.add_argument("-n", type=int, default=12, help="personas per PR")
     ap.add_argument("--personas", help="use this persona file for every PR instead of generating")
     ap.add_argument("--guided", action="store_true",
@@ -216,6 +274,8 @@ def main(argv=None) -> int:
     if a.only:
         wanted = set(a.only.split(","))
         prs = [p for p in prs if p["id"] in wanted]
+    elif a.set != "all":
+        prs = [p for p in prs if p.get("set", "main") == a.set]
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -231,6 +291,7 @@ def main(argv=None) -> int:
         path = out / f"{pr['id']}.json"
         result = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         result.update({k: pr[k] for k in ("id", "kind", "title", "source", "bug", "expect")})
+        result["set"] = pr.get("set", "main")
         head = head_for(base, pr)
         for arm in arms:
             key = arm
