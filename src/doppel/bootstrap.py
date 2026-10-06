@@ -101,7 +101,7 @@ Return ONLY JSON:
 {{"files": [{{"path": "doppel.toml", "content": "..."}}, {{"path": "doppel_seed.py", "content": "..."}}],
   "notes": "one or two sentences: what you assumed"}}
 {feedback}
-{install_hint}Repository setup hints:
+{install_hint}{versions}Repository setup hints:
 {hints}
 
 Repository API index (every top-level function and class, with model fields):
@@ -247,6 +247,7 @@ def related_source(repo: str | Path, error: str, limit: int = 10_000) -> str:
         out.append(snip)
         used += len(snip)
     routes = route_source(repo) if re.search(r"(refused with|answered) 404", error) else ""
+    routes += auth_source(repo) if re.search(r"(refused with|answered) 40[13]", error) else ""
     return (("\nSource the error points at (real code from this repo; trust it over your memory):\n"
              + "\n\n".join(out) + "\n") if out else "") + routes
 
@@ -408,6 +409,116 @@ def route_source(repo: Path, limit: int = 8_000) -> str:
             + "".join(out)) if out else ""
 
 
+# ---------------------------------------------------------------- auth, for a refused login
+
+AUTH_FILE = re.compile(r"(^|/)(auth\w*|authentication|permissions|security|tokens?)\.py$")
+AUTH_SETTING = re.compile(r"AUTHENTICATION|AUTH_USER_MODEL|TOKEN|JWT|SESSION_COOKIE|LOGIN_URL", re.I)
+
+
+def auth_source(repo: Path, limit: int = 8_000) -> str:
+    """For a 401/403: how this app really authenticates. The auth code, the auth settings, and every
+    model with "token" in its name (linkding stores API tokens in its own ApiToken, not DRF's Token)."""
+    blocks: list[str] = []
+    for path in _py_files(repo):
+        rel = path.relative_to(repo).as_posix()
+        text = path.read_text("utf-8", "replace")
+        if AUTH_FILE.search(rel):
+            blocks.append(f"### {rel}\n{_clip(text, 3_000)}")
+        elif "settings" in rel or rel.endswith("config.py"):
+            hits = [f"{n:>5}: {ln}" for n, ln in enumerate(text.splitlines(), 1) if AUTH_SETTING.search(ln)]
+            if hits:
+                blocks.append(f"### {rel} (auth settings)\n" + "\n".join(hits[:40]))
+        tree = _parse(path)
+        for node in (tree.body if tree else []):
+            if isinstance(node, ast.ClassDef) and "token" in node.name.lower() and not AUTH_FILE.search(rel):
+                seg = ast.get_source_segment(text, node) or ""
+                blocks.append(f"### {rel}: class {node.name}\n{_clip(seg, 2_000)}")
+    out, used = [], 0
+    for b in blocks:
+        if used + len(b) > limit:
+            continue
+        out.append(b)
+        used += len(b)
+    return ("\nHow this app authenticates (a 401/403 means the seeded credentials don't match this; "
+            "create tokens with the model shown here, not a library default):\n" + "\n\n".join(out) + "\n"
+            ) if out else ""
+
+
+# ---------------------------------------------------------------- framework versions
+
+FRAMEWORKS = ("django", "djangorestframework", "flask", "fastapi", "starlette", "sqlalchemy", "pydantic",
+              "flask-sqlalchemy", "werkzeug", "marshmallow", "celery", "huey")
+# APIs gone in versions the model may not know well: (module, name) -> (package, major it was removed in, use)
+REMOVED_APIS = {
+    ("django.utils.timezone", "utc"): ("django", 5, "datetime.timezone.utc"),
+    ("django.conf.urls", "url"): ("django", 4, "django.urls.re_path"),
+    ("django.utils.encoding", "force_text"): ("django", 4, "django.utils.encoding.force_str"),
+    ("django.utils.encoding", "smart_text"): ("django", 4, "django.utils.encoding.smart_str"),
+    ("django.utils.translation", "ugettext"): ("django", 4, "django.utils.translation.gettext"),
+    ("django.utils.translation", "ugettext_lazy"): ("django", 4, "django.utils.translation.gettext_lazy"),
+    ("flask", "_app_ctx_stack"): ("flask", 3, "flask.g"),
+    ("flask", "_request_ctx_stack"): ("flask", 3, "flask.request"),
+    ("pydantic", "BaseSettings"): ("pydantic", 2, "pydantic_settings.BaseSettings"),
+}
+
+
+def requirement_of(repo: str | Path, package: str) -> str:
+    return next((r for r in dependencies(repo)[0] if _req_name(r) == package), "")
+
+
+def allows_major(spec: str, major: int) -> bool:
+    """Can this requirement resolve to `major` or later? An upper bound like <5 says no."""
+    upper = re.search(r"<\s*=?\s*(\d+)", spec)
+    return not (upper and int(upper.group(1)) <= major)
+
+
+def versions_note(repo: str | Path) -> str:
+    pins = [r for r in dependencies(repo)[0] if _req_name(r) in FRAMEWORKS]
+    if not pins:
+        return ""
+    gone = [f"{mod}.{name} (removed in {pkg} {major}; use {use})"
+            for (mod, name), (pkg, major, use) in REMOVED_APIS.items()
+            if use and requirement_of(repo, pkg) and allows_major(requirement_of(repo, pkg), major)]
+    note = ("Framework versions this app requires: " + ", ".join(pins) + ". These may be newer than most "
+            "code you have seen, so prefer the standard library where it does the job (datetime.timezone.utc, "
+            "not a framework alias) and only use framework APIs that exist in these versions.")
+    if gone:
+        note += " In particular these no longer exist: " + "; ".join(gone) + "."
+    return note + "\n\n"
+
+
+def removed_api_uses(repo: str | Path, tree: ast.Module) -> list[str]:
+    """Seed lines that use an API the app's framework version no longer has."""
+    live = {k: v for k, v in REMOVED_APIS.items()
+            if v[2] and requirement_of(repo, v[0]) and allows_major(requirement_of(repo, v[0]), v[1])}
+    modules = {mod for mod, _ in live}
+    aliases: dict[str, str] = {}  # local name -> module, for `from django.utils import timezone`
+    problems = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            for a in node.names:
+                full = f"{node.module}.{a.name}"
+                if full in modules:
+                    aliases[a.asname or a.name] = full
+                if (node.module, a.name) in live:
+                    pkg, major, use = live[(node.module, a.name)]
+                    problems.append(f"{SEED_FILE} line {node.lineno}: {node.module}.{a.name} was removed in "
+                                    f"{pkg} {major}, which this app uses; use {use}")
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name in modules:
+                    aliases[a.asname or a.name] = a.name
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            base = ast.unparse(node.value)
+            mod = aliases.get(base, base)
+            if (mod, node.attr) in live:
+                pkg, major, use = live[(mod, node.attr)]
+                problems.append(f"{SEED_FILE} line {node.lineno}: {mod}.{node.attr} was removed in {pkg} {major}, "
+                                f"which this app uses; use {use}")
+    return problems
+
+
 def same_error(a: str, b: str) -> bool:
     """Two error lines say the same thing once temp paths, ports and ids are blanked out."""
     def norm(line: str) -> str:
@@ -438,7 +549,8 @@ def draft(repo: str | Path, error: str = "", previous: dict | None = None, chat=
                   "below and take a different approach.\n") if repeated else ""
         feedback = FEEDBACK.format(kept=kept_note(best_stage), history=earlier, repeat=repeat, error=_clip_error(error),
                                    source=related_source(repo, error), files=shown)
-    prompt = PROMPT.format(feedback=feedback, install_hint=install_hint(repo), hints=gather_hints(repo),
+    prompt = PROMPT.format(feedback=feedback, install_hint=install_hint(repo), versions=versions_note(repo),
+                           hints=gather_hints(repo),
                            index=api_index(repo),
                            code=gather_code(repo))
     # not lower: at 0.2 Nemotron fell into a loop repeating env vars until it hit max_tokens
@@ -794,16 +906,32 @@ def _defines(tree: ast.Module) -> dict[str, ast.AST]:
     return names
 
 
+def _class_attrs(cls: ast.ClassDef) -> set[str]:
+    """Names a model constructor accepts: `x = Field(...)` (Django, SQLAlchemy 1), annotated
+    `x: Mapped[int] = mapped_column()` or bare `x: int` (SQLAlchemy 2, Pydantic, dataclasses), and
+    properties with setters (`password` in microblog hashes on assignment)."""
+    names = set()
+    for n in cls.body:
+        if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call):
+            names |= {t.id for t in n.targets if isinstance(t, ast.Name)}
+        elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and not n.target.id.startswith("__"):
+            names.add(n.target.id)
+        elif isinstance(n, ast.FunctionDef) and any(
+                ast.unparse(d) == "property" or ast.unparse(d).endswith(".setter") for d in n.decorator_list):
+            names.add(n.name)
+    return names
+
+
 def _model_fields(repo: Path, cls: ast.ClassDef, module: Path, depth: int = 0) -> set[str] | None:
-    """Field names a model accepts as keywords, or None when we can't tell (unknown base class)."""
+    """Field names a model accepts as keywords, or None when we can't tell (unknown base class, or a
+    class whose fields we can't see): an unsure checker must stay quiet, not block a good seed."""
     if depth > 5:
         return None
-    fields = {t.id for n in cls.body if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
-              for t in n.targets if isinstance(t, ast.Name)}
+    fields = _class_attrs(cls)
     defs = _defines(_parse(module) or ast.Module(body=[], type_ignores=[]))
     for base in cls.bases:
         name = ast.unparse(base)
-        if name.endswith("models.Model") or name == "Model":
+        if name.endswith("models.Model") or name in ("Model", "db.Model", "Base", "SQLModel", "BaseModel"):
             continue
         parent = defs.get(name)
         if not isinstance(parent, ast.ClassDef):
@@ -812,7 +940,7 @@ def _model_fields(repo: Path, cls: ast.ClassDef, module: Path, depth: int = 0) -
         if inherited is None:
             return None
         fields |= inherited
-    if not any(ast.unparse(b).endswith("Model") for b in cls.bases) and depth == 0 and not fields:
+    if depth == 0 and not fields:
         return None
     return fields | {f + "_id" for f in fields} | {"id", "pk"}
 
@@ -872,7 +1000,7 @@ def check_seed(repo: str | Path, seed: str) -> list[str]:
         tree = ast.parse(seed)
     except SyntaxError as e:
         return [f"{SEED_FILE} line {e.lineno}: syntax error: {e.msg}"]
-    problems: list[str] = []
+    problems: list[str] = removed_api_uses(repo, tree)
     functions: dict[str, tuple[ast.AST, str, Path]] = {}  # local name -> (def or class, shown name, file)
     modules: dict[str, Path] = {}                          # local alias -> repo module file
     for node in ast.walk(tree):

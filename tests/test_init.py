@@ -481,3 +481,58 @@ def test_progress_carries_over_to_the_next_run_and_is_removed_on_success(tmp_pat
     assert result["ok"] and "missing.py" in model.prompts[0]                  # it started from the last run
     assert any("resuming from the last run" in line for line in logs)
     assert not (app / bootstrap.STATE_FILE).exists()
+
+
+# --- refused logins, framework versions, and models the checker must not misread -------------
+
+def test_a_refused_login_comes_with_how_the_app_really_authenticates(tmp_path):
+    (tmp_path / "api").mkdir()
+    (tmp_path / "api" / "auth.py").write_text("class AppTokenAuthentication(TokenAuthentication):\n"
+                                              "    model = ApiToken\n")
+    (tmp_path / "models.py").write_text("class ApiToken(models.Model):\n    key = models.CharField(max_length=40)\n")
+    (tmp_path / "settings.py").write_text("DEBUG = True\nREST_FRAMEWORK = {'DEFAULT_AUTHENTICATION_CLASSES': []}\n")
+    source = bootstrap.related_source(tmp_path, "the login step GET /api/me/ was refused with 401: Invalid token")
+    assert "class AppTokenAuthentication" in source and "class ApiToken" in source
+    assert "DEFAULT_AUTHENTICATION_CLASSES" in source and "DEBUG" not in source
+    assert bootstrap.related_source(tmp_path, "seed failed: KeyError") == ""
+
+
+def test_the_prompt_names_framework_versions_and_the_seed_check_knows_removed_apis(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\ndependencies = ["django>=6.0.7"]\n')
+    note = bootstrap.versions_note(tmp_path)
+    assert "django>=6.0.7" in note and "django.utils.timezone.utc (removed in django 5" in note
+    seed = ("from django.utils import timezone\nimport datetime\n"
+            "a = timezone.utc\nb = datetime.timezone.utc\nfrom django.utils.timezone import utc\n")
+    problems = bootstrap.check_seed(tmp_path, seed)
+    assert [p.split(":")[0] for p in problems] == ["doppel_seed.py line 5", "doppel_seed.py line 3"]
+    assert all("use datetime.timezone.utc" in p for p in problems)                  # stdlib one is fine
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\ndependencies = ["django>=3.2,<4.2"]\n')
+    assert bootstrap.check_seed(tmp_path, seed) == []                               # old Django still has it
+
+
+def test_sqlalchemy_2_models_with_annotations_and_property_setters_are_read_correctly(tmp_path):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "__init__.py").write_text("")
+    (tmp_path / "app" / "models.py").write_text(textwrap.dedent('''
+        class Updateable:
+            def update(self, data):
+                pass
+
+        class User(Updateable, Model):
+            __tablename__ = "users"
+            id: so.Mapped[int] = so.mapped_column(primary_key=True)
+            username: so.Mapped[str] = so.mapped_column(sa.String(64))
+            posts: so.WriteOnlyMapped["Post"] = so.relationship(back_populates="author")
+
+            @property
+            def password(self):
+                raise AttributeError("write only")
+
+            @password.setter
+            def password(self, value):
+                self.password_hash = value
+    '''))
+    ok = "from app.models import User\nUser(username='a', password='doppel-pass')\n"
+    assert bootstrap.check_seed(tmp_path, ok) == []
+    bad = "from app.models import User\nUser(username='a', colour='red')\n"
+    assert "User has no field 'colour'" in bootstrap.check_seed(tmp_path, bad)[0]
