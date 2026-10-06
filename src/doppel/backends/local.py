@@ -66,6 +66,18 @@ def _overlay(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst, ignore=SKIP, dirs_exist_ok=True)
 
 
+def _wait_ready(app: subprocess.Popen, base_url: str, path: str, timeout: float) -> bool:
+    """Poll the ready route, but give up at once if the app has already exited (a crash on start)."""
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if app.poll() is not None:
+            return False
+        if runner.wait_ready(base_url, path, timeout=1):
+            return True
+    return False
+
+
 def _serve_and_replay(world: Path, spec: TwinSpec, personas: list[dict]) -> list[dict]:
     port = _free_port()
     env = {**os.environ, "PORT": str(port), "PYTHONDONTWRITEBYTECODE": "1"}
@@ -73,7 +85,7 @@ def _serve_and_replay(world: Path, spec: TwinSpec, personas: list[dict]) -> list
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     base_url = f"http://127.0.0.1:{port}"
     try:
-        if not runner.wait_ready(base_url, spec.ready, timeout=30):
+        if not _wait_ready(app, base_url, spec.ready, timeout=30):
             app.kill()
             raise RuntimeError(f"{world}: app never became ready at {base_url}{spec.ready}\n"
                                f"{app.communicate(timeout=5)[1]}")

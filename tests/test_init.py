@@ -118,6 +118,32 @@ def test_later_drafts_see_every_earlier_failure_not_just_the_last(tmp_path):
     assert "Earlier attempts" not in model.prompts[1]   # nothing earlier than the last on attempt 2
 
 
+def test_errors_come_with_the_real_source_they_point_at(tmp_path):
+    (tmp_path / "shop" / "services").mkdir(parents=True)
+    (tmp_path / "shop" / "services" / "orders.py").write_text(
+        "import os\n\n\ndef create_order(order, user, notify=False):\n    return order\n")
+    (tmp_path / "shop" / "app.py").write_text("\n".join(f"line{i}" for i in range(1, 41)))
+    error = ('Traceback (most recent call last):\n'
+             '  File "/app/doppel_seed.py", line 9, in <module>\n'
+             '  File "/app/shop/app.py", line 20, in boot\n'
+             "TypeError: create_order() got an unexpected keyword argument 'total'")
+    src = bootstrap.related_source(tmp_path, error)
+    assert "def create_order(order, user, notify=False)" in src       # the definition it got wrong
+    assert "shop/app.py (around line 20)" in src and "line20" in src    # the repo frame
+    assert "doppel_seed.py" not in src                                  # the model's own file is shown anyway
+    assert bootstrap.related_source(tmp_path, "ValueError: nothing to look up") == ""
+
+
+def test_the_same_error_twice_is_called_out(tmp_path):
+    app = shop_without_spec(tmp_path)
+    broken = SHOP_SPEC.replace('start = "python app.py"', 'start = "python missing.py"')
+    model = ScriptedModel([reply(broken), reply(broken), reply(SHOP_SPEC)])
+    result = bootstrap.init(app, backend="local", tries=3, chat=model, log=lambda m: None)
+    assert result["ok"]
+    assert "SAME error as attempt 1" in model.prompts[2]
+    assert "SAME error" not in model.prompts[1]
+
+
 def test_draft_keeps_only_the_two_allowed_files(tmp_path):
     app = shop_without_spec(tmp_path)
     text = json.dumps({"files": [{"path": "doppel.toml", "content": SHOP_SPEC},
@@ -222,3 +248,89 @@ def test_write_refuses_to_overwrite_without_force(tmp_path):
         pass
     bootstrap.write(tmp_path, {"doppel.toml": "new"}, force=True)
     assert (tmp_path / "doppel.toml").read_text() == "new"
+
+
+# --- the seed is checked against the real code before a sandbox boots ---------------------------
+
+SERVICE = '''
+def create_bookmark(bookmark, tag_string: str, current_user, disable_html_snapshot: bool = False):
+    return bookmark
+'''
+MODELS = '''
+from django.db import models
+
+
+class Bookmark(models.Model):
+    url = models.CharField(max_length=2048)
+    title = models.CharField(max_length=512, blank=True)
+    date_added = models.DateTimeField()
+    date_seen = models.DateTimeField(null=True)
+    unread = models.BooleanField(default=False)
+    owner = models.ForeignKey("auth.User", on_delete=models.CASCADE)
+    tags = models.ManyToManyField("Tag")
+'''
+
+
+def linkding_like(tmp_path: Path) -> Path:
+    for rel, text in {"bookmarks/__init__.py": "", "bookmarks/models.py": MODELS,
+                      "bookmarks/services/__init__.py": "", "bookmarks/services/bookmarks.py": SERVICE}.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+    return tmp_path
+
+
+def test_seed_check_catches_invented_parameters_fields_and_names(tmp_path):
+    repo = linkding_like(tmp_path)
+    seed = textwrap.dedent('''
+        from bookmarks.models import Bookmark, Folder
+        from bookmarks.services import bookmarks as service
+        b = Bookmark.objects.create(url="https://x", owner_id=1, colour="red")
+        service.create_bookmark(url="https://x", current_user=None)
+        service.delete_everything()
+    ''')
+    problems = "\n".join(bootstrap.check_seed(repo, seed))
+    assert "bookmarks.models has no 'Folder'" in problems
+    assert "Bookmark has no field 'colour'" in problems
+    assert "without date_added, which" in problems   # only that: date_seen is null=True, owner came as owner_id
+    assert "create_bookmark() has no parameter 'url'" in problems
+    assert "missing required argument(s): bookmark, tag_string" in problems
+    assert "the real signature is create_bookmark(bookmark, tag_string: str" in problems
+    assert "service has no 'delete_everything'" in problems
+
+
+def test_seed_check_accepts_a_correct_seed_and_ignores_libraries(tmp_path):
+    repo = linkding_like(tmp_path)
+    seed = textwrap.dedent('''
+        from datetime import datetime, timezone
+        from django.contrib.auth.models import User
+        from bookmarks.models import Bookmark
+        from bookmarks.services.bookmarks import create_bookmark
+        when = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        user = User.objects.create_user("alice", "a@x.io", "doppel-pass", is_staff=True)
+        b = Bookmark(url="https://x", owner=user, date_added=when)
+        create_bookmark(b, "a b", user, disable_html_snapshot=True)
+        Bookmark.objects.get_or_create(url="https://y", owner=user, defaults={"date_added": when})
+    ''')
+    assert bootstrap.check_seed(repo, seed) == []
+    assert bootstrap.check_seed(repo, "def broken(:\n")[0].startswith("doppel_seed.py line 1: syntax error")
+
+
+def test_the_api_index_lists_every_signature_even_when_the_code_is_cut(tmp_path):
+    repo = linkding_like(tmp_path)
+    index = bootstrap.api_index(repo)
+    assert "bookmarks.services.bookmarks:" in index
+    assert "def create_bookmark(bookmark, tag_string: str, current_user, disable_html_snapshot: bool=False)" in index
+    assert "class Bookmark(models.Model)" in index and "date_added = models.DateTimeField()" in index
+
+
+def test_a_bad_seed_is_redrafted_without_booting_a_sandbox(tmp_path):
+    repo = linkding_like(tmp_path)
+    booted = []
+    bad = reply(SHOP_SPEC, seed="from bookmarks.services.bookmarks import create_bookmark\n"
+                               "create_bookmark(url='x')\n")
+    model = ScriptedModel([bad, reply(SHOP_SPEC, seed="print('ok')\n")])
+    result = bootstrap.init(repo, tries=2, chat=model, log=lambda m: None,
+                            run_twin=lambda *a, **k: booted.append(1) or (_ for _ in ()).throw(RuntimeError("boot")))
+    assert len(booted) == 1                                    # only the second, clean draft booted
+    assert "has no parameter 'url'" in model.prompts[1]        # and the first draft's problems went back
+    assert not result["ok"]

@@ -13,6 +13,7 @@ breaks, add test data, learn which values change by themselves, then hand the no
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -38,7 +39,7 @@ SKIP_CODE = SKIP_PARTS | {"tests", "test", "migrations", "static", "node_modules
                           "docs", "e2e", "tests_e2e", "fixtures", "locale"}
 PRIORITY = ("settings", "models", "urls", "routes", "auth", "api", "serializers", "schemas", "views",
             "app", "main", "wsgi", "asgi", "config", "seed", "db", "database")
-MAX_HINT_FILE, MAX_HINTS, MAX_CODE = 6_000, 60_000, 150_000
+MAX_HINT_FILE, MAX_HINTS, MAX_CODE = 6_000, 60_000, 120_000
 
 PROMPT = """You set up a web API so that an automated tester can run it. The tester ("Doppel") boots the
 app inside an isolated Linux sandbox from a base image, loads starting data once, then forks copies
@@ -72,7 +73,11 @@ bookmarks...). If the API authenticates with stored API tokens, create one per u
 40-character value so requests can send it directly. Then make [personas.login] a GET of a route that
 needs the token, with that header and no auth/save, e.g. method = "GET", path = "/api/me/",
 header = {{ Authorization = "Token aaaa...aaaa" }}; the guide states the exact header too.
-Be deterministic: no randomness, no network calls.
+Create records with the app's model classes and their real fields (e.g. Model.objects.create(...)
+in Django, session.add(Model(...)) in SQLAlchemy), not with service or helper functions: the models
+are shown below, helpers may not be. Fill every required field, including dates, with fixed values.
+Be deterministic: no randomness, no network calls. Use only names, fields and parameters that appear in
+the API index below; the seed is checked against the real code before anything runs.
 
 Hard rules:
 - No Docker, no outside services. Use SQLite (or the app's built-in file/in-memory store) even if
@@ -99,15 +104,18 @@ Return ONLY JSON:
 Repository setup hints:
 {hints}
 
-Repository code:
+Repository API index (every top-level function and class, with model fields):
+{index}
+
+Repository code (the most relevant files; a big repo is cut, the API index is not):
 {code}
 """
 
 FEEDBACK = """
 A previous attempt FAILED. Fix the cause, keep what worked, and return both files again.
-{history}Error of the last attempt:
+{history}{repeat}Error of the last attempt:
 {error}
-
+{source}
 Previous files:
 {files}
 """
@@ -185,13 +193,78 @@ def gather_code(repo: str | Path, limit: int = MAX_CODE) -> str:
 # ---------------------------------------------------------------- 2. draft
 
 
+NAME_PATTERNS = (r"(\w+)\(\) got an unexpected keyword argument", r"(\w+)\(\) missing \d+ required",
+                 r"(\w+)\(\) takes", r"has no attribute '(\w+)'", r"cannot import name '(\w+)'",
+                 r"NOT NULL constraint failed: \w+?_(\w+)\.", r"(\w+) matching query does not exist")
+FRAME = re.compile(r'File "([^"]+\.py)", line (\d+)')
+
+
+def _repo_file(repo: Path, path: str) -> Path | None:
+    """The repo file a sandbox or temp path points at (/app/bookmarks/x.py -> bookmarks/x.py)."""
+    parts = Path(path.replace("\\", "/")).parts
+    for i in range(len(parts)):
+        candidate = repo.joinpath(*parts[i:])
+        if parts[i:] and candidate.is_file() and not SKIP_PARTS & set(parts[i:]):
+            return candidate
+    return None
+
+
+def _definition(repo: Path, name: str, lines: int = 30) -> str:
+    pattern = re.compile(rf"^\s*(async\s+def|def|class)\s+{re.escape(name)}\b")
+    for p in sorted(repo.rglob("*.py")):
+        rel = p.relative_to(repo)
+        if SKIP_PARTS & set(rel.parts):
+            continue
+        text = p.read_text("utf-8", "replace").splitlines()
+        for i, line in enumerate(text):
+            if pattern.match(line):
+                return f"### {rel.as_posix()} (line {i + 1})\n" + "\n".join(text[i:i + lines])
+    return ""
+
+
+def related_source(repo: str | Path, error: str, limit: int = 10_000) -> str:
+    """Real code the error points at: the repo's own traceback frames, and the definition of any
+    function or class the error names. A model that guessed a signature can't fix it from the error
+    alone; it needs to see the definition it got wrong."""
+    repo = Path(repo).resolve()
+    snippets: list[str] = []
+    for path, line in FRAME.findall(error)[-6:]:  # innermost frames last; keep the end of the chain
+        f = _repo_file(repo, path)
+        if f is None or f.name == SEED_FILE:
+            continue
+        text, n = f.read_text("utf-8", "replace").splitlines(), int(line)
+        lo = max(0, n - 12)
+        snippets.append(f"### {f.relative_to(repo).as_posix()} (around line {n})\n" + "\n".join(text[lo:n + 12]))
+    names = dict.fromkeys(m for pat in NAME_PATTERNS for m in re.findall(pat, error))
+    for name in names:
+        found = _definition(repo, name) or (_definition(repo, name.title().replace("_", "")) if "_" in name else "")
+        if found:
+            snippets.append(found)
+    out, used = [], 0
+    for snip in dict.fromkeys(snippets):
+        if used + len(snip) > limit:
+            break
+        out.append(snip)
+        used += len(snip)
+    return ("\nSource the error points at (real code from this repo; trust it over your memory):\n"
+            + "\n\n".join(out) + "\n") if out else ""
+
+
+def same_error(a: str, b: str) -> bool:
+    """Two error lines say the same thing once temp paths, ports and ids are blanked out."""
+    def norm(line: str) -> str:
+        line = re.sub(r"(?:[A-Za-z]:)?[\\/][^\s'\":]*doppel-[^\s'\":]*", "<tmp>", line)
+        return re.sub(r"\d+", "N", line).strip()
+    return bool(a and b) and norm(a) == norm(b)
+
+
 def last_line(error: str) -> str:
     lines = [ln.strip() for ln in error.strip().splitlines() if ln.strip()]
     return lines[-1][:300] if lines else ""
 
 
 def draft(repo: str | Path, error: str = "", previous: dict | None = None, chat=nemotron_chat,
-          model: str | None = None, history: list[str] | None = None) -> dict:
+          model: str | None = None, history: list[str] | None = None, repeated: int = 0) -> dict:
     """Ask Nemotron for the two files. Returns {"files": {name: text}, "notes": str}."""
     model = model or os.getenv("INIT_MODEL", "nvidia/Nemotron-3-Ultra-550b-a55b")
     feedback = ""
@@ -201,8 +274,13 @@ def draft(repo: str | Path, error: str = "", previous: dict | None = None, chat=
         if history:
             earlier = ("Earlier attempts, oldest first. Each changed something and still failed, so do "
                        "not go back to them:\n" + "\n".join(f"- {h}" for h in history) + "\n")
-        feedback = FEEDBACK.format(history=earlier, error=_clip_error(error), files=shown)
-    prompt = PROMPT.format(feedback=feedback, hints=gather_hints(repo), code=gather_code(repo))
+        repeat = (f"The last attempt failed with the SAME error as attempt {repeated}: the change made in "
+                  "between did not reach the cause. Do not adjust the same thing again; read the source "
+                  "below and take a different approach.\n") if repeated else ""
+        feedback = FEEDBACK.format(history=earlier, repeat=repeat, error=_clip_error(error),
+                                   source=related_source(repo, error), files=shown)
+    prompt = PROMPT.format(feedback=feedback, hints=gather_hints(repo), index=api_index(repo),
+                           code=gather_code(repo))
     # not lower: at 0.2 Nemotron fell into a loop repeating env vars until it hit max_tokens
     text, _, _ = chat(model, prompt, temperature=0.6)
     reply = parse_json(text, key="files") or {}
@@ -356,12 +434,23 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
     for attempt in range(1, tries + 1):
         log(f"[init] attempt {attempt}/{tries}: asking Nemotron for {SPEC_FILE} and {SEED_FILE}")
         try:
-            drafted = draft(repo, error, previous, chat=chat, history=history[:-1])
+            ends = [last_line(h.split(" -> ", 1)[-1]) for h in history[:-1]]
+            repeated = next((i + 1 for i, e in enumerate(ends) if same_error(e, last_line(error))), 0)
+            drafted = draft(repo, error, previous, chat=chat, history=history[:-1], repeated=repeated)
         except Exception as e:  # noqa: BLE001
             error, result = f"the reply could not be used: {e}", {"ok": False, "error": str(e)}
             log(f"[init] {error}")
             continue
         previous = drafted["files"]
+        problems = check_seed(repo, previous[SEED_FILE]) if SEED_FILE in previous else []
+        if problems:
+            error = (f"{SEED_FILE} was checked against the repo's code before booting and would crash:\n"
+                     + "\n".join(f"- {p}" for p in problems))
+            result = {"ok": False, "error": error, "attempts": attempt, "notes": drafted["notes"],
+                      "files": previous}
+            log(f"[init] seed check found {len(problems)} problem(s), no sandbox needed: {problems[0][:160]}")
+            history.append(f"attempt {attempt}: seed check -> {problems[0][:200]}")
+            continue
         log(f"[init] booting the twin ({backend}) to check it")
         result = try_files(repo, previous, backend=backend, run_twin=run_twin, chat=chat, personas=personas)
         result.update(attempts=attempt, notes=drafted["notes"])
@@ -387,3 +476,233 @@ def write(repo: str | Path, files: dict, force: bool = False) -> list[Path]:
     for name, text in files.items():
         (repo / name).write_text(text, encoding="utf-8")
     return [repo / n for n in files]
+
+
+# ---------------------------------------------------------------- the repo's real API, for the seed
+#
+# A big repo doesn't fit in the prompt, so the model used to write seed code against functions it had
+# never seen (linkding: create_bookmark(url=...) when the real signature is (bookmark, tag_string,
+# current_user)). Two fixes: every signature always goes into the prompt as a compact index, and the
+# drafted seed is checked against those signatures before a sandbox is booted (milliseconds, not minutes).
+
+MAX_INDEX = 40_000
+QUERY_CREATORS = {"create", "get_or_create", "update_or_create"}
+
+
+def _py_files(repo: Path) -> list[Path]:
+    return sorted(p for p in repo.rglob("*.py")
+                  if p.is_file() and not (SKIP_CODE & set(p.relative_to(repo).parts)))
+
+
+def _parse(path: Path) -> ast.Module | None:
+    try:
+        return ast.parse(path.read_text("utf-8", "replace"))
+    except (SyntaxError, ValueError):
+        return None
+
+
+def _signature(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+    return f"{fn.name}({ast.unparse(fn.args)})"
+
+
+def _fields(cls: ast.ClassDef, source: str) -> list[str]:
+    """Class-level `name = Something(...)` lines: model fields in Django, SQLAlchemy, Pydantic..."""
+    out = []
+    for node in cls.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) \
+                and isinstance(node.value, ast.Call):
+            out.append(_clip(ast.get_source_segment(source, node) or node.targets[0].id, 110).splitlines()[0])
+    return out
+
+
+def api_index(repo: str | Path, limit: int = MAX_INDEX) -> str:
+    """Every top-level function and class in the repo, one line each, plus model fields."""
+    repo = Path(repo).resolve()
+    lines = []
+    for path in _py_files(repo):
+        tree = _parse(path)
+        if tree is None:
+            continue
+        source = path.read_text("utf-8", "replace")
+        entries = []
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and not node.name.startswith("_"):
+                entries.append(f"  def {_signature(node)}")
+            elif isinstance(node, ast.ClassDef):
+                bases = ", ".join(ast.unparse(b) for b in node.bases)
+                entries.append(f"  class {node.name}({bases})")
+                entries += [f"    {f}" for f in _fields(node, source)]
+        if entries:
+            lines.append(f"{'.'.join(path.relative_to(repo).with_suffix('').parts)}:")
+            lines += entries
+    return _clip("\n".join(lines), limit)
+
+
+def _module_file(repo: Path, dotted: str) -> Path | None:
+    base = repo.joinpath(*dotted.split("."))
+    for candidate in (base.with_suffix(".py"), base / "__init__.py"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _defines(tree: ast.Module) -> dict[str, ast.AST]:
+    names: dict[str, ast.AST] = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names[node.name] = node
+        elif isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    names[t.id] = node
+        elif isinstance(node, ast.Import | ast.ImportFrom):
+            for a in node.names:
+                names[(a.asname or a.name).split(".")[0]] = node
+    return names
+
+
+def _model_fields(repo: Path, cls: ast.ClassDef, module: Path, depth: int = 0) -> set[str] | None:
+    """Field names a model accepts as keywords, or None when we can't tell (unknown base class)."""
+    if depth > 5:
+        return None
+    fields = {t.id for n in cls.body if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
+              for t in n.targets if isinstance(t, ast.Name)}
+    defs = _defines(_parse(module) or ast.Module(body=[], type_ignores=[]))
+    for base in cls.bases:
+        name = ast.unparse(base)
+        if name.endswith("models.Model") or name == "Model":
+            continue
+        parent = defs.get(name)
+        if not isinstance(parent, ast.ClassDef):
+            return None  # inherits fields from somewhere we don't read
+        inherited = _model_fields(repo, parent, module, depth + 1)
+        if inherited is None:
+            return None
+        fields |= inherited
+    if not any(ast.unparse(b).endswith("Model") for b in cls.bases) and depth == 0 and not fields:
+        return None
+    return fields | {f + "_id" for f in fields} | {"id", "pk"}
+
+
+STRINGY = ("CharField", "TextField", "SlugField", "EmailField", "URLField", "FilePathField",
+           "FileField", "ImageField", "GenericIPAddressField")
+NO_COLUMN = ("ManyToManyField", "AutoField", "BigAutoField", "SmallAutoField", "GeneratedField")
+
+
+def required_django_fields(cls: ast.ClassDef) -> list[str]:
+    """Django fields that become NOT NULL columns with no default: creating a row without them fails."""
+    out = []
+    for node in cls.body:
+        if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                and isinstance(node.targets[0], ast.Name)):
+            continue
+        kind = ast.unparse(node.value.func).split(".")[-1]
+        if not (kind.endswith("Field") or kind in ("ForeignKey", "OneToOneField")) \
+                or kind.endswith(STRINGY) or kind in NO_COLUMN:
+            continue
+        kws = {k.arg: k.value for k in node.value.keywords if k.arg}
+        if any(k in kws for k in ("default", "auto_now", "auto_now_add", "primary_key", "db_default")):
+            continue
+        if isinstance(kws.get("null"), ast.Constant) and kws["null"].value is True:
+            continue
+        out.append(node.targets[0].id)
+    return out
+
+
+def _check_call(call: ast.Call, fn: ast.FunctionDef | ast.AsyncFunctionDef, shown: str) -> list[str]:
+    a = fn.args
+    positional = [p.arg for p in a.posonlyargs + a.args]
+    named = set(positional[len(a.posonlyargs):]) | {p.arg for p in a.kwonlyargs}
+    problems = []
+    if len(call.args) > len(positional) and not a.vararg and not any(isinstance(x, ast.Starred) for x in call.args):
+        problems.append(f"{shown}() takes {len(positional)} positional argument(s), the seed passes {len(call.args)}")
+    given = set(positional[:len(call.args)])
+    for kw in call.keywords:
+        if kw.arg is None:
+            return problems  # **kwargs at the call site: can't check further
+        if kw.arg not in named and not a.kwarg:
+            problems.append(f"{shown}() has no parameter '{kw.arg}'")
+        given.add(kw.arg)
+    defaults = len(a.defaults)
+    required = positional[:len(positional) - defaults] if defaults else positional
+    required += [k.arg for k, d in zip(a.kwonlyargs, a.kw_defaults, strict=True) if d is None]
+    missing = [r for r in required if r not in given and r not in ("self", "cls")]
+    if missing and not any(isinstance(x, ast.Starred) for x in call.args):
+        problems.append(f"{shown}() is missing required argument(s): {', '.join(missing)}")
+    return problems
+
+
+def check_seed(repo: str | Path, seed: str) -> list[str]:
+    """Problems that would crash the seed, found by reading it against the repo's real code."""
+    repo = Path(repo).resolve()
+    try:
+        tree = ast.parse(seed)
+    except SyntaxError as e:
+        return [f"{SEED_FILE} line {e.lineno}: syntax error: {e.msg}"]
+    problems: list[str] = []
+    functions: dict[str, tuple[ast.AST, str, Path]] = {}  # local name -> (def or class, shown name, file)
+    modules: dict[str, Path] = {}                          # local alias -> repo module file
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            mod_file = _module_file(repo, node.module)
+            if mod_file is None:
+                continue  # a library, not the repo
+            mod_tree = _parse(mod_file)
+            defined = _defines(mod_tree) if mod_tree else {}
+            for alias in node.names:
+                local = alias.asname or alias.name
+                sub = _module_file(repo, f"{node.module}.{alias.name}")
+                if sub is not None:
+                    modules[local] = sub
+                elif alias.name not in defined and alias.name != "*":
+                    problems.append(f"{SEED_FILE} line {node.lineno}: {node.module} has no '{alias.name}'")
+                elif isinstance(defined.get(alias.name), ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                    functions[local] = (defined[alias.name], alias.name, mod_file)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                mod_file = _module_file(repo, alias.name)
+                if mod_file is not None and alias.asname:
+                    modules[alias.asname] = mod_file
+
+    def target(func: ast.expr):
+        if isinstance(func, ast.Name) and func.id in functions:
+            return functions[func.id]
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in modules:
+            mod_file = modules[func.value.id]
+            node = _defines(_parse(mod_file) or ast.Module(body=[], type_ignores=[])).get(func.attr)
+            if node is None:
+                problems.append(f"{SEED_FILE} line {func.lineno}: {func.value.id} has no '{func.attr}'")
+                return None
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                return node, f"{func.value.id}.{func.attr}", mod_file
+        return None
+
+    for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
+        hit = target(call.func)
+        if hit and isinstance(hit[0], ast.FunctionDef | ast.AsyncFunctionDef):
+            problems += [f"{SEED_FILE} line {call.lineno}: {p}; the real signature is {_signature(hit[0])}"
+                         for p in _check_call(call, hit[0], hit[1])]
+            continue
+        # Model(...) and Model.objects.create / get_or_create / update_or_create(...)
+        cls_hit, func = hit, call.func
+        if cls_hit is None and isinstance(func, ast.Attribute) and func.attr in QUERY_CREATORS \
+                and isinstance(func.value, ast.Attribute) and isinstance(func.value.value, ast.Name | ast.Attribute):
+            cls_hit = target(func.value.value)
+        if not cls_hit or not isinstance(cls_hit[0], ast.ClassDef):
+            continue
+        fields = _model_fields(repo, cls_hit[0], cls_hit[2])
+        if fields is None:
+            continue
+        given = {kw.arg for kw in call.keywords if kw.arg}
+        creating = not isinstance(func, ast.Attribute) or func.attr == "create"
+        if creating and None not in [kw.arg for kw in call.keywords] and not call.args:
+            missing = [f for f in required_django_fields(cls_hit[0]) if f not in given and f + "_id" not in given]
+            if missing:
+                problems.append(f"{SEED_FILE} line {call.lineno}: creating {cls_hit[1]} without "
+                                f"{', '.join(missing)}, which the database requires (NOT NULL, no default)")
+        for kw in call.keywords:
+            if kw.arg and "__" not in kw.arg and kw.arg != "defaults" and kw.arg not in fields:
+                known = ", ".join(sorted(f for f in fields if not f.endswith("_id") and f not in ("id", "pk")))
+                problems.append(f"{SEED_FILE} line {call.lineno}: {cls_hit[1]} has no field '{kw.arg}' "
+                                f"(its fields: {known})")
+    return problems
