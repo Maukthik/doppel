@@ -334,3 +334,63 @@ def test_a_bad_seed_is_redrafted_without_booting_a_sandbox(tmp_path):
     assert len(booted) == 1                                    # only the second, clean draft booted
     assert "has no parameter 'url'" in model.prompts[1]        # and the first draft's problems went back
     assert not result["ok"]
+
+
+# --- a setup must make the invented users succeed, not just boot ------------------------------
+
+TOKEN_APP = textwrap.dedent('''
+    import json, os
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def answer(self, status, body):
+            data = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            if self.path == "/health":
+                return self.answer(200, {"ok": True})
+            if self.headers.get("Authorization") != "Token " + "a" * 40:
+                return self.answer(401, {"detail": "Authentication credentials were not provided."})
+            return self.answer(200, {"path": self.path, "user": "alice"})
+
+    HTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()
+''')
+TOKEN = "a" * 40
+STRANGERS = [{"name": f"stranger {i}", "goal": "browse without the token",
+              "steps": [{"method": "GET", "path": "/api/bookmarks/"}, {"method": "GET", "path": "/api/tags/"}]}
+             for i in range(3)]
+
+
+def token_app(tmp_path: Path) -> Path:
+    app = tmp_path / "tokens"
+    app.mkdir()
+    (app / "app.py").write_text(TOKEN_APP, encoding="utf-8")
+    return app
+
+
+def test_users_that_never_log_in_get_the_seeded_login_before_calibration(tmp_path):
+    spec = ('[app]\nstart = "python app.py"\nready = "/health"\n\n[personas.login]\nmethod = "GET"\n'
+            f'path = "/api/user/profile/"\nheader = {{ Authorization = "Token {TOKEN}" }}\n')
+    result = bootstrap.try_files(token_app(tmp_path), {"doppel.toml": spec}, backend="local",
+                                 chat=ScriptedModel([], personas=STRANGERS))
+    assert result["ok"], result["error"]
+    assert result["repaired"] == ["stranger 0", "stranger 1", "stranger 2"]   # quick fix, no model call
+    assert result["coverage"] == 1.0
+
+
+def test_a_setup_whose_users_are_all_refused_is_sent_back_with_what_the_app_said(tmp_path):
+    spec = '[app]\nstart = "python app.py"\nready = "/health"\n'               # no login for the users
+    result = bootstrap.try_files(token_app(tmp_path), {"doppel.toml": spec}, backend="local",
+                                 chat=ScriptedModel([], personas=STRANGERS))
+    assert not result["ok"] and result["coverage"] == 0.0
+    assert "got only 0% of their requests served" in result["error"]
+    assert "status counts: {401: 6}" in result["error"]
+    assert "Authentication credentials were not provided" in result["error"]

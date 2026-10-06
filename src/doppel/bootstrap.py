@@ -390,8 +390,22 @@ def _run_twin(backend: str):
     return run_twin
 
 
+MIN_COVERAGE = 0.4  # below this the twin boots but tests almost nothing: a setup that "works" in name only
+
+
+def refusal_summary(recordings: list[dict], examples: int = 6) -> str:
+    """Status counts and a few refused requests with the app's answer, for the model to act on."""
+    from collections import Counter
+    steps = [s for r in recordings for s in r["steps"]]
+    counts = Counter(s["status"] for s in steps)
+    bad = [s for s in steps if not 0 < s["status"] < 400][:examples]
+    lines = [f"status counts: {dict(sorted(counts.items()))}"]
+    lines += [f"- {s['request']} -> {s['status']}: {_clip(str(s.get('body')), 200)}" for s in bad]
+    return "\n".join(lines)
+
+
 def try_files(repo: Path, files: dict, backend: str = "nebius", run_twin=None, chat=nemotron_chat,
-              personas: int = 6) -> dict:
+              personas: int = 6, min_coverage: float = MIN_COVERAGE) -> dict:
     """Boot the twin with these files. Returns {"ok": bool, "error": str, "files": ..., ...}."""
     run_twin = run_twin or _run_twin(backend)
     with tempfile.TemporaryDirectory(prefix="doppel-init-", ignore_cleanup_errors=True) as tmp:
@@ -412,20 +426,35 @@ def try_files(repo: Path, files: dict, backend: str = "nebius", run_twin=None, c
             return {"ok": False, "error": problem}
         # calibrate: invented users against the same code twice; what differs is noise
         from doppel.personas import generate
+        from doppel.rehearsal import repair
         users = generate(work, n=personas, guide=spec.persona_guide, chat=chat)["personas"]
         twice = run_twin(work, work, spec, users)
+        # rehearse, like real runs do: users that never logged in get the seeded login (no model call),
+        # other stuck ones go back to Nemotron once; then replay the repaired set twice
+        fixed = repair(users, twice["base"], work, guide=spec.persona_guide, login=spec.login, chat=chat)
+        if fixed["repaired"]:
+            twice = run_twin(work, work, spec, fixed["personas"])
+    served = coverage(twice["base"])
+    if served < min_coverage:
+        return {"ok": False, "files": files, "coverage": served,
+                "error": (f"the twin boots, but the invented users got only {served:.0%} of their requests "
+                          f"served (need {min_coverage:.0%}), even after giving them the seeded login. "
+                          "Usually the login, the token in the seed, or the [personas] guide is wrong, or "
+                          "the seed lacks the records users ask for. What the app answered:\n"
+                          + refusal_summary(twice["base"]))}
     noise = noisy_keys(twice["base"], twice["head"])
     files = {**files, SPEC_FILE: with_ignore(files[SPEC_FILE], noise)}
     return {"ok": True, "error": "", "files": files, "noise": noise,
             "flaky": flaky_statuses(twice["base"], twice["head"]),
-            "coverage": coverage(twice["base"]), "personas": len(twice["base"])}
+            "coverage": served, "personas": len(twice["base"]), "repaired": fixed["repaired"]}
 
 
 # ---------------------------------------------------------------- the loop
 
 
 def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotron_chat, run_twin=None,
-         personas: int = 6, log=lambda msg: print(msg, file=sys.stderr)) -> dict:
+         personas: int = 6, log=lambda msg: print(msg, file=sys.stderr),
+         min_coverage: float = MIN_COVERAGE) -> dict:
     """Draft, verify, repair, calibrate. Returns the last attempt with "attempts" and "notes" added;
     "files" holds the calibrated files when "ok" is true. Writes nothing to disk."""
     repo = Path(repo).resolve()
@@ -452,7 +481,8 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
             history.append(f"attempt {attempt}: seed check -> {problems[0][:200]}")
             continue
         log(f"[init] booting the twin ({backend}) to check it")
-        result = try_files(repo, previous, backend=backend, run_twin=run_twin, chat=chat, personas=personas)
+        result = try_files(repo, previous, backend=backend, run_twin=run_twin, chat=chat, personas=personas,
+                           min_coverage=min_coverage)
         result.update(attempts=attempt, notes=drafted["notes"])
         result.setdefault("files", previous)
         if result["ok"]:
