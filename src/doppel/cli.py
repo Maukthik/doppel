@@ -53,12 +53,20 @@ def cmd_run(a) -> int:
             repaired.extend(fixed["repaired"])
             print(f"[rehearsal] fixed {len(fixed['repaired'])} persona(s) that got nowhere", file=sys.stderr)
             return fixed["personas"]
-    worlds = run_twin(a.base, a.head, spec, personas, refine=refine)
+    from doppel import reach
+    found = reach.changes(a.base, a.head)
+    worlds = run_twin(a.base, a.head, spec, personas, refine=refine, watch=reach.targets(found) if found else None)
     personas = worlds.get("personas", personas)
     for f in worlds.get("failed", []):
         print(f"[twin] persona '{f['persona']}' failed: {f['error']}", file=sys.stderr)
     from doppel.rehearsal import coverage
     cov = {**coverage(worlds["base"]), "repaired": repaired}
+    reached = reach.summarize(found, worlds) if found else []
+    if reached:
+        cov["reach"] = reached
+    elif any(p.endswith(".py") for p in _changed(a.base, a.head)):
+        cov["reach_note"] = ("The changed code runs when the app loads (module or class level), so which users "
+                             "reached it can't be measured line by line.")
     findings = compare(worlds["base"], worlds["head"], spec.ignore, spec.slow_ratio, spec.slow_min_ms)
     steps = sum(len(r["steps"]) for r in worlds["base"])
     judged = None
@@ -86,13 +94,26 @@ def cmd_run(a) -> int:
         Path(a.out).write_text(md, encoding="utf-8")
     if a.json:
         verdicts = [v.__dict__ for v in judged["verdicts"]] if judged else None
+        pr_text = Path(a.pr).read_text(encoding="utf-8") if a.pr else ""
         Path(a.json).write_text(json.dumps({"findings": [f.to_dict() for f in findings], "verdicts": verdicts,
-                                            "coverage": cov, "personas": personas, "worlds": worlds},
+                                            "coverage": cov, "personas": personas, "worlds": worlds,
+                                            "changes": reached, "suspicions": settled,
+                                            "pr": {"title": pr_text.strip().splitlines()[0].lstrip("# ").strip()
+                                                   if pr_text.strip() else "", "body": pr_text},
+                                            "app": Path(a.head).resolve().name},
                                            indent=1, ensure_ascii=False, default=str), encoding="utf-8")
     if a.strict:
         regressions = [v for v in judged["verdicts"] if v.label == "regression"] if judged else findings
         return 1 if regressions else 0
     return 0
+
+
+def _changed(base, head) -> list[str]:
+    from doppel.backends.nebius import changed_files
+    try:
+        return changed_files(base, head)
+    except OSError:
+        return []
 
 
 def cmd_personas(a) -> int:

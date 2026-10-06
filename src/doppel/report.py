@@ -38,6 +38,11 @@ def coverage_line(cov: dict | None) -> str:
         line += f" Stuck at login or a missing route: {', '.join(cov['stuck_personas'][:5])}."
     if cov.get("repaired"):
         line += f" Fixed in rehearsal: {len(cov['repaired'])} persona(s)."
+    if cov.get("reach"):
+        from doppel.reach import reach_line
+        line += " " + reach_line(cov["reach"])
+    elif cov.get("reach_note"):
+        line += " " + cov["reach_note"]
     return line
 
 

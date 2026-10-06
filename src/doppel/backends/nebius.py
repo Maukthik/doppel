@@ -40,15 +40,21 @@ def code_files(root: str | Path) -> dict[str, Path]:
             if p.is_file() and not SKIP_PARTS & set(p.relative_to(root).parts)}
 
 
-def persona_command(spec: TwinSpec) -> str:
-    """Start the app in the background, replay one persona, stop the app, keep runner's exit code."""
+def persona_command(spec: TwinSpec, trace: bool = False) -> str:
+    """Start the app in the background, replay one persona, stop the app, keep runner's exit code.
+    With trace, Doppel's line tracer (doppel.reach) loads in the app and its hits go to stderr."""
+    from doppel import reach
+    hook = f"/doppel/{reach.TRACE_DIR}"
+    tracing = (f"export PYTHONPATH={hook}${{PYTHONPATH:+:$PYTHONPATH}} {reach.TARGETS_ENV}={hook}/targets.json "
+               f"{reach.OUT_ENV}=/tmp/doppel-reached.txt {reach.ROOT_ENV}={APP}; ") if trace else ""
+    report = (f"echo '{reach.MARKER}' >&2; cat /tmp/doppel-reached.txt >&2 2>/dev/null; ") if trace else ""
     # export, not a `PORT=8000 cmd` prefix: a prefix only reaches the command's environment, so a
     # start command that spells the port out ("runserver 0.0.0.0:$PORT") would expand it to nothing
-    return (f"cd {APP} && (export PORT={PORT}; {spec.exports()}{spec.start} > /tmp/app.log 2>&1 "
+    return (f"cd {APP} && (export PORT={PORT}; {spec.exports()}{tracing}{spec.start} > /tmp/app.log 2>&1 "
             f"& echo $! > /tmp/app.pid); "
             f"python3 /doppel/runner.py --base-url http://127.0.0.1:{PORT} --personas /doppel/persona.json "
             f"--ready-path {shlex.quote(spec.ready)}; rc=$?; "
-            f"kill $(cat /tmp/app.pid) 2>/dev/null; "
+            f"kill $(cat /tmp/app.pid) 2>/dev/null; sleep 0.2; {report}"
             f"if [ $rc -ne 0 ]; then echo '--- app log ---' >&2; tail -n 40 /tmp/app.log >&2; fi; exit $rc")
 
 
@@ -124,13 +130,18 @@ class NebiusTwin:
                 raise RuntimeError(f"the {label} world doesn't contain the {label} code for: {', '.join(wrong[:8])}")
         self.log(f"[twin] verified {len(changed)} changed file(s) in both worlds")
 
-    async def replay_persona(self, world, persona: dict, sem: asyncio.Semaphore) -> dict:
+    async def replay_persona(self, world, persona: dict, sem: asyncio.Semaphore, watch: dict | None = None) -> dict:
+        from doppel import reach
         files = {"doppel/runner.py": RUNNER.read_bytes(),
                  "doppel/persona.json": json.dumps([persona]).encode()}
+        if watch:
+            files[f"doppel/{reach.TRACE_DIR}/sitecustomize.py"] = reach.TRACER.encode()
+            files[f"doppel/{reach.TRACE_DIR}/targets.json"] = json.dumps(watch).encode()
         for attempt in range(RETRIES):
             try:
                 async with sem:
-                    out = await world.run(shell=persona_command(self.spec), files=files, timeout=PERSONA_TIMEOUT,
+                    out = await world.run(shell=persona_command(self.spec, trace=bool(watch)), files=files,
+                                          timeout=PERSONA_TIMEOUT,
                                           truncate_output_at=OUTPUT_LIMIT)
                 break
             except Exception as e:  # noqa: BLE001 - retry network hiccups, re-raise anything else
@@ -146,13 +157,16 @@ class NebiusTwin:
         if out.exit_code != 0 or not isinstance(recordings, list) or not recordings:
             raise RuntimeError(f"persona '{persona.get('name')}' failed (exit {out.exit_code}):\n"
                                f"{text[-1500:]}\n{(out.stderr or '')[-1500:]}")
+        if watch:
+            recordings[0]["reached"] = reach.parse_hits(out.stderr or "")
         return recordings[0]
 
-    async def _replay_all(self, world, personas: list[dict], sem) -> list:
+    async def _replay_all(self, world, personas: list[dict], sem, watch: dict | None = None) -> list:
         """One recording (or the exception) per persona; one broken persona doesn't sink the run."""
-        return await asyncio.gather(*(self.replay_persona(world, p, sem) for p in personas), return_exceptions=True)
+        return await asyncio.gather(*(self.replay_persona(world, p, sem, watch) for p in personas),
+                                    return_exceptions=True)
 
-    async def run(self, base_dir, head_dir, personas: list[dict], refine=None) -> dict:
+    async def run(self, base_dir, head_dir, personas: list[dict], refine=None, watch: dict | None = None) -> dict:
         for attempt in range(RETRIES):  # building talks to the API a lot: retry network hiccups
             try:
                 worlds = await self.build_worlds(base_dir, head_dir)
@@ -169,8 +183,9 @@ class NebiusTwin:
             rehearsal = [r for r in first if isinstance(r, dict)]
             personas = refine(personas, rehearsal)
             self.log(f"[twin] rehearsal: {len(rehearsal)} personas replayed on base")
-        base, head = await asyncio.gather(self._replay_all(worlds["base"], personas, sem),
-                                          self._replay_all(worlds["head"], personas, sem))
+        watch = watch or {}
+        base, head = await asyncio.gather(self._replay_all(worlds["base"], personas, sem, watch.get("base")),
+                                          self._replay_all(worlds["head"], personas, sem, watch.get("head")))
         out = pair(personas, base, head)
         failed = f" | {len(out['failed'])} personas failed" if out["failed"] else ""
         self.log(f"[twin] {2 * len(personas)} persona runs | {self.runs} sandbox runs | "
@@ -224,8 +239,9 @@ def make_client():
                                         transport_timeout=timeout))
 
 
-def run_twin(base_dir, head_dir, spec: TwinSpec, personas: list[dict], client=None, refine=None) -> dict:
+def run_twin(base_dir, head_dir, spec: TwinSpec, personas: list[dict], client=None, refine=None,
+             watch: dict | None = None) -> dict:
     """Same contract as backends.local.run_twin: {"base": recordings, "head": recordings, "failed": [...],
     "personas": the personas actually replayed (after refine), "rehearsal": base recordings or None}."""
     twin = NebiusTwin(client or make_client(), spec)
-    return asyncio.run(twin.run(base_dir, head_dir, personas, refine))
+    return asyncio.run(twin.run(base_dir, head_dir, personas, refine, watch))
