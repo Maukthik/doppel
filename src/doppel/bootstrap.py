@@ -83,7 +83,8 @@ in Django, session.add(Model(...)) in SQLAlchemy), not with service or helper fu
 are shown below, helpers may not be. Fill every required field, including dates, with fixed values;
 but anything with an expiry (tokens, sessions, invitations) must still be valid when the twin runs, so
 give expiry dates far in the future, like the year 2100.
-Keep doppel_seed.py short (under 80 lines) and the notes to two sentences.
+Keep doppel_seed.py short (under 80 lines) and the notes to two sentences. End the seed by printing
+one line with the database it wrote to and what it created, e.g. "seeded 3 users, 12 posts into <url>".
 Set passwords through the app's own hashing (a password property, set_password, create_user), never by
 writing a plain string into a password-hash field.
 Be deterministic: no randomness, no network calls. Use only names, fields and parameters that appear in
@@ -746,6 +747,32 @@ def login_advice(spec: TwinSpec, repo: Path | None) -> str:
             "the one that accepts them." + (database_config(repo) if repo else "") + where)
 
 
+USERISH = re.compile(r"(^|_)(users?|accounts?|members?|auth_user|profiles?)$", re.I)
+
+
+def seed_evidence(seed_log: str) -> str:
+    """What the seed printed and what the databases held right after it: facts, not guesses, for the
+    next draft (microblog: five refused logins in a row before anyone looked inside)."""
+    if not seed_log.strip():
+        return ""
+    scans = [ln for ln in seed_log.splitlines() if ln.startswith("[dbscan]")]
+    printed = [ln for ln in seed_log.splitlines() if ln.strip() and not ln.startswith("[dbscan]")][-15:]
+    verdict = ""
+    user_counts = re.findall(r"(\S+?)=(\d+)", " ".join(ln.split(": ", 1)[-1] for ln in scans))
+    users = [(t, int(n)) for t, n in user_counts if USERISH.search(t)]
+    if users and all(n == 0 for _, n in users):
+        verdict = ("\nEvery user table is EMPTY after the seed: nothing it created was saved. Commit the session "
+                   "(db.session.commit(), `with db.begin()`, transaction.atomic exits), and make sure the seed "
+                   "uses the app's real config, not a test or in-memory one.")
+    elif len([ln for ln in scans if re.search(r"(^|[ ,])\w*users?=", ln)]) > 1:
+        verdict = ("\nMore than one database has a user table: check which one the server opens (its config "
+                   "shown above) and make the seed write exactly that one, through [app] env.")
+    out = "\nWhat the databases held right after the seed:\n" + "\n".join(scans) if scans else ""
+    if printed:
+        out += "\nWhat the seed printed (last lines):\n" + "\n".join(printed)
+    return verdict + out
+
+
 def smoke_problem(recording: dict, spec: TwinSpec, repo: Path | None = None) -> str:
     """Why the smoke run is not good enough, or "" if it is."""
     steps = recording.get("steps", [])
@@ -866,7 +893,7 @@ def try_files(repo: Path, files: dict, backend: str = "nebius", run_twin=None, c
             return {"ok": False, "error": smoke["failed"][0]["error"]}
         problem = smoke_problem(smoke["base"][0], spec, work) if smoke["base"] else "the smoke persona never ran"
         if problem:
-            return {"ok": False, "error": problem}
+            return {"ok": False, "error": problem + seed_evidence(smoke.get("seed_log", ""))}
         # calibrate: invented users against the same code twice; what differs is noise
         from doppel.personas import generate
         from doppel.rehearsal import repair
@@ -972,6 +999,8 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
             return result
         error = result["error"]
         log(f"[init] failed: {error.splitlines()[0][:200] if error else 'unknown error'}")
+        for line in (ln for ln in error.splitlines() if ln.startswith("[dbscan]")):
+            log(f"[init]   inside: {line[len('[dbscan] '):]}")
         if result.get("infra"):
             log("[init] that is a network or sandbox problem, not the setup: stopping instead of redrafting")
             return result
@@ -1177,6 +1206,10 @@ def check_seed(repo: str | Path, seed: str) -> list[str]:
     except SyntaxError as e:
         return [f"{SEED_FILE} line {e.lineno}: syntax error: {e.msg}"]
     problems: list[str] = removed_api_uses(repo, tree)
+    if re.search(r"\.add(_all)?\(", seed) and re.search(r"session", seed, re.I) \
+            and not re.search(r"\.commit\(|\.begin\(|atomic", seed):
+        problems.append(f"{SEED_FILE} adds rows to a session but never commits, so nothing is saved and every "
+                        "login will be refused; call session.commit() (or use `with db.begin():`)")
     for node in ast.walk(tree):
         plain = None
         if isinstance(node, ast.Call):

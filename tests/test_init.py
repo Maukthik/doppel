@@ -666,3 +666,41 @@ def test_pinned_requirements_win_over_loose_pyproject_ranges(tmp_path):
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\ndependencies = ["flask"]\n')
     (tmp_path / "requirements.txt").write_text("flask==3.0.3\nuwsgi==2.0.28\n")
     assert bootstrap.derived_install(tmp_path) == "pip install --quiet 'flask==3.0.3'"
+
+
+# --- looking inside: what the seed printed and what the databases hold ------------------------
+
+def test_the_local_twin_reports_what_the_seed_printed_and_the_databases_after_it(tmp_path):
+    from doppel.backends.local import run_twin
+    app = shop_without_spec(tmp_path)
+    (app / "doppel.toml").write_text(SHOP_SPEC)
+    spec = TwinSpec.load(app / "doppel.toml")
+    out = run_twin(app, app, spec, SHOP_PERSONAS[:1])
+    assert "seeded 10 products" in out["seed_log"]
+    assert "[dbscan]" in out["seed_log"] and "products=10" in out["seed_log"]
+
+
+def test_seed_evidence_names_empty_user_tables_and_competing_databases():
+    empty = bootstrap.seed_evidence("seeded 3 users\n[dbscan] /app/db.sqlite: users=0, posts=0\n")
+    assert "Every user table is EMPTY" in empty and "seeded 3 users" in empty
+    two = bootstrap.seed_evidence("[dbscan] /app/db.sqlite: users=0\n[dbscan] /data/a.db: users=3\n")
+    assert "More than one database has a user table" in two
+    fine = bootstrap.seed_evidence("[dbscan] /app/db.sqlite: users=3, posts=9\n")
+    assert "EMPTY" not in fine and "More than one" not in fine and "users=3" in fine
+    assert bootstrap.seed_evidence("") == ""
+
+
+def test_the_sandbox_seed_step_keeps_the_seed_exit_code_around_the_scan():
+    import subprocess
+
+    from doppel.dbscan import one_liner
+    line = f"exit 3; rc=$?; {one_liner()} || true; exit $rc".replace("exit 3;", "(exit 3);")
+    assert subprocess.run(["sh", "-c", line], capture_output=True).returncode == 3
+
+
+def test_a_seed_that_never_commits_is_caught():
+    no_commit = "from api.app import db\nwith app.app_context():\n    db.session.add(User(username='a'))\n"
+    assert "never commits" in bootstrap.check_seed(Path("."), no_commit)[0]
+    committed = no_commit + "    db.session.commit()\n"
+    assert not any("never commits" in p for p in bootstrap.check_seed(Path("."), committed))
+    assert not any("never commits" in p for p in bootstrap.check_seed(Path("."), "Tag.objects.create(name='x')\n"))

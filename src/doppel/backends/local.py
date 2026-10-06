@@ -53,13 +53,14 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _run(command: str, cwd: Path, what: str, env: dict | None = None) -> None:
+def _run(command: str, cwd: Path, what: str, env: dict | None = None) -> str:
     if not command:
-        return
+        return ""
     p = subprocess.run(**_popen_args(command), cwd=cwd, capture_output=True, text=True, timeout=600,
                        env={**os.environ, **(env or {})})
     if p.returncode != 0:
         raise RuntimeError(f"{what} failed ({command}) in {cwd}:\n{p.stdout}{p.stderr}")
+    return p.stdout + p.stderr
 
 
 def _overlay(src: Path, dst: Path) -> None:
@@ -140,7 +141,15 @@ def run_twin(base_dir: str | Path, head_dir: str | Path, spec: TwinSpec, persona
         work = Path(tmp)
         seeded = work / "seeded"
         shutil.copytree(base_dir, seeded, ignore=SKIP)
-        _run(spec.seed, seeded, "seed", spec.env)
+        seed_log = _run(spec.seed, seeded, "seed", spec.env)
+        if spec.seed:
+            from doppel.dbscan import scan
+            here = os.getcwd()
+            try:
+                os.chdir(seeded)
+                seed_log += "\n".join(scan(roots=(".",)))
+            finally:
+                os.chdir(here)
         worlds = {}
         for label, code in (("base", base_dir), ("head", head_dir)):
             (work / label).mkdir()
@@ -152,4 +161,5 @@ def run_twin(base_dir: str | Path, head_dir: str | Path, spec: TwinSpec, persona
             personas = refine(personas, rehearsal)
         base = replay_world(worlds["base"], spec, personas, work / "base")
         head = replay_world(worlds["head"], spec, personas, work / "head")
-        return {**pair(personas, base, head), "personas": personas, "rehearsal": rehearsal}
+        return {**pair(personas, base, head), "personas": personas, "rehearsal": rehearsal,
+                "seed_log": seed_log[-4000:]}

@@ -57,6 +57,7 @@ class NebiusTwin:
         self.client, self.spec, self.log = client, spec, log
         self.cost = 0.0
         self.runs = 0
+        self.seed_log = ""  # what the seed printed, plus a scan of the SQLite databases right after it
 
     async def _step(self, image, shell: str, what: str):
         """Non-disposable run: the result is a new checkpoint."""
@@ -81,7 +82,10 @@ class NebiusTwin:
         if s.install:
             img = await self._step(img, s.exports() + s.install, "install (base)")
         if s.seed:
-            img = await self._step(img, s.exports() + s.seed, "seed")
+            from doppel.dbscan import one_liner
+            # keep the seed's own exit code; the scan only reports and can never fail the step
+            img = await self._step(img, f"{s.exports()}{s.seed}; rc=$?; {one_liner()} || true; exit $rc", "seed")
+            self.seed_log = ((img.stdout or "") + (img.stderr or ""))[-4000:]
         seeded = img
         self.log(f"[twin] seeded checkpoint {seeded.uuid}")
 
@@ -168,7 +172,8 @@ class NebiusTwin:
         failed = f" | {len(out['failed'])} personas failed" if out["failed"] else ""
         self.log(f"[twin] {2 * len(personas)} persona runs | {self.runs} sandbox runs | "
                  f"reported cost {self.cost:.4f}{failed}")
-        return {**out, "personas": personas, "rehearsal": rehearsal, "sandbox_cost": self.cost}
+        return {**out, "personas": personas, "rehearsal": rehearsal, "sandbox_cost": self.cost,
+                "seed_log": self.seed_log}
 
 
 HASH_SCRIPT = ("import hashlib,json,os;p=json.load(open('/doppel/paths.json'));"
