@@ -536,3 +536,63 @@ def test_sqlalchemy_2_models_with_annotations_and_property_setters_are_read_corr
     assert bootstrap.check_seed(tmp_path, ok) == []
     bad = "from app.models import User\nUser(username='a', colour='red')\n"
     assert "User has no field 'colour'" in bootstrap.check_seed(tmp_path, bad)[0]
+
+
+# --- a refused login says what to try instead -------------------------------------------------
+
+def microblog_like(tmp_path: Path) -> Path:
+    files = {
+        "api/__init__.py": "",
+        "api/app.py": "app.register_blueprint(tokens, url_prefix='/api')\napp.register_blueprint(posts)\n",
+        "api/tokens.py": textwrap.dedent('''
+            tokens = Blueprint('tokens', __name__)
+
+            @tokens.route('/tokens', methods=['POST'])
+            @authenticate(basic_auth)
+            def new():
+                return {'access_token': 'x'}
+        '''),
+        "api/posts.py": textwrap.dedent('''
+            @posts.route('/posts', methods=['GET'])
+            @authenticate(token_auth)
+            def all():
+                return []
+        '''),
+        "api/models.py": textwrap.dedent('''
+            class Token(Model):
+                access_token: so.Mapped[str] = so.mapped_column()
+                access_expiration: so.Mapped[datetime]
+
+                @property
+                def access_token_jwt(self):
+                    return jwt.encode({'token': self.access_token}, key)
+        '''),
+    }
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+    return tmp_path
+
+
+def test_a_refused_seeded_token_points_at_the_route_that_issues_tokens(tmp_path):
+    repo = microblog_like(tmp_path)
+    spec = TwinSpec(start="x", ready="/", login={"method": "GET", "path": "/api/users/me",
+                                                 "header": {"Authorization": "Bearer abc"}})
+    rec = {"steps": [{"request": "GET /api/users/me", "status": 401, "body": {"message": "Unauthorized"}},
+                     {"request": "GET /", "status": 200, "body": {}}]}
+    problem = bootstrap.smoke_problem(rec, spec, repo)
+    assert "Your login sends a fixed token from the seed" in problem
+    assert "signs, hashes or expires its tokens" in problem               # the Token model uses jwt + expiry
+    assert "@tokens.route('/tokens', methods=['POST'])" in problem and "basic_auth" in problem
+    assert "url_prefix='/api'" in problem                                 # so the model can build /api/tokens
+    assert "/posts" not in problem                                        # a route that only *uses* a token
+
+
+def test_refused_credentials_get_password_hashing_advice_instead(tmp_path):
+    repo = microblog_like(tmp_path)
+    spec = TwinSpec(start="x", ready="/", login={"method": "POST", "path": "/api/tokens",
+                                                 "auth": ["alice", "doppel-pass"], "save": {"token": "access_token"}})
+    rec = {"steps": [{"request": "POST /api/tokens", "status": 401, "body": {}}]}
+    problem = bootstrap.smoke_problem(rec, spec, repo)
+    assert "sets the password through the app's own hashing" in problem
+    assert "fixed token" not in problem

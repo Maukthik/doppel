@@ -70,12 +70,17 @@ slow_min_ms = 400
 creates realistic starting data using the app's own models or functions: 2-3 users with known
 usernames and passwords (use the password "doppel-pass"), and 5-15 domain records (posts, orders,
 bookmarks...). If the API authenticates with stored API tokens, create one per user with a FIXED
-40-character value so requests can send it directly. Then make [personas.login] a GET of a route that
+40-character value so requests can send it directly. Do this ONLY for stored API keys with no route
+that hands them out. If the app has a route that issues tokens or logs in (a POST that checks a
+password), log in through it instead: tokens it issues are valid by construction, while a seeded value
+fails whenever the app signs (JWT), hashes or expires its tokens. Then make [personas.login] a GET of a route that
 needs the token, with that header and no auth/save, e.g. method = "GET", path = "/api/me/",
 header = {{ Authorization = "Token aaaa...aaaa" }}; the guide states the exact header too.
 Create records with the app's model classes and their real fields (e.g. Model.objects.create(...)
 in Django, session.add(Model(...)) in SQLAlchemy), not with service or helper functions: the models
-are shown below, helpers may not be. Fill every required field, including dates, with fixed values.
+are shown below, helpers may not be. Fill every required field, including dates, with fixed values;
+but anything with an expiry (tokens, sessions, invitations) must still be valid when the twin runs, so
+give expiry dates far in the future, like the year 2100.
 Be deterministic: no randomness, no network calls. Use only names, fields and parameters that appear in
 the API index below; the seed is checked against the real code before anything runs.
 
@@ -379,13 +384,12 @@ ROUTE_LINE = re.compile(r"\b(re_)?path\(|\burl\(|\binclude\(|\.register\(|@actio
                         r"add_url_rule|^\s*class \w+(ViewSet|View|Resource)\b|Blueprint\(|prefix=")
 
 
-def route_source(repo: Path, limit: int = 8_000) -> str:
-    """The app's routes for a 404 (the model guessed a path that isn't routed): only the lines that
-    declare routes, from every routing file, so a long views module doesn't crowd out urls.py."""
-    out, used = [], 0
-    files = sorted((p for p in _py_files(repo) if ROUTE_FILES.search(p.relative_to(repo).as_posix())),
-                   key=lambda p: (p.name != "urls.py", p.relative_to(repo).as_posix()))
-    for path in files:
+def route_lines(repo: Path) -> list[tuple[str, list[str]]]:
+    """(file, route-declaring lines) for every file that declares routes. Routing files come first
+    (urls.py, routes.py), then any module with route decorators (microblog: api/tokens.py)."""
+    found = []
+    for path in _py_files(repo):
+        rel = path.relative_to(repo).as_posix()
         lines = path.read_text("utf-8", "replace").splitlines()
         picked: set[int] = set()
         for i, ln in enumerate(lines):
@@ -395,18 +399,50 @@ def route_source(repo: Path, limit: int = 8_000) -> str:
                 # (`@action(...)` then `def profile`): the next lines carry the route itself
                 if ln.rstrip().endswith(("(", ",")) or ln.lstrip().startswith("@"):
                     picked.update(range(i + 1, min(i + 3, len(lines))))
-        keep = [f"{i + 1:>5}: {lines[i].rstrip()}" for i in sorted(picked)]
-        if not keep:
-            continue
-        block = f"### {path.relative_to(repo).as_posix()} (route lines only)\n" + "\n".join(keep) + "\n"
+        if picked:
+            found.append((rel, [f"{i + 1:>5}: {lines[i].rstrip()}" for i in sorted(picked)]))
+    return sorted(found, key=lambda f: (not ROUTE_FILES.search(f[0]), f[0].rsplit("/", 1)[-1] != "urls.py", f[0]))
+
+
+def _blocks(found: list[tuple[str, list[str]]], limit: int) -> str:
+    out, used = [], 0
+    for rel, keep in found:
+        block = f"### {rel} (route lines only)\n" + "\n".join(keep) + "\n"
         if used + len(block) > limit:
             block = _clip(block, max(0, limit - used))
         out.append(block)
         used += len(block)
         if used >= limit:
             break
-    return ("\nThe app's routes (a 404 means that path is not routed; pick one from here):\n"
-            + "".join(out)) if out else ""
+    return "".join(out)
+
+
+def route_source(repo: Path, limit: int = 8_000) -> str:
+    """The app's routes for a 404 (the model guessed a path that isn't routed): only the lines that
+    declare routes, so a long views module doesn't crowd out urls.py."""
+    text = _blocks(route_lines(repo), limit)
+    return ("\nThe app's routes (a 404 means that path is not routed; pick one from here):\n" + text) if text else ""
+
+
+LOGIN_WORDS = re.compile(r"token|login|log_in|signin|sign_in|session|auth|password", re.I)
+
+
+def login_routes(repo: Path, limit: int = 3_000) -> str:
+    """Route declarations whose own line mentions tokens, login or sessions (an app's credential
+    issuers), each with the two lines after it (the decorator that says HTTP Basic, the view name).
+    Protected routes that merely *use* a token don't count."""
+    found = []
+    for rel, keep in route_lines(repo):
+        numbered = [(int(ln.split(":", 1)[0]), ln) for ln in keep]
+        hits: list[str] = []
+        for k, (n, ln) in enumerate(numbered):
+            code = ln.split(":", 1)[1]
+            if ROUTE_LINE.search(code) and LOGIN_WORDS.search(code) and "admin" not in rel:
+                hits.append(ln)
+                hits += [nl for m, nl in numbered[k + 1:k + 3] if m - n <= 2 and nl not in hits]
+        if hits:
+            found.append((rel, list(dict.fromkeys(hits))))
+    return _blocks(found, limit)
 
 
 # ---------------------------------------------------------------- auth, for a refused login
@@ -576,15 +612,43 @@ def smoke_persona(spec: TwinSpec) -> dict:
     return with_login(persona, spec.login) if spec.login else persona
 
 
-def smoke_problem(recording: dict, spec: TwinSpec) -> str:
+TOKEN_TRAPS = re.compile(r"\bjwt\b|encode\(|hash|expir|signer|signing|itsdangerous|hmac", re.I)
+
+
+def login_advice(spec: TwinSpec, repo: Path | None) -> str:
+    """What to try instead, by the shape of the login that was refused (the same 401 three times in a
+    row on microblog: the model kept sending a seeded token the app could never accept)."""
+    login = spec.login or {}
+    issuing = login_routes(repo) if repo else ""
+    where = f"\nRoutes that look like they issue credentials:\n{issuing}" if issuing else ""
+    if not login.get("auth") and not login.get("json") and not login.get("save"):
+        traps = ""
+        if repo:
+            models = re.findall(r"class (\w*[Tt]oken\w*)", api_index(repo))
+            src = "\n".join(_definition(repo, m, lines=60) for m in models)
+            if TOKEN_TRAPS.search(src):
+                traps = (" This app's token model signs, hashes or expires its tokens (see jwt/hash/expiration "
+                         "in it), so a value written by the seed is never accepted as-is.")
+        return ("\nYour login sends a fixed token from the seed." + traps + " If the app has a route that "
+                "issues tokens or logs in, use it instead: [personas.login] with that route's method and path, "
+                "auth = [user, password] (HTTP Basic) or json = {...}, save = { token = \"<field in its answer>\" }, "
+                "and header = { Authorization = \"Bearer {token}\" } (or the scheme the auth code expects)." + where)
+    return ("\nThe app refused the seeded credentials. Check that the seed sets the password through the app's "
+            "own hashing (a set_password method or a password property), that the login sends the field the "
+            "auth code looks users up by (username or email), and that this route is the one that accepts them."
+            + where)
+
+
+def smoke_problem(recording: dict, spec: TwinSpec, repo: Path | None = None) -> str:
     """Why the smoke run is not good enough, or "" if it is."""
     steps = recording.get("steps", [])
     for s in steps:
         if s["status"] == 0 or s["status"] >= 500:
             return f"{s['request']} answered {s['status'] or 'nothing'}: {str(s.get('body'))[:500]}"
     if spec.login and steps and steps[0]["status"] >= 400:
+        advice = login_advice(spec, repo) if steps[0]["status"] in (401, 403) else ""
         return (f"the login step {steps[0]['request']} was refused with {steps[0]['status']}: "
-                f"{str(steps[0].get('body'))[:500]}. The seeded account or the login settings are wrong.")
+                f"{str(steps[0].get('body'))[:500]}. The seeded account or the login settings are wrong.{advice}")
     return ""
 
 
@@ -693,7 +757,7 @@ def try_files(repo: Path, files: dict, backend: str = "nebius", run_twin=None, c
             return {"ok": False, "error": f"{type(e).__name__}: {e}", "infra": _infrastructure(e)}
         if smoke.get("failed"):
             return {"ok": False, "error": smoke["failed"][0]["error"]}
-        problem = smoke_problem(smoke["base"][0], spec) if smoke["base"] else "the smoke persona never ran"
+        problem = smoke_problem(smoke["base"][0], spec, work) if smoke["base"] else "the smoke persona never ran"
         if problem:
             return {"ok": False, "error": problem}
         # calibrate: invented users against the same code twice; what differs is noise
