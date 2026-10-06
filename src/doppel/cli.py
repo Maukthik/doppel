@@ -107,6 +107,31 @@ def cmd_personas(a) -> int:
     return 0
 
 
+def cmd_init(a) -> int:
+    from doppel.bootstrap import init, write
+    result = init(a.app, backend=a.backend, tries=a.tries, personas=a.n)
+    if not result["ok"]:
+        print(f"doppel init: no working setup after {a.tries} attempt(s). Last error:\n{result['error']}",
+              file=sys.stderr)
+        if a.keep_draft:
+            for path in write(Path(a.app), result.get("files", {}), force=a.force):
+                print(f"  draft kept: {path}")
+        return 2
+    for path in write(Path(a.app), result["files"], force=a.force):
+        print(f"wrote {path}")
+    print(f"attempts: {result['attempts']} | users replayed: {result['personas']} | "
+          f"requests served: {result['coverage']:.0%}")
+    print(f"ignoring noisy keys: {', '.join(result['noise']) or '(none found)'}")
+    if result["flaky"]:
+        print("warning: these requests changed status between two identical runs:")
+        for line in result["flaky"]:
+            print(f"  - {line}")
+    if result["notes"]:
+        print(f"model notes: {result['notes']}")
+    print("Review both files before committing: Doppel trusts this setup on every pull request.")
+    return 0
+
+
 def cmd_comment(a) -> int:
     import os
 
@@ -150,6 +175,14 @@ def main(argv=None) -> int:
     g.add_argument("-n", type=int, default=12, help="how many personas")
     g.add_argument("--model", help="default: $PERSONA_MODEL or nvidia/Nemotron-3_5-Lightning")
     g.add_argument("--out", default="personas.json")
+    i = sub.add_parser("init", help="write doppel.toml and doppel_seed.py for an app, checked in the twin")
+    i.add_argument("app", nargs="?", default=".", help="the app's folder (default: current folder)")
+    i.add_argument("--backend", choices=["local", "nebius"], default="nebius",
+                   help="where to try the setup (local uses your current Python environment)")
+    i.add_argument("--tries", type=int, default=3, help="drafts to try before giving up")
+    i.add_argument("-n", type=int, default=6, help="invented users for the noise calibration")
+    i.add_argument("--force", action="store_true", help="overwrite existing doppel.toml / doppel_seed.py")
+    i.add_argument("--keep-draft", action="store_true", help="write the last draft even if it failed")
     c = sub.add_parser("comment", help="post or update the report as a PR comment (in GitHub Actions)")
     c.add_argument("--report", required=True)
     c.add_argument("--pr-number", type=int, help="default: from the GitHub event")
@@ -160,6 +193,8 @@ def main(argv=None) -> int:
     try:
         if a.cmd == "personas":
             return cmd_personas(a)
+        if a.cmd == "init":
+            return cmd_init(a)
         return cmd_run(a)
     except Exception as e:  # noqa: BLE001 - exit 2 = Doppel itself failed (1 means regressions found)
         print(f"doppel: error: {type(e).__name__}: {e}", file=sys.stderr)

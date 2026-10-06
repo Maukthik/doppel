@@ -118,7 +118,20 @@ coverage ("the app served X of Y requests"), so "no regressions" is never confus
 
 ## Twin spec
 
-Put a `doppel.toml` next to your app:
+Let Doppel write it (needs `NEBIUS_API_KEY` and `NEBIUS_PROJECT_ID`):
+
+```bash
+cd your-app
+doppel init            # drafts doppel.toml + doppel_seed.py, boots them in a sandbox, fixes what breaks
+```
+
+`doppel init` reads how the repo says it runs (manifests, CI workflows, Dockerfile, README), asks
+Nemotron 3 Ultra for a twin spec and a seed script, and boots them in the twin with a smoke user.
+A failure goes back to the model (up to `--tries 3`). It then replays invented users against the
+**same** code twice: any JSON key that differs between two identical runs is noise and is added to
+`[diff] ignore`. Review both files before committing. Use `--backend local` to try it on your machine.
+
+Or write it by hand. Put a `doppel.toml` next to your app:
 
 ```toml
 [app]
