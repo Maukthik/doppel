@@ -9,6 +9,38 @@ import sqlite3
 
 SKIP = {".git", "node_modules", ".venv", "venv", "site-packages", "__pycache__", "proc", "sys", "usr", "lib"}
 SUFFIXES = (".sqlite", ".sqlite3", ".db")
+USERISH = ("user", "users", "account", "accounts", "member", "members", "auth_user", "profile", "profiles")
+IDENTITY = ("username", "user_name", "login", "email", "name")
+HASH_PREFIXES = ("scrypt:", "pbkdf2:", "pbkdf2_", "argon2", "bcrypt", "$2a$", "$2b$", "$2y$", "sha256$", "sha1$",
+                 "md5$", "!")
+
+
+def describe_secret(value):
+    """How a stored password looks, never the value itself: a known hash scheme, or plain text."""
+    if value is None or value == "":
+        return "EMPTY"
+    text = str(value)
+    if text.lower().startswith(HASH_PREFIXES) or (len(text) >= 40 and ("$" in text or ":" in text)):
+        return "hashed(" + text.split("$")[0].split(":")[0][:12] + ")"
+    return "PLAIN TEXT, not hashed"
+
+
+def sample_users(con, table, rows=5):
+    """Who can log in: identity columns as they are, password columns described, for the first rows."""
+    cols = [r[1] for r in con.execute('PRAGMA table_info("' + table.replace('"', '""') + '")')]
+    ident = [c for c in cols if c.lower() in IDENTITY]
+    secret = [c for c in cols if "password" in c.lower() or c.lower() in ("hash", "pw_hash", "passwd")]
+    if not ident and not secret:
+        return []
+    picked = ident + secret
+    sql = "SELECT " + ", ".join('"' + c.replace('"', '""') + '"' for c in picked) + \
+          ' FROM "' + table.replace('"', '""') + '" LIMIT ' + str(rows)
+    out = []
+    for row in con.execute(sql):
+        parts = [ident[i] + "=" + str(row[i]) for i in range(len(ident))]  # no zip(strict=): runs on old Pythons
+        parts += [secret[j] + "=" + describe_secret(row[len(ident) + j]) for j in range(len(secret))]
+        out.append("[dbscan]   " + table + ": " + " ".join(parts))
+    return out
 
 
 def scan(roots=(".", "/data", "/tmp", "/var/lib"), depth=4, limit=10):
@@ -31,6 +63,9 @@ def scan(roots=(".", "/data", "/tmp", "/var/lib"), depth=4, limit=10):
                 n = con.execute('SELECT COUNT(*) FROM "' + t.replace('"', '""') + '"').fetchone()[0]
                 counts.append(t + "=" + str(n))
             lines.append(f"[dbscan] {path}: " + (", ".join(counts) or "no tables"))
+            for t in tables:
+                if t.lower() in USERISH:
+                    lines += sample_users(con, t)
         except Exception as e:  # noqa: BLE001 - a scan must never break the seed
             lines.append(f"[dbscan] {path}: unreadable ({type(e).__name__})")
     return lines or ["[dbscan] no SQLite database files found"]

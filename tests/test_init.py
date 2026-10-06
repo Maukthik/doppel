@@ -704,3 +704,45 @@ def test_a_seed_that_never_commits_is_caught():
     committed = no_commit + "    db.session.commit()\n"
     assert not any("never commits" in p for p in bootstrap.check_seed(Path("."), committed))
     assert not any("never commits" in p for p in bootstrap.check_seed(Path("."), "Tag.objects.create(name='x')\n"))
+
+
+# --- why a login is refused, shown from the database and checked before booting ---------------
+
+def test_the_scan_shows_who_can_log_in_and_whether_passwords_are_hashed(tmp_path):
+    import sqlite3
+
+    from doppel.dbscan import scan
+    con = sqlite3.connect(tmp_path / "db.sqlite")
+    con.execute("CREATE TABLE users (id, username, email, password_hash, about_me)")
+    con.executemany("INSERT INTO users VALUES (?, ?, ?, ?, ?)",
+                    [(1, "alice", "alice@x.io", "scrypt:32768:8:1$salt$" + "f" * 64, "hi"),
+                     (2, "bob", "bob@x.io", "doppel-pass", "yo")])
+    con.commit()
+    lines = scan(roots=(str(tmp_path),))
+    assert lines[0].endswith("db.sqlite: users=2")
+    assert "username=alice email=alice@x.io password_hash=hashed(scrypt)" in lines[1]
+    assert "password_hash=PLAIN TEXT" in lines[2] and "about_me" not in lines[2] and "doppel-pass" not in lines[2]
+
+
+def test_seed_evidence_says_which_part_of_the_login_is_wrong():
+    rows = "[dbscan] /app/db.sqlite: users=1\n[dbscan]   users: username=alice email=a@x.io password_hash={}\n"
+    assert "PLAIN TEXT" in bootstrap.seed_evidence(rows.format("PLAIN TEXT, not hashed"), {"auth": ["alice", "p"]})
+    stranger = bootstrap.seed_evidence(rows.format("hashed(scrypt)"), {"auth": ["carol", "p"]})
+    assert "The login uses 'carol', but the seeded users are: alice, a@x.io" in stranger
+    known = bootstrap.seed_evidence(rows.format("hashed(scrypt)"), {"json": {"email": "a@x.io", "password": "p"}})
+    assert "exists and its password is hashed" in known
+    assert "with HTTP Basic as user 'alice'" in bootstrap.login_sent({"method": "POST", "path": "/t",
+                                                                        "auth": ["alice", "p"]})
+
+
+def test_a_json_login_on_a_basic_auth_route_and_a_mismatched_password_are_caught(tmp_path):
+    repo = microblog_like(tmp_path)
+    as_json = ('[app]\nstart = "x"\n[personas.login]\nmethod = "POST"\npath = "/api/tokens"\n'
+               'json = { username = "alice", password = "doppel-pass" }\n')
+    assert "authenticates with HTTP Basic" in bootstrap.check_spec(repo, as_json)[0]
+    as_basic = as_json.replace('json = { username = "alice", password = "doppel-pass" }',
+                               'auth = ["alice", "doppel-pass"]')
+    assert bootstrap.check_spec(repo, as_basic) == []
+    seed = 'PASSWORD = "s3cret"\nUser(username="alice", password=PASSWORD)\n'
+    assert "the seed sets ['s3cret']" in bootstrap.check_login_matches_seed(as_basic, seed)[0]
+    assert bootstrap.check_login_matches_seed(as_basic, seed.replace("s3cret", "doppel-pass")) == []

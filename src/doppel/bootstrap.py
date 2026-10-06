@@ -404,6 +404,53 @@ def check_env(repo: str | Path, toml_text: str, seed: str = "") -> list[str]:
     return problems
 
 
+def seed_passwords(seed: str) -> set[str]:
+    """Literal passwords the seed gives users (password=..., set_password(...), create_user(..., pw),
+    obj.password = ...), with module-level constants like PASSWORD = "x" resolved."""
+    try:
+        tree = ast.parse(seed)
+    except SyntaxError:
+        return set()
+    consts = {t.id: n.value.value for n in tree.body if isinstance(n, ast.Assign)
+              and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)
+              for t in n.targets if isinstance(t, ast.Name)}
+
+    def literal(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        return consts.get(node.id) if isinstance(node, ast.Name) else None
+
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = ast.unparse(node.func).rsplit(".", 1)[-1]
+            for kw in node.keywords:
+                if kw.arg in ("password", "raw_password", "pwd", "passwd"):
+                    found.add(literal(kw.value))
+            if name == "set_password" and node.args:
+                found.add(literal(node.args[0]))
+            if name in ("create_user", "create_superuser") and len(node.args) >= 3:
+                found.add(literal(node.args[2]))
+        elif isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Attribute) \
+                and node.targets[0].attr == "password":
+            found.add(literal(node.value))
+    return {p for p in found if p}
+
+
+def check_login_matches_seed(toml_text: str, seed: str) -> list[str]:
+    """The password the login sends must be one the seed set."""
+    try:
+        login = tomllib.loads(toml_text).get("personas", {}).get("login") or {}
+    except tomllib.TOMLDecodeError:
+        return []
+    sent = login["auth"][1] if isinstance(login.get("auth"), list) and len(login["auth"]) == 2 else \
+        next((v for k, v in (login.get("json") or {}).items() if "pass" in k.lower()), None)
+    set_by_seed = seed_passwords(seed)
+    if sent and set_by_seed and sent not in set_by_seed:
+        return [f"the login sends password {sent!r}, but the seed sets {sorted(set_by_seed)}; use the same one"]
+    return []
+
+
 def _repo_setdefault(repo: Path, name: str, value: str) -> bool:
     pattern = re.compile(rf"setdefault\(\s*['\"]{re.escape(name)}['\"]\s*,\s*['\"]{re.escape(value)}['\"]")
     return any(pattern.search(p.read_text("utf-8", "replace")) for p in _py_files(repo)
@@ -427,6 +474,19 @@ def database_config(repo: Path, limit: int = 2_500) -> str:
     return f"\nWhere the app finds its database (the seed must fill exactly this one):\n{text}" if hits else ""
 
 
+def route_uses_basic(repo: Path, path: str) -> bool:
+    """Does the route declared for the last segment of `path` say HTTP Basic in the lines around it?"""
+    segment = path.rstrip("/").rsplit("/", 1)[-1]
+    if not segment:
+        return False
+    literal = re.compile(r"""['"]/?""" + re.escape(segment) + r"""/?['"]""")
+    for _, keep in route_lines(repo):
+        for k, ln in enumerate(keep):
+            if literal.search(ln.split(":", 1)[1]) and any("basic" in x.lower() for x in keep[k:k + 3]):
+                return True
+    return False
+
+
 def check_spec(repo: str | Path, toml_text: str) -> list[str]:
     """Mistakes in doppel.toml that are certain to fail, found without booting anything."""
     try:
@@ -447,6 +507,9 @@ def check_spec(repo: str | Path, toml_text: str) -> list[str]:
         if app.get(key) and not str(app[key]).startswith("/"):
             problems.append(f"[app] {key} must be a path starting with /, got {app[key]!r}")
     login = data.get("personas", {}).get("login") or {}
+    if login.get("path") and not login.get("auth") and route_uses_basic(Path(repo), str(login["path"])):
+        problems.append(f"[personas.login] {login['path']} authenticates with HTTP Basic (see its decorator), so the "
+                        "login needs auth = [\"<username>\", \"<password>\"], not a JSON body or a header")
     if login.get("path") and not str(login["path"]).startswith("/"):
         problems.append(f"[personas.login] path must start with /, got {login['path']!r}")
     return problems
@@ -750,7 +813,26 @@ def login_advice(spec: TwinSpec, repo: Path | None) -> str:
 USERISH = re.compile(r"(^|_)(users?|accounts?|members?|auth_user|profiles?)$", re.I)
 
 
-def seed_evidence(seed_log: str) -> str:
+def login_sent(login: dict | None) -> str:
+    """What the login step actually sends, in words."""
+    if not login:
+        return ""
+    how = (f"HTTP Basic as user {login['auth'][0]!r}" if login.get("auth")
+           else f"a JSON body with {', '.join(sorted(login['json']))}" if isinstance(login.get("json"), dict)
+           else "only a header" if login.get("header") else "no credentials")
+    return f"\nThe login step sends: {login.get('method', 'POST')} {login.get('path')} with {how}."
+
+
+def _login_identity(login: dict | None) -> str:
+    if not login:
+        return ""
+    if login.get("auth"):
+        return str(login["auth"][0])
+    body = login.get("json") if isinstance(login.get("json"), dict) else {}
+    return str(next((v for k, v in body.items() if k.lower() in ("username", "email", "login", "user")), ""))
+
+
+def seed_evidence(seed_log: str, login: dict | None = None) -> str:
     """What the seed printed and what the databases held right after it: facts, not guesses, for the
     next draft (microblog: five refused logins in a row before anyone looked inside)."""
     if not seed_log.strip():
@@ -760,7 +842,20 @@ def seed_evidence(seed_log: str) -> str:
     verdict = ""
     user_counts = re.findall(r"(\S+?)=(\d+)", " ".join(ln.split(": ", 1)[-1] for ln in scans))
     users = [(t, int(n)) for t, n in user_counts if USERISH.search(t)]
-    if users and all(n == 0 for _, n in users):
+    samples = [ln for ln in scans if ln.startswith("[dbscan]   ")]
+    who = _login_identity(login)
+    known = re.findall(r"(?:username|user_name|login|email|name)=(\S+)", " ".join(samples))
+    if any("PLAIN TEXT" in ln for ln in samples):
+        verdict = ("\nPasswords are stored as PLAIN TEXT, so a login that hashes and compares can never match. "
+                   "Set them through the app's own hashing (a password property, set_password, create_user).")
+    elif who and known and who not in known:
+        verdict = (f"\nThe login uses {who!r}, but the seeded users are: {', '.join(dict.fromkeys(known))}. "
+                   "Log in as one of them, or seed that user.")
+    elif who and who in known:
+        verdict = (f"\nUser {who!r} exists and its password is hashed, so the account is fine: the PASSWORD the "
+                   "seed hashed differs from the one the login sends, or the login sends it in a form this route "
+                   "does not read (HTTP Basic vs a JSON body). Make both use the same literal password.")
+    elif users and all(n == 0 for _, n in users):
         verdict = ("\nEvery user table is EMPTY after the seed: nothing it created was saved. Commit the session "
                    "(db.session.commit(), `with db.begin()`, transaction.atomic exits), and make sure the seed "
                    "uses the app's real config, not a test or in-memory one.")
@@ -893,7 +988,8 @@ def try_files(repo: Path, files: dict, backend: str = "nebius", run_twin=None, c
             return {"ok": False, "error": smoke["failed"][0]["error"]}
         problem = smoke_problem(smoke["base"][0], spec, work) if smoke["base"] else "the smoke persona never ran"
         if problem:
-            return {"ok": False, "error": problem + seed_evidence(smoke.get("seed_log", ""))}
+            return {"ok": False, "error": problem + login_sent(spec.login)
+                    + seed_evidence(smoke.get("seed_log", ""), spec.login)}
         # calibrate: invented users against the same code twice; what differs is noise
         from doppel.personas import generate
         from doppel.rehearsal import repair
@@ -978,6 +1074,7 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
             continue
         files = drafted["files"]
         problems = check_spec(repo, files[SPEC_FILE]) + check_env(repo, files[SPEC_FILE], files.get(SEED_FILE, ""))
+        problems += check_login_matches_seed(files[SPEC_FILE], files.get(SEED_FILE, ""))
         problems += check_seed(repo, files[SEED_FILE]) if SEED_FILE in files else []
         if problems:
             error = ("The files were checked against the repo before booting and would fail:\n"
