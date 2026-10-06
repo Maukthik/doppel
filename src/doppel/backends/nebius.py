@@ -59,12 +59,14 @@ class NebiusTwin:
         self.runs = 0
         self.seed_log = ""  # what the seed printed, plus a scan of the SQLite databases right after it
 
-    async def _step(self, image, shell: str, what: str):
-        """Non-disposable run: the result is a new checkpoint."""
+    async def _step(self, image, shell: str, what: str, shown: str | None = None):
+        """Non-disposable run: the result is a new checkpoint. `shown` is the command as the user wrote it,
+        for the error message (the seed step also carries Doppel's database scan, which nobody needs to read)."""
         out = await image.run(shell=f"cd {APP} && {shell}", disposable=False, timeout=1200)
         self._count(out)
         if out.exit_code != 0:
-            raise RuntimeError(f"{what} failed ({shell}):\n{(out.stdout or '')[-2000:]}{(out.stderr or '')[-2000:]}")
+            raise RuntimeError(f"{what} failed ({shown or shell}):\n"
+                               f"{(out.stdout or '')[-2000:]}{(out.stderr or '')[-2000:]}")
         return out
 
     def _count(self, image) -> None:
@@ -84,7 +86,8 @@ class NebiusTwin:
         if s.seed:
             from doppel.dbscan import one_liner
             # keep the seed's own exit code; the scan only reports and can never fail the step
-            img = await self._step(img, f"{s.exports()}{s.seed}; rc=$?; {one_liner()} || true; exit $rc", "seed")
+            img = await self._step(img, f"{s.exports()}{s.seed}; rc=$?; {one_liner()} || true; exit $rc", "seed",
+                                   shown=s.seed)
             self.seed_log = ((img.stdout or "") + (img.stderr or ""))[-4000:]
         seeded = img
         self.log(f"[twin] seeded checkpoint {seeded.uuid}")

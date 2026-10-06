@@ -766,3 +766,16 @@ def test_the_history_keeps_the_headline_not_the_seed_log_tail():
     assert "alembic" not in bootstrap.headline(login)
     crash = "RuntimeError: seed failed (python doppel_seed.py):\nTraceback ...\nTypeError: 'enumerate' object"
     assert bootstrap.headline(crash).endswith("-> TypeError: 'enumerate' object")
+
+
+def test_a_function_imported_where_the_database_object_was_meant_is_caught(tmp_path):
+    (tmp_path / "api").mkdir()
+    (tmp_path / "api" / "__init__.py").write_text("")
+    (tmp_path / "api" / "app.py").write_text("db = Alchemical()\n\ndef create_app():\n    pass\n")
+    (tmp_path / "microblog.py").write_text("app = create_app()\n\n\n@app.cli.group()\ndef db():\n    pass\n")
+    seed = "from microblog import app, db\nwith app.app_context():\n    db.session.add(x)\n    db.session.commit()\n"
+    problems = bootstrap.check_seed(tmp_path, seed)
+    assert "`db` from microblog.py is a function (@app.cli.group()), so it has no `.session`" in problems[0]
+    assert "`from api.app import db` (db = Alchemical())" in problems[0]
+    fixed = seed.replace("from microblog import app, db", "from microblog import app\nfrom api.app import db")
+    assert bootstrap.check_seed(tmp_path, fixed) == []

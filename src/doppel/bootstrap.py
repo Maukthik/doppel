@@ -1313,6 +1313,18 @@ def _check_call(call: ast.Call, fn: ast.FunctionDef | ast.AsyncFunctionDef, show
     return problems
 
 
+def _assignments_named(repo: Path, name: str) -> str:
+    """Module-level `name = Something(...)` in the repo, as importable lines: the objects behind a name."""
+    out = []
+    for path in _py_files(repo):
+        tree = _parse(path)
+        for node in (tree.body if tree else []):
+            if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                module = ".".join(path.relative_to(repo).with_suffix("").parts).removesuffix(".__init__")
+                out.append(f"`from {module} import {name}` ({ast.unparse(node)[:60]})")
+    return " or ".join(out[:3])
+
+
 def check_seed(repo: str | Path, seed: str) -> list[str]:
     """Problems that would crash the seed, found by reading it against the repo's real code."""
     repo = Path(repo).resolve()
@@ -1362,6 +1374,20 @@ def check_seed(repo: str | Path, seed: str) -> list[str]:
                 mod_file = _module_file(repo, alias.name)
                 if mod_file is not None and alias.asname:
                     modules[alias.asname] = mod_file
+
+    # a name imported from the repo that is a function, used as if it were an object (microblog: the seed
+    # took `db` from microblog.py, where it is a CLI command group, instead of `db = Alchemical()` in api/app.py)
+    callable_attrs = {"__name__", "__doc__", "__wrapped__", "command", "group", "cli", "name", "delay", "s"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in functions:
+            found, shown, mod_file = functions[node.value.id]
+            if isinstance(found, ast.FunctionDef | ast.AsyncFunctionDef) and node.attr not in callable_attrs:
+                deco = ", ".join("@" + ast.unparse(d) for d in found.decorator_list) or "no decorator"
+                others = _assignments_named(repo, found.name)
+                hint = f"; the object you want is probably {others}" if others else ""
+                where = mod_file.relative_to(repo).as_posix()
+                problems.append(f"{SEED_FILE} line {node.lineno}: `{shown}` from {where} is a function ({deco}), "
+                                f"so it has no `.{node.attr}`{hint}")
 
     def target(func: ast.expr):
         if isinstance(func, ast.Name) and func.id in functions:
