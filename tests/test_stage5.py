@@ -25,6 +25,9 @@ class AuthApp(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):  # POST /tokens with Basic alice:pw -> {"access_token": ...}
+        # read the body even when refusing: on Windows, closing a socket with unread data sends a
+        # reset, so the client would see "connection reset" (status 0) instead of the 401
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
         expected = "Basic " + base64.b64encode(b"alice:pw").decode()
         if self.path == "/tokens" and self.headers.get("Authorization") == expected:
             return self._send(200, {"access_token": TOKEN})
