@@ -42,7 +42,9 @@ def code_files(root: str | Path) -> dict[str, Path]:
 
 def persona_command(spec: TwinSpec) -> str:
     """Start the app in the background, replay one persona, stop the app, keep runner's exit code."""
-    return (f"cd {APP} && (PORT={PORT} {spec.start} > /tmp/app.log 2>&1 & echo $! > /tmp/app.pid); "
+    # export, not a `PORT=8000 cmd` prefix: a prefix only reaches the command's environment, so a
+    # start command that spells the port out ("runserver 0.0.0.0:$PORT") would expand it to nothing
+    return (f"cd {APP} && (export PORT={PORT}; {spec.start} > /tmp/app.log 2>&1 & echo $! > /tmp/app.pid); "
             f"python3 /doppel/runner.py --base-url http://127.0.0.1:{PORT} --personas /doppel/persona.json "
             f"--ready-path {shlex.quote(spec.ready)}; rc=$?; "
             f"kill $(cat /tmp/app.pid) 2>/dev/null; "

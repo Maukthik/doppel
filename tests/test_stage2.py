@@ -129,7 +129,7 @@ async def _ret(value):
 
 def test_persona_command_stops_the_app_and_keeps_the_exit_code():
     cmd = nebius.persona_command(TwinSpec(start="python app.py", ready="/health"))
-    assert "PORT=8000 python app.py" in cmd and "--ready-path /health" in cmd
+    assert "export PORT=8000; python app.py" in cmd and "--ready-path /health" in cmd
     assert "kill $(cat /tmp/app.pid)" in cmd and cmd.rstrip().endswith("exit $rc")
 
 
