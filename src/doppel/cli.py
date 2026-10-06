@@ -53,12 +53,20 @@ def cmd_run(a) -> int:
             repaired.extend(fixed["repaired"])
             print(f"[rehearsal] fixed {len(fixed['repaired'])} persona(s) that got nowhere", file=sys.stderr)
             return fixed["personas"]
-    worlds = run_twin(a.base, a.head, spec, personas, refine=refine)
+    from doppel import reach
+    found = reach.changes(a.base, a.head)
+    worlds = run_twin(a.base, a.head, spec, personas, refine=refine, watch=reach.targets(found) if found else None)
     personas = worlds.get("personas", personas)
     for f in worlds.get("failed", []):
         print(f"[twin] persona '{f['persona']}' failed: {f['error']}", file=sys.stderr)
     from doppel.rehearsal import coverage
     cov = {**coverage(worlds["base"]), "repaired": repaired}
+    reached = reach.summarize(found, worlds) if found else []
+    if reached:
+        cov["reach"] = reached
+    elif any(p.endswith(".py") for p in _changed(a.base, a.head)):
+        cov["reach_note"] = ("The changed code runs when the app loads (module or class level), so which users "
+                             "reached it can't be measured line by line.")
     findings = compare(worlds["base"], worlds["head"], spec.ignore, spec.slow_ratio, spec.slow_min_ms)
     steps = sum(len(r["steps"]) for r in worlds["base"])
     judged = None
@@ -86,13 +94,26 @@ def cmd_run(a) -> int:
         Path(a.out).write_text(md, encoding="utf-8")
     if a.json:
         verdicts = [v.__dict__ for v in judged["verdicts"]] if judged else None
+        pr_text = Path(a.pr).read_text(encoding="utf-8") if a.pr else ""
         Path(a.json).write_text(json.dumps({"findings": [f.to_dict() for f in findings], "verdicts": verdicts,
-                                            "coverage": cov, "personas": personas, "worlds": worlds},
+                                            "coverage": cov, "personas": personas, "worlds": worlds,
+                                            "changes": reached, "suspicions": settled,
+                                            "pr": {"title": pr_text.strip().splitlines()[0].lstrip("# ").strip()
+                                                   if pr_text.strip() else "", "body": pr_text},
+                                            "app": Path(a.head).resolve().name},
                                            indent=1, ensure_ascii=False, default=str), encoding="utf-8")
     if a.strict:
         regressions = [v for v in judged["verdicts"] if v.label == "regression"] if judged else findings
         return 1 if regressions else 0
     return 0
+
+
+def _changed(base, head) -> list[str]:
+    from doppel.backends.nebius import changed_files
+    try:
+        return changed_files(base, head)
+    except OSError:
+        return []
 
 
 def cmd_personas(a) -> int:
@@ -165,6 +186,32 @@ def cmd_init(a) -> int:
     return 0
 
 
+def cmd_view(a) -> int:
+    from doppel.viewer import is_run, is_trace, write_run_view, write_view
+    path = Path(a.path)
+    if is_run(path):
+        out = write_run_view(path, Path(a.out) if a.out else None)
+    elif is_trace(path):
+        out = write_view(path, Path(a.out) if a.out else None)
+    else:
+        print(f"doppel view: {path} is neither a run (run.json from `doppel run --json`, or a folder holding "
+              "one) nor an init trace (a folder with attempt-N folders from `doppel init --trace`).",
+              file=sys.stderr)
+        return 2
+    print(f"wrote {out}")
+    if not a.no_open:
+        import webbrowser
+        webbrowser.open(out.resolve().as_uri())
+    return 0
+
+
+def cmd_site(a) -> int:
+    from doppel.site import build
+    files = build(Path(a.gallery), Path(a.out))
+    print(f"wrote {len(files)} pages to {a.out} (open {Path(a.out) / 'index.html'})")
+    return 0
+
+
 def cmd_comment(a) -> int:
     import os
 
@@ -225,6 +272,14 @@ def main(argv=None) -> int:
                    help="with --check: also replay invented users (costs model calls and a second boot)")
     i.add_argument("--force", action="store_true", help="overwrite existing doppel.toml / doppel_seed.py")
     i.add_argument("--keep-draft", action="store_true", help="write the last draft even if it failed")
+    v = sub.add_parser("view", help="turn a run (run.json) or an init trace into a web page and open it")
+    v.add_argument("path", nargs="?", default=".doppel-trace",
+                   help="run.json, a folder holding it, or an init trace folder (default: .doppel-trace)")
+    v.add_argument("--out", help="where to write the page (default: doppel-view.html next to the trace)")
+    v.add_argument("--no-open", action="store_true", help="write the page without opening a browser")
+    st = sub.add_parser("site", help="build the static replay site from recorded runs (for GitHub Pages)")
+    st.add_argument("--gallery", default="site/gallery.json", help="which runs to publish (default: site/gallery.json)")
+    st.add_argument("--out", default="_site", help="output folder (default: _site)")
     c = sub.add_parser("comment", help="post or update the report as a PR comment (in GitHub Actions)")
     c.add_argument("--report", required=True)
     c.add_argument("--pr-number", type=int, help="default: from the GitHub event")
@@ -237,6 +292,10 @@ def main(argv=None) -> int:
             return cmd_personas(a)
         if a.cmd == "init":
             return cmd_init(a)
+        if a.cmd == "view":
+            return cmd_view(a)
+        if a.cmd == "site":
+            return cmd_site(a)
         return cmd_run(a)
     except Exception as e:  # noqa: BLE001 - exit 2 = Doppel itself failed (1 means regressions found)
         print(f"doppel: error: {type(e).__name__}: {e}", file=sys.stderr)

@@ -64,6 +64,18 @@ seeded once (checkpoint). The base world forks from it; the head world forks fro
 PR's files laid on top. Every persona then runs in its own disposable fork of its world, all in
 parallel, so no persona sees another's side effects.
 
+## See a run
+
+Every run now says whether the users actually ran the code the PR changed ("Changed code reached by the
+users: 3 of 3 change(s)"): a line tracer in each world records which changed functions executed.
+
+```bash
+doppel run ... --json run.json
+doppel view run.json        # one web page: both worlds per user, every difference, verdicts, reach
+```
+
+The GitHub Action saves the same page as `doppel-run.html` in each run's artifacts.
+
 ## Judge the changes (stage 3)
 
 ```bash
@@ -117,6 +129,23 @@ With `--rehearse` (on in the Action), personas first run once on base; any stuck
 to Nemotron with the app's real answers and are fixed before the comparison. Every report states
 coverage ("the app served X of Y requests"), so "no regressions" is never confused with "couldn't test".
 
+## Replay site
+
+`doppel site` turns recorded runs into a static site: the hash-leak story up front, a gallery of
+runs, and the benchmark. Each run page shows what happened inside the twin on one time axis (the
+checkpoint, the two worlds, every user's throwaway run), then every request in both worlds and the
+judge's verdicts. Nothing runs when a page opens; it replays what was recorded and says when.
+
+```bash
+doppel site --gallery site/gallery.json --out _site    # then open _site/index.html
+```
+
+`site/gallery.json` lists the runs to publish: a `doppel run --json` file, or a benchmark result with
+the arm to show. Credentials and password hashes are masked before publishing (the hash scheme stays
+visible, so a leak is still a leak), and the build fails if any credential from the environment would
+appear on a page. `.github/workflows/site.yml` publishes it on GitHub Pages on every push to main
+(one-time setup: Settings, Pages, Source: GitHub Actions).
+
 ## Twin spec
 
 Let Doppel write it (needs `NEBIUS_API_KEY` and `NEBIUS_PROJECT_ID`):
@@ -134,6 +163,8 @@ A failure goes back to the model (up to `--tries 3`). It then replays invented u
 
 - `doppel init --trace` saves every attempt to `.doppel-trace/`: the prompt, the reply, each check, what the
   twin did, the database scan, and why init kept or dropped the attempt.
+- `doppel view .doppel-trace` turns that trace into one web page (opened in your browser): each attempt on a
+  five-stage rail, with the checks, smoke requests, database scan and drafted files one click away.
 - `doppel init --check` tests the `doppel.toml` and `doppel_seed.py` already in the app, with no drafting:
   the way to finish a setup by hand (add `--calibrate` to replay invented users too).
 

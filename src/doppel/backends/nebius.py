@@ -22,6 +22,7 @@ import shlex
 from pathlib import Path
 
 from doppel.spec import TwinSpec
+from doppel.timeline import Timeline
 
 APP = "/app"
 SKIP_PARTS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules", ".ruff_cache"}
@@ -40,15 +41,21 @@ def code_files(root: str | Path) -> dict[str, Path]:
             if p.is_file() and not SKIP_PARTS & set(p.relative_to(root).parts)}
 
 
-def persona_command(spec: TwinSpec) -> str:
-    """Start the app in the background, replay one persona, stop the app, keep runner's exit code."""
+def persona_command(spec: TwinSpec, trace: bool = False) -> str:
+    """Start the app in the background, replay one persona, stop the app, keep runner's exit code.
+    With trace, Doppel's line tracer (doppel.reach) loads in the app and its hits go to stderr."""
+    from doppel import reach
+    hook = f"/doppel/{reach.TRACE_DIR}"
+    tracing = (f"export PYTHONPATH={hook}${{PYTHONPATH:+:$PYTHONPATH}} {reach.TARGETS_ENV}={hook}/targets.json "
+               f"{reach.OUT_ENV}=/tmp/doppel-reached.txt {reach.ROOT_ENV}={APP}; ") if trace else ""
+    report = (f"echo '{reach.MARKER}' >&2; cat /tmp/doppel-reached.txt >&2 2>/dev/null; ") if trace else ""
     # export, not a `PORT=8000 cmd` prefix: a prefix only reaches the command's environment, so a
     # start command that spells the port out ("runserver 0.0.0.0:$PORT") would expand it to nothing
-    return (f"cd {APP} && (export PORT={PORT}; {spec.exports()}{spec.start} > /tmp/app.log 2>&1 "
+    return (f"cd {APP} && (export PORT={PORT}; {spec.exports()}{tracing}{spec.start} > /tmp/app.log 2>&1 "
             f"& echo $! > /tmp/app.pid); "
             f"python3 /doppel/runner.py --base-url http://127.0.0.1:{PORT} --personas /doppel/persona.json "
             f"--ready-path {shlex.quote(spec.ready)}; rc=$?; "
-            f"kill $(cat /tmp/app.pid) 2>/dev/null; "
+            f"kill $(cat /tmp/app.pid) 2>/dev/null; sleep 0.2; {report}"
             f"if [ $rc -ne 0 ]; then echo '--- app log ---' >&2; tail -n 40 /tmp/app.log >&2; fi; exit $rc")
 
 
@@ -58,11 +65,13 @@ class NebiusTwin:
         self.cost = 0.0
         self.runs = 0
         self.seed_log = ""  # what the seed printed, plus a scan of the SQLite databases right after it
+        self.tl = Timeline("nebius")  # what happened inside the sandboxes, for doppel view and the site
 
-    async def _step(self, image, shell: str, what: str, shown: str | None = None):
+    async def _step(self, image, shell: str, what: str, shown: str | None = None, kind: str = "checkpoint"):
         """Non-disposable run: the result is a new checkpoint. `shown` is the command as the user wrote it,
         for the error message (the seed step also carries Doppel's database scan, which nobody needs to read)."""
-        out = await image.run(shell=f"cd {APP} && {shell}", disposable=False, timeout=1200)
+        with self.tl.span("build", what, kind=kind):
+            out = await image.run(shell=f"cd {APP} && {shell}", disposable=False, timeout=1200)
         self._count(out)
         if out.exit_code != 0:
             raise RuntimeError(f"{what} failed ({shown or shell}):\n"
@@ -78,8 +87,10 @@ class NebiusTwin:
 
     async def build_worlds(self, base_dir, head_dir) -> dict:
         s = self.spec
-        img = await self.client.images.use(s.image)
-        img = await img.apply_files(code_files(base_dir))
+        with self.tl.span("build", f"image {s.image}"):
+            img = await self.client.images.use(s.image)
+        with self.tl.span("build", "upload base code"):
+            img = await img.apply_files(code_files(base_dir))
         self._count(img)
         if s.install:
             img = await self._step(img, s.exports() + s.install, "install (base)")
@@ -93,14 +104,16 @@ class NebiusTwin:
         self.log(f"[twin] seeded checkpoint {seeded.uuid}")
 
         base = await self._step(seeded, s.exports() + s.migrate, "migrate (base)") if s.migrate else seeded
-        head = await seeded.apply_files(code_files(head_dir))
+        with self.tl.span("build", "fork head world (PR files on top)", kind="fork"):
+            head = await seeded.apply_files(code_files(head_dir))
         self._count(head)
         if s.install:
             head = await self._step(head, s.exports() + s.install, "install (head)")
         if s.migrate:
             head = await self._step(head, s.exports() + s.migrate, "migrate (head)")
         self.log(f"[twin] base world {base.uuid} | head world {head.uuid}")
-        await self.verify(base, base_dir, head, head_dir)
+        with self.tl.span("build", "verify both worlds hold their code"):
+            await self.verify(base, base_dir, head, head_dir)
         return {"base": base, "head": head}
 
     async def verify(self, base, base_dir, head, head_dir) -> None:
@@ -124,17 +137,28 @@ class NebiusTwin:
                 raise RuntimeError(f"the {label} world doesn't contain the {label} code for: {', '.join(wrong[:8])}")
         self.log(f"[twin] verified {len(changed)} changed file(s) in both worlds")
 
-    async def replay_persona(self, world, persona: dict, sem: asyncio.Semaphore) -> dict:
+    async def replay_persona(self, world, persona: dict, sem: asyncio.Semaphore, watch: dict | None = None,
+                             lane: str = "") -> dict:
+        from doppel import reach
         files = {"doppel/runner.py": RUNNER.read_bytes(),
                  "doppel/persona.json": json.dumps([persona]).encode()}
+        if watch:
+            files[f"doppel/{reach.TRACE_DIR}/sitecustomize.py"] = reach.TRACER.encode()
+            files[f"doppel/{reach.TRACE_DIR}/targets.json"] = json.dumps(watch).encode()
+        name = persona.get("name", "persona")
+        start = self.tl.now()
         for attempt in range(RETRIES):
             try:
                 async with sem:
-                    out = await world.run(shell=persona_command(self.spec), files=files, timeout=PERSONA_TIMEOUT,
+                    start = self.tl.now()
+                    out = await world.run(shell=persona_command(self.spec, trace=bool(watch)), files=files,
+                                          timeout=PERSONA_TIMEOUT,
                                           truncate_output_at=OUTPUT_LIMIT)
                 break
             except Exception as e:  # noqa: BLE001 - retry network hiccups, re-raise anything else
                 if attempt == RETRIES - 1 or not _transient(e):
+                    if lane:
+                        self.tl.add(lane, name, start, ok=False, kind="persona")
                     raise
                 await asyncio.sleep(2 * (attempt + 1))
         self._count(out)
@@ -143,16 +167,24 @@ class NebiusTwin:
             recordings = json.loads(text.splitlines()[-1]) if text else None
         except ValueError:
             recordings = None
+        if lane:
+            ok = out.exit_code == 0 and isinstance(recordings, list) and bool(recordings)
+            self.tl.add(lane, name, start, ok=ok, kind="persona",
+                        requests=len(recordings[0].get("steps", [])) if ok else 0)
         if out.exit_code != 0 or not isinstance(recordings, list) or not recordings:
             raise RuntimeError(f"persona '{persona.get('name')}' failed (exit {out.exit_code}):\n"
                                f"{text[-1500:]}\n{(out.stderr or '')[-1500:]}")
+        if watch:
+            recordings[0]["reached"] = reach.parse_hits(out.stderr or "")
         return recordings[0]
 
-    async def _replay_all(self, world, personas: list[dict], sem) -> list:
+    async def _replay_all(self, world, personas: list[dict], sem, watch: dict | None = None,
+                          lane: str = "") -> list:
         """One recording (or the exception) per persona; one broken persona doesn't sink the run."""
-        return await asyncio.gather(*(self.replay_persona(world, p, sem) for p in personas), return_exceptions=True)
+        return await asyncio.gather(*(self.replay_persona(world, p, sem, watch, lane) for p in personas),
+                                    return_exceptions=True)
 
-    async def run(self, base_dir, head_dir, personas: list[dict], refine=None) -> dict:
+    async def run(self, base_dir, head_dir, personas: list[dict], refine=None, watch: dict | None = None) -> dict:
         for attempt in range(RETRIES):  # building talks to the API a lot: retry network hiccups
             try:
                 worlds = await self.build_worlds(base_dir, head_dir)
@@ -165,18 +197,20 @@ class NebiusTwin:
         sem = asyncio.Semaphore(MAX_PARALLEL)
         rehearsal = None
         if refine is not None:  # rehearse on base, let the caller fix personas that got nowhere
-            first = await self._replay_all(worlds["base"], personas, sem)
+            first = await self._replay_all(worlds["base"], personas, sem, lane="rehearsal")
             rehearsal = [r for r in first if isinstance(r, dict)]
             personas = refine(personas, rehearsal)
             self.log(f"[twin] rehearsal: {len(rehearsal)} personas replayed on base")
-        base, head = await asyncio.gather(self._replay_all(worlds["base"], personas, sem),
-                                          self._replay_all(worlds["head"], personas, sem))
+        watch = watch or {}
+        base, head = await asyncio.gather(
+            self._replay_all(worlds["base"], personas, sem, watch.get("base"), lane="base"),
+            self._replay_all(worlds["head"], personas, sem, watch.get("head"), lane="head"))
         out = pair(personas, base, head)
         failed = f" | {len(out['failed'])} personas failed" if out["failed"] else ""
         self.log(f"[twin] {2 * len(personas)} persona runs | {self.runs} sandbox runs | "
                  f"reported cost {self.cost:.4f}{failed}")
         return {**out, "personas": personas, "rehearsal": rehearsal, "sandbox_cost": self.cost,
-                "seed_log": self.seed_log}
+                "seed_log": self.seed_log, "timeline": {**self.tl.to_dict(), "sandbox_runs": self.runs}}
 
 
 HASH_SCRIPT = ("import hashlib,json,os;p=json.load(open('/doppel/paths.json'));"
@@ -224,8 +258,9 @@ def make_client():
                                         transport_timeout=timeout))
 
 
-def run_twin(base_dir, head_dir, spec: TwinSpec, personas: list[dict], client=None, refine=None) -> dict:
+def run_twin(base_dir, head_dir, spec: TwinSpec, personas: list[dict], client=None, refine=None,
+             watch: dict | None = None) -> dict:
     """Same contract as backends.local.run_twin: {"base": recordings, "head": recordings, "failed": [...],
     "personas": the personas actually replayed (after refine), "rehearsal": base recordings or None}."""
     twin = NebiusTwin(client or make_client(), spec)
-    return asyncio.run(twin.run(base_dir, head_dir, personas, refine))
+    return asyncio.run(twin.run(base_dir, head_dir, personas, refine, watch))

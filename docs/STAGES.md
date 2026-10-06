@@ -49,5 +49,7 @@ Seed once, a fresh world per persona, replay, diff, Markdown report, offline tes
 - [ ] README first screen: claim with the number, chart, 15-second GIF, real badges.
 - [ ] Red demo PR comment with the guided section, then the fix turning green.
 - [ ] 3-minute video, Devpost text, feedback on Token Factory and Nemotron.
-- [ ] Optional: Doppel Viewer (replay a run visually).
+- [x] Doppel Viewer: `doppel view` for runs and init traces, with the twin's timeline.
+- [x] Replay site: `doppel site` + GitHub Pages workflow (hash-leak hero, gallery, benchmark).
+- [ ] Record one fresh Nebius run for the site, so its timeline shows parallel sandboxes.
 - Tag: `v1.0-submission`
