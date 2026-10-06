@@ -23,7 +23,12 @@ def test_the_start_command_sees_the_port_however_it_reads_it(tmp_path, monkeypat
     subprocess.run(["sh", "-c", app_part.replace("/tmp/app.log", f"{folder}/app.log")
                     .replace("/tmp/app.pid", f"{folder}/app.pid")], check=True, timeout=10)
     log = tmp_path / "app.log"
-    deadline = time.monotonic() + 5                      # the app runs in the background: wait for its line
-    while time.monotonic() < deadline and not log.read_text().strip():
+    # the app runs in the background, so its log may not even exist yet: on Windows, Git Bash takes a
+    # moment to start the nested `sh`, and reading too early failed with FileNotFoundError
+    def written() -> str:
+        return log.read_text().strip() if log.exists() else ""
+
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline and not written():
         time.sleep(0.05)
-    assert log.read_text().strip() == f"serving on 0.0.0.0:{nebius.PORT}"
+    assert written() == f"serving on 0.0.0.0:{nebius.PORT}"
