@@ -758,7 +758,7 @@ def last_line(error: str) -> str:
 
 def draft(repo: str | Path, error: str = "", previous: dict | None = None, chat=nemotron_chat,
           model: str | None = None, history: list[str] | None = None, repeated: int = 0,
-          best_stage: int = 0) -> dict:
+          best_stage: int = 0, on_exchange=None) -> dict:
     """Ask Nemotron for the two files. Returns {"files": {name: text}, "notes": str}."""
     model = model or os.getenv("INIT_MODEL", "nvidia/Nemotron-3-Ultra-550b-a55b")
     feedback = ""
@@ -779,6 +779,8 @@ def draft(repo: str | Path, error: str = "", previous: dict | None = None, chat=
                            code=gather_code(repo))
     # not lower: at 0.2 Nemotron fell into a loop repeating env vars until it hit max_tokens
     text, _, _ = chat(model, prompt, temperature=0.6)
+    if on_exchange:
+        on_exchange(prompt, text)
     reply = parse_json(text, key="files") or {}
     files = {}
     for f in reply.get("files") or []:
@@ -989,7 +991,7 @@ def refusal_summary(recordings: list[dict], examples: int = 6) -> str:
 
 
 def try_files(repo: Path, files: dict, backend: str = "nebius", run_twin=None, chat=nemotron_chat,
-              personas: int = 6, min_coverage: float = MIN_COVERAGE) -> dict:
+              personas: int = 6, min_coverage: float = MIN_COVERAGE, calibrate: bool = True) -> dict:
     """Boot the twin with these files. Returns {"ok": bool, "error": str, "files": ..., ...}."""
     run_twin = run_twin or _run_twin(backend)
     with tempfile.TemporaryDirectory(prefix="doppel-init-", ignore_cleanup_errors=True) as tmp:
@@ -1003,12 +1005,18 @@ def try_files(repo: Path, files: dict, backend: str = "nebius", run_twin=None, c
             smoke = run_twin(work, work, spec, [smoke_persona(spec)])
         except Exception as e:  # noqa: BLE001 - every failure is feedback for the next draft
             return {"ok": False, "error": f"{type(e).__name__}: {e}", "infra": _infrastructure(e)}
+        seen = {"seed_log": smoke.get("seed_log", ""),
+                "smoke_steps": [{"request": s["request"], "status": s["status"]}
+                                for r in smoke.get("base", []) for s in r["steps"]]}
         if smoke.get("failed"):
-            return {"ok": False, "error": smoke["failed"][0]["error"]}
+            return {"ok": False, "error": smoke["failed"][0]["error"], **seen}
         problem = smoke_problem(smoke["base"][0], spec, work) if smoke["base"] else "the smoke persona never ran"
         if problem:
             return {"ok": False, "error": problem + login_sent(spec.login)
-                    + seed_evidence(smoke.get("seed_log", ""), spec.login)}
+                    + seed_evidence(smoke.get("seed_log", ""), spec.login), **seen}
+        if not calibrate:
+            return {"ok": True, "error": "", "files": files, "noise": [], "flaky": [], "coverage": None,
+                    "personas": 0, "repaired": [], "calibrated": False, **seen}
         # calibrate: invented users against the same code twice; what differs is noise
         from doppel.personas import generate
         from doppel.rehearsal import repair
@@ -1020,8 +1028,9 @@ def try_files(repo: Path, files: dict, backend: str = "nebius", run_twin=None, c
         if fixed["repaired"]:
             twice = run_twin(work, work, spec, fixed["personas"])
     served = coverage(twice["base"])
+    seen["users"] = [{"persona": r["persona"], "served": f"{coverage([r]):.0%}"} for r in twice["base"]]
     if served < min_coverage:
-        return {"ok": False, "files": files, "coverage": served,
+        return {"ok": False, "files": files, "coverage": served, **seen,
                 "error": (f"the twin boots, but the invented users got only {served:.0%} of their requests "
                           f"served (need {min_coverage:.0%}), even after giving them the seeded login. "
                           "Usually the login, the token in the seed, or the [personas] guide is wrong, or "
@@ -1031,10 +1040,75 @@ def try_files(repo: Path, files: dict, backend: str = "nebius", run_twin=None, c
     files = {**files, SPEC_FILE: with_ignore(files[SPEC_FILE], noise)}
     return {"ok": True, "error": "", "files": files, "noise": noise,
             "flaky": flaky_statuses(twice["base"], twice["head"]),
-            "coverage": served, "personas": len(twice["base"]), "repaired": fixed["repaired"]}
+            "coverage": served, "personas": len(twice["base"]), "repaired": fixed["repaired"], **seen}
 
 
 # ---------------------------------------------------------------- the loop
+
+
+TRACE_DIR = ".doppel-trace"
+
+
+class Tracer:
+    """`doppel init --trace`: every step of every attempt as a file you can open and read.
+
+        attempt-1/1-prompt.txt     what Nemotron was asked
+                  2-reply.txt      what it wrote back (and the two files it drafted)
+                  3-checks.txt     each pre-boot check and what it found
+                  4-boot.txt       what the twin did: smoke requests, statuses, the outcome
+                  5-evidence.txt   the seed's output and the database scan
+                  6-calibration.txt  invented users, coverage, noisy keys (when it works)
+        summary.txt                one line per attempt: how far it got and what init decided
+
+    Recording only: a traced run decides exactly what an untraced one would."""
+
+    def __init__(self, root: Path | None):
+        self.root = root
+        self.attempt = 0
+        if root:
+            if root.exists():
+                shutil.rmtree(root, ignore_errors=True)
+            root.mkdir(parents=True)
+
+    def start(self, attempt: int) -> None:
+        self.attempt = attempt
+        if self.root:
+            (self.root / f"attempt-{attempt}").mkdir(exist_ok=True)
+
+    def write(self, name: str, text: str) -> None:
+        if self.root:
+            (self.root / f"attempt-{self.attempt}" / name).write_text(text, encoding="utf-8")
+
+    def note(self, line: str) -> None:
+        if self.root:
+            with open(self.root / "summary.txt", "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+
+
+def run_checks(repo: Path, files: dict) -> list[tuple[str, list[str]]]:
+    """Every pre-boot check by name, with what each found (an empty list means it passed)."""
+    spec, seed = files.get(SPEC_FILE, ""), files.get(SEED_FILE, "")
+    return [("check_spec: install, paths, login shape", check_spec(repo, spec)),
+            ("check_env: seed and server share settings", check_env(repo, spec, seed)),
+            ("check_login_matches_seed: same password", check_login_matches_seed(spec, seed)),
+            ("check_seed: names, fields, commits, hashes", check_seed(repo, seed) if seed else [])]
+
+
+def checks_report(results: list[tuple[str, list[str]]]) -> str:
+    lines = []
+    for name, found in results:
+        lines.append(f"{'PASS' if not found else 'FAIL'}  {name}")
+        lines += [f"      - {p}" for p in found]
+    return "\n".join(lines) + "\n"
+
+
+def boot_report(result: dict) -> str:
+    lines = [f"outcome: {'works' if result.get('ok') else 'failed'}"]
+    for s in result.get("smoke_steps", []):
+        lines.append(f"  smoke: {s['request']} -> {s['status']}")
+    if result.get("error"):
+        lines.append("\nerror sent back to the model:\n" + result["error"])
+    return "\n".join(lines) + "\n"
 
 
 STATE_FILE = ".doppel-init.json"  # progress kept between runs, removed once a setup works
@@ -1055,9 +1129,34 @@ def save_state(repo: Path, best: dict, history: list[str]) -> None:
         pass  # progress is a convenience; never fail init over it
 
 
+def calibration_report(result: dict) -> str:
+    lines = [f"requests served: {result['coverage']:.0%} (the bar is {MIN_COVERAGE:.0%})"]
+    lines += [f"  user {u['persona']}: {u['served']} served" for u in result.get("users", [])]
+    lines.append(f"given the seeded login: {', '.join(result.get('repaired') or []) or 'nobody needed it'}")
+    lines.append(f"noisy keys (differed between two identical runs): {', '.join(result['noise']) or 'none'}")
+    lines.append(f"requests that changed status between identical runs: {', '.join(result['flaky']) or 'none'}")
+    return "\n".join(lines) + "\n"
+
+
+def check(repo: str | Path, backend: str = "nebius", calibrate: bool = False, run_twin=None,
+          chat=nemotron_chat, log=lambda msg: print(msg, file=sys.stderr)) -> dict:
+    """`doppel init --check`: test the doppel.toml and doppel_seed.py already in the repo, with no model
+    drafting. For a human finishing the last step, and for seeing what each safety net catches."""
+    repo = Path(repo).resolve()
+    files = {n: (repo / n).read_text("utf-8") for n in (SPEC_FILE, SEED_FILE) if (repo / n).is_file()}
+    if SPEC_FILE not in files:
+        return {"ok": False, "error": f"no {SPEC_FILE} in {repo}", "checks": []}
+    checked = run_checks(repo, files)
+    if any(found for _, found in checked):
+        return {"ok": False, "error": "checks failed before booting", "checks": checked}
+    log(f"[check] all checks passed; booting the twin ({backend})")
+    result = try_files(repo, files, backend=backend, run_twin=run_twin, chat=chat, calibrate=calibrate)
+    return {**result, "checks": checked}
+
+
 def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotron_chat, run_twin=None,
          personas: int = 6, log=lambda msg: print(msg, file=sys.stderr),
-         min_coverage: float = MIN_COVERAGE, resume: bool = True) -> dict:
+         min_coverage: float = MIN_COVERAGE, resume: bool = True, trace: Path | None = None) -> dict:
     """Draft, verify, repair, calibrate. Returns the last attempt with "attempts" and "notes" added;
     "files" holds the calibrated files when "ok" is true. Only writes its progress file (STATE_FILE).
 
@@ -1065,6 +1164,7 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
     start, login, users), with the parts it proved told to stay as they are. Static checks of the
     spec and the seed run before any sandbox boots. Progress carries over to the next run."""
     repo = Path(repo).resolve()
+    tracer = Tracer(Path(trace) if trace else None)
     state = load_state(repo) if resume else {}
     best = state.get("best") or {"stage": 0, "files": None, "error": ""}
     history: list[str] = list(state.get("history") or [])
@@ -1075,26 +1175,34 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
     result: dict = {"ok": False, "error": "no attempt made"}
     for attempt in range(1, tries + 1):
         log(f"[init] attempt {attempt}/{tries}: asking Nemotron for {SPEC_FILE} and {SEED_FILE}")
+        tracer.start(attempt)
+
+        def exchange(prompt: str, text: str) -> None:
+            tracer.write("1-prompt.txt", prompt)
+            tracer.write("2-reply.txt", text)
         try:
             ends = [re.sub(r"^attempt \d+: (reached \w+: )?", "", h) for h in history[:-1]]
             repeated = next((i + 1 for i, e in enumerate(ends) if error and same_error(e, headline(error))), 0)
             try:
                 drafted = draft(repo, error, previous, chat=chat, history=history[:-1], repeated=repeated,
-                                best_stage=best["stage"])
+                                best_stage=best["stage"], on_exchange=exchange)
             except ValueError as cut_off:  # a reply cut off or without the files: ask once more, no boot spent
                 log(f"[init] the reply could not be used ({str(cut_off)[:80]}...); asking again")
                 drafted = draft(repo, error, previous, chat=chat, history=history[:-1], repeated=repeated,
-                                best_stage=best["stage"])
+                                best_stage=best["stage"], on_exchange=exchange)
         except Exception as e:  # noqa: BLE001
             error, result = f"the reply could not be used: {e}", {"ok": False, "error": str(e)}
             log(f"[init] {error}")
             history.append(f"attempt {attempt}: unusable reply -> {str(e)[:160]}")
+            tracer.note(history[-1])
             error, previous = (best["error"], best["files"]) if best["files"] else (error, previous)
             continue
         files = drafted["files"]
-        problems = check_spec(repo, files[SPEC_FILE]) + check_env(repo, files[SPEC_FILE], files.get(SEED_FILE, ""))
-        problems += check_login_matches_seed(files[SPEC_FILE], files.get(SEED_FILE, ""))
-        problems += check_seed(repo, files[SEED_FILE]) if SEED_FILE in files else []
+        for name, text in files.items():
+            tracer.write(f"2-drafted-{name}", text)
+        checked = run_checks(repo, files)
+        tracer.write("3-checks.txt", checks_report(checked))
+        problems = [p for _, found in checked for p in found]
         if problems:
             error = ("The files were checked against the repo before booting and would fail:\n"
                      + "\n".join(f"- {p}" for p in problems))
@@ -1102,16 +1210,22 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
             result = {"ok": False, "error": error, "attempts": attempt, "notes": drafted["notes"], "files": files}
             log(f"[init] checks found {len(problems)} problem(s), no sandbox needed: {problems[0][:160]}")
             history.append(f"attempt {attempt}: checked before booting -> {problems[0][:200]}")
+            tracer.note(history[-1] + "  [no sandbox used]")
             continue
         log(f"[init] booting the twin ({backend}) to check it")
         result = try_files(repo, files, backend=backend, run_twin=run_twin, chat=chat, personas=personas,
                            min_coverage=min_coverage)
         result.update(attempts=attempt, notes=drafted["notes"])
         result.setdefault("files", files)
+        tracer.write("4-boot.txt", boot_report(result))
+        if result.get("seed_log"):
+            tracer.write("5-evidence.txt", result["seed_log"])
         if result["ok"]:
             log(f"[init] works: {result['personas']} users replayed, {result['coverage']:.0%} of requests "
                 f"served, ignoring {len(result['noise'])} noisy key(s)")
             (repo / STATE_FILE).unlink(missing_ok=True)
+            tracer.write("6-calibration.txt", calibration_report(result))
+            tracer.note(f"attempt {attempt}: WORKS, {result['coverage']:.0%} served, noise {result['noise']}")
             return result
         error = result["error"]
         log(f"[init] failed: {error.splitlines()[0][:200] if error else 'unknown error'}")
@@ -1125,7 +1239,10 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
         if stage >= best["stage"]:
             best = {"stage": stage, "files": files, "error": error}
             previous = files
+            tracer.note(history[-1] + "  [kept: the next draft starts from this one]")
         else:  # went backwards: continue from the attempt that got furthest, not from this one
+            tracer.note(history[-1] + f"  [dropped: went backwards, keeping the attempt that reached "
+                                      f"{STAGES[best['stage']]}]")
             log(f"[init] that went backwards (failed at {STAGES[stage]}); continuing from the best attempt, "
                 f"which got past {', '.join(STAGES[:best['stage']])}")
             error, previous = best["error"], best["files"]

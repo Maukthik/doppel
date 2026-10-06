@@ -131,6 +131,11 @@ A failure goes back to the model (up to `--tries 3`). It then replays invented u
 **same** code twice: any JSON key that differs between two identical runs is noise and is added to
 `[diff] ignore`. Review both files before committing. Use `--backend local` to try it on your machine.
 
+- `doppel init --trace` saves every attempt to `.doppel-trace/`: the prompt, the reply, each check, what the
+  twin did, the database scan, and why init kept or dropped the attempt.
+- `doppel init --check` tests the `doppel.toml` and `doppel_seed.py` already in the app, with no drafting:
+  the way to finish a setup by hand (add `--calibrate` to replay invented users too).
+
 Or write it by hand. Put a `doppel.toml` next to your app:
 
 ```toml

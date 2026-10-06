@@ -107,10 +107,35 @@ def cmd_personas(a) -> int:
     return 0
 
 
+def cmd_check(a) -> int:
+    from doppel.bootstrap import boot_report, calibration_report, check, checks_report
+    result = check(a.app, backend=a.backend, calibrate=a.calibrate)
+    if result.get("checks"):
+        print("Checks before booting (free, no sandbox):")
+        print(checks_report(result["checks"]))
+    if "smoke_steps" in result or result.get("error", "").startswith(("RuntimeError", "the login", "the twin")):
+        print("Booting the twin:")
+        print(boot_report(result))
+    if result.get("seed_log"):
+        print("What the seed printed, and the databases after it:\n" + result["seed_log"])
+    if result.get("ok") and result.get("coverage") is not None:
+        print(calibration_report(result))
+    if not result.get("ok"):
+        print(f"doppel init --check: {result.get('error', '').splitlines()[0]}", file=sys.stderr)
+        return 1
+    print("The setup works." + ("" if a.calibrate else " (Add --calibrate to replay invented users too.)"))
+    return 0
+
+
 def cmd_init(a) -> int:
-    from doppel.bootstrap import init, write
+    from doppel.bootstrap import TRACE_DIR, init, write
+    if a.check:
+        return cmd_check(a)
+    trace = Path(a.app) / TRACE_DIR if a.trace else None
     result = init(a.app, backend=a.backend, tries=a.tries, personas=a.n, min_coverage=a.min_coverage,
-                  resume=not a.fresh)
+                  resume=not a.fresh, trace=trace)
+    if trace:
+        print(f"trace of every attempt: {trace}", file=sys.stderr)
     if not result["ok"]:
         if result.get("infra"):
             print("doppel init: the sandbox API timed out or dropped the connection, so the setup was never "
@@ -190,6 +215,12 @@ def main(argv=None) -> int:
     i.add_argument("--min-coverage", type=float, default=0.4,
                    help="share of the invented users' requests that must be served (default 0.4)")
     i.add_argument("--fresh", action="store_true", help="ignore progress saved by an earlier run")
+    i.add_argument("--trace", action="store_true",
+                   help="save every attempt (prompt, reply, checks, boot, evidence) to .doppel-trace/")
+    i.add_argument("--check", action="store_true",
+                   help="test the doppel.toml and doppel_seed.py already in the app, without drafting")
+    i.add_argument("--calibrate", action="store_true",
+                   help="with --check: also replay invented users (costs model calls and a second boot)")
     i.add_argument("--force", action="store_true", help="overwrite existing doppel.toml / doppel_seed.py")
     i.add_argument("--keep-draft", action="store_true", help="write the last draft even if it failed")
     c = sub.add_parser("comment", help="post or update the report as a PR comment (in GitHub Actions)")

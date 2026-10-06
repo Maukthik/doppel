@@ -779,3 +779,39 @@ def test_a_function_imported_where_the_database_object_was_meant_is_caught(tmp_p
     assert "`from api.app import db` (db = Alchemical())" in problems[0]
     fixed = seed.replace("from microblog import app, db", "from microblog import app\nfrom api.app import db")
     assert bootstrap.check_seed(tmp_path, fixed) == []
+
+
+# --- glass box: --trace records every step, --check tests hand-made files -------------------------
+
+def test_trace_records_every_step_of_every_attempt(tmp_path):
+    app = shop_without_spec(tmp_path)
+    broken = SHOP_SPEC.replace('start = "python app.py"', 'start = "python missing.py"')
+    bad_seed = reply(SHOP_SPEC, seed="from x import (\n")                # caught before booting
+    model = ScriptedModel([bad_seed, reply(broken), reply(SHOP_SPEC)])
+    trace = tmp_path / "trace"
+    result = bootstrap.init(app, backend="local", tries=3, chat=model, log=lambda m: None, trace=trace)
+    assert result["ok"] and result["attempts"] == 3
+    one, two, three = (trace / f"attempt-{i}" for i in (1, 2, 3))
+    assert "You set up a web API" in (one / "1-prompt.txt").read_text()
+    assert "FAIL  check_seed" in (one / "3-checks.txt").read_text() and not (one / "4-boot.txt").exists()
+    assert "PASS  check_spec" in (two / "3-checks.txt").read_text()
+    assert "outcome: failed" in (two / "4-boot.txt").read_text()
+    assert "missing.py" in (two / "4-boot.txt").read_text()
+    assert "outcome: works" in (three / "4-boot.txt").read_text()
+    assert "smoke: GET /health -> 200" in (three / "4-boot.txt").read_text()
+    assert "products=10" in (three / "5-evidence.txt").read_text()
+    assert "requests served: 100%" in (three / "6-calibration.txt").read_text()
+    summary = (trace / "summary.txt").read_text().splitlines()
+    assert "[no sandbox used]" in summary[0] and "[kept" in summary[1] and "WORKS" in summary[2]
+
+
+def test_check_mode_tests_the_files_in_the_repo_without_a_model(tmp_path):
+    app = shop_without_spec(tmp_path)
+    (app / "doppel.toml").write_text(SHOP_SPEC)
+    ok = bootstrap.check(app, backend="local", log=lambda m: None, chat=None)
+    assert ok["ok"] and ok["calibrated"] is False and all(not found for _, found in ok["checks"])
+    (app / "doppel.toml").write_text(SHOP_SPEC + '\n[personas.login]\nmethod = "POST"\npath = "/login"\n'
+                                     'auth = ["user", "password"]\n')
+    caught = bootstrap.check(app, backend="local", log=lambda m: None, chat=None)
+    assert not caught["ok"] and "smoke_steps" not in caught                  # never booted
+    assert "placeholder" in bootstrap.checks_report(caught["checks"])
