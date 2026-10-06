@@ -63,6 +63,18 @@ seeded once (checkpoint). The base world forks from it; the head world forks fro
 PR's files laid on top. Every persona then runs in its own disposable fork of its world, all in
 parallel, so no persona sees another's side effects.
 
+## See a run
+
+Every run now says whether the users actually ran the code the PR changed ("Changed code reached by the
+users: 3 of 3 change(s)"): a line tracer in each world records which changed functions executed.
+
+```bash
+doppel run ... --json run.json
+doppel view run.json        # one web page: both worlds per user, every difference, verdicts, reach
+```
+
+The GitHub Action saves the same page as `doppel-run.html` in each run's artifacts.
+
 ## Judge the changes (stage 3)
 
 ```bash

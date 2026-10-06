@@ -187,14 +187,17 @@ def cmd_init(a) -> int:
 
 
 def cmd_view(a) -> int:
-    from doppel.viewer import is_trace, write_view
+    from doppel.viewer import is_run, is_trace, write_run_view, write_view
     path = Path(a.path)
-    if not is_trace(path):
-        print(f"doppel view: {path} is not an init trace (it has no attempt-N folders). Run "
-              "`doppel init --trace` in the app's folder first, then `doppel view .doppel-trace` there.",
+    if is_run(path):
+        out = write_run_view(path, Path(a.out) if a.out else None)
+    elif is_trace(path):
+        out = write_view(path, Path(a.out) if a.out else None)
+    else:
+        print(f"doppel view: {path} is neither a run (run.json from `doppel run --json`, or a folder holding "
+              "one) nor an init trace (a folder with attempt-N folders from `doppel init --trace`).",
               file=sys.stderr)
         return 2
-    out = write_view(path, Path(a.out) if a.out else None)
     print(f"wrote {out}")
     if not a.no_open:
         import webbrowser
@@ -262,8 +265,9 @@ def main(argv=None) -> int:
                    help="with --check: also replay invented users (costs model calls and a second boot)")
     i.add_argument("--force", action="store_true", help="overwrite existing doppel.toml / doppel_seed.py")
     i.add_argument("--keep-draft", action="store_true", help="write the last draft even if it failed")
-    v = sub.add_parser("view", help="turn an init trace into a web page and open it")
-    v.add_argument("path", nargs="?", default=".doppel-trace", help="the trace folder (default: .doppel-trace)")
+    v = sub.add_parser("view", help="turn a run (run.json) or an init trace into a web page and open it")
+    v.add_argument("path", nargs="?", default=".doppel-trace",
+                   help="run.json, a folder holding it, or an init trace folder (default: .doppel-trace)")
     v.add_argument("--out", help="where to write the page (default: doppel-view.html next to the trace)")
     v.add_argument("--no-open", action="store_true", help="write the page without opening a browser")
     c = sub.add_parser("comment", help="post or update the report as a PR comment (in GitHub Actions)")
