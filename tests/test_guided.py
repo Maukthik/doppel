@@ -126,3 +126,14 @@ def test_intended_needs_a_real_quote_and_confirmed_suspicions_escalate():
     assert [x.label for x in v] == ["regression", "intended"]
     checks = {"s1": {"status": "confirmed", "changes": ["f1"]}, "s2": {"status": "refuted", "changes": ["f2"]}}
     assert [x.label for x in escalate([Verdict("needs_human", "?"), v[1]], checks)] == ["regression", "intended"]
+
+
+def test_probe_counter_and_checker_agree_when_the_tag_is_missing():
+    # r11 in the bench: the checker read probe_s1's transcript, but the counter said 0 probes
+    from doppel.suspects import _probe_lines, is_probe
+    personas = [{"name": "probe_s1", "steps": []}, {"name": "alice", "steps": []},
+                {"name": "round2 qty", "probe": "round2", "steps": []}]
+    rec = [{"persona": p["name"], "steps": [{"request": "GET /x", "status": 200, "body": {}}]} for p in personas]
+    assert sum(is_probe(p) for p in personas) == 2
+    lines = _probe_lines(personas, rec, rec)
+    assert "probe_s1" in lines and "round2 qty" in lines and "alice" not in lines
