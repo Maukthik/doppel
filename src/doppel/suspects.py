@@ -96,12 +96,18 @@ def suspect(pr_text: str, diff: str, source: str, model: str | None = None, max_
     return {"suspicions": out, "usd": usd, "model": model}
 
 
+def is_probe(persona: dict) -> bool:
+    """A persona written for a suspicion: tagged with "probe", or named like one when the model
+    dropped the tag. The checker and the bench's probe counter both use this, so they agree."""
+    return bool(persona.get("probe")) or str(persona.get("name", "")).lower().startswith("probe")
+
+
 def _probe_lines(personas: list[dict], base: list[dict], head: list[dict], limit: int = 30_000) -> str:
     """Compact transcripts of the probe personas (the ones written for a suspicion)."""
     head_by = {r["persona"]: r for r in head}
     lines = []
     for p, rb in ((p, rb) for rb in base for p in personas if p["name"] == rb["persona"]):
-        if not (p.get("probe") or p["name"].lower().startswith("probe")):
+        if not is_probe(p):
             continue
         rh = head_by.get(rb["persona"], {"steps": []})
         lines.append(f"probe '{p['name']}' for {p.get('probe', 'a suspicion')}:")

@@ -39,7 +39,7 @@ from doppel.judge import Verdict, escalate, judge
 from doppel.personas import code_diff, cost_usd, generate, nemotron_chat, parse_json, read_source
 from doppel.rehearsal import coverage, repair
 from doppel.spec import TwinSpec
-from doppel.suspects import check, suspect
+from doppel.suspects import check, is_probe, suspect
 
 HERE = Path(__file__).resolve().parent
 UPSTREAM = "https://github.com/miguelgrinberg/microblog-api.git"
@@ -229,7 +229,7 @@ def arm_doppel(base: Path, head: Path, pr: dict, backend: str, n: int, personas_
             for r in worlds[w]] for w in ("base", "head")},
         "steps": sum(len(r["steps"]) for r in worlds["base"]),
         "suspicions": [{**x, **chk["checks"].get(x["id"], {})} for x in sus["suspicions"]],
-        "probes": sum(bool(p.get("probe")) for p in personas), "rounds": rounds,
+        "probes": sum(is_probe(p) for p in personas), "rounds": rounds,
         "generation": {"model": gen.get("model"), "probe_model": gen.get("probe_model")},
         "usd": {"suspect": sus["usd"], "check": chk["usd"],
                 "personas": gen["usd"], "rehearsal": fix["usd"], "judge": judged.get("usd", 0.0),
