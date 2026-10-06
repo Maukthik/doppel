@@ -96,6 +96,16 @@ def test_a_hanging_seed_is_the_setup_s_fault_not_the_network_s():
     assert not bootstrap._infrastructure(RuntimeError("app never became ready"))
 
 
+def test_the_cause_at_the_bottom_of_a_long_error_reaches_the_model(tmp_path):
+    app = shop_without_spec(tmp_path)
+    error = "install (base) failed (uv sync --frozen):\n" + "  File x.py, line 1\n" * 2000 + \
+        "Exception: you need a C compiler to build uWSGI"
+    model = ScriptedModel([reply(SHOP_SPEC)])
+    bootstrap.draft(app, error=error, previous={"doppel.toml": "x"}, chat=model)
+    assert "you need a C compiler to build uWSGI" in model.prompts[0]
+    assert "uv sync --frozen" in model.prompts[0]          # and the command that failed
+
+
 def test_draft_keeps_only_the_two_allowed_files(tmp_path):
     app = shop_without_spec(tmp_path)
     text = json.dumps({"files": [{"path": "doppel.toml", "content": SHOP_SPEC},

@@ -82,7 +82,10 @@ Hard rules:
 - Commands run with a POSIX shell in the repo root. Set env vars inline, e.g.
   "env APP_DB=sqlite python manage.py migrate". Prefer the dev server or a single-worker server.
 - Install only what the app needs to serve its API. Skip production servers that need a compiler
-  (uwsgi), test and lint tools, and frontend builds.
+  (uwsgi), test and lint tools, and frontend builds. The base image has NO C compiler. Lockfile
+  installs (`uv sync`, `poetry install`, `pip install .` or `-e .`) install everything the project
+  lists, so if it lists such a server, `pip install` the other dependencies by name instead.
+- Keep every command short: set each env var once, never repeat a setting.
 - Read settings files carefully: use real setting names and module paths from the code below.
 
 Return ONLY JSON:
@@ -111,6 +114,15 @@ Previous files:
 
 def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + f"\n... [{len(text) - limit} more characters]\n"
+
+
+def _clip_error(text: str, limit: int = 6_000) -> str:
+    """Keep both ends of a long error: the command up top, the actual cause at the bottom
+    (pip and uv print pages of traceback before the one line that matters)."""
+    if len(text) <= limit:
+        return text
+    head, tail = limit // 4, limit - limit // 4
+    return f"{text[:head]}\n... [{len(text) - limit} characters cut] ...\n{text[-tail:]}"
 
 
 def file_tree(repo: Path, limit: int = 300) -> str:
@@ -176,9 +188,10 @@ def draft(repo: str | Path, error: str = "", previous: dict | None = None, chat=
     feedback = ""
     if error:
         shown = "\n".join(f"--- {k}\n{v}" for k, v in (previous or {}).items())
-        feedback = FEEDBACK.format(error=_clip(error, 6_000), files=shown)
+        feedback = FEEDBACK.format(error=_clip_error(error), files=shown)
     prompt = PROMPT.format(feedback=feedback, hints=gather_hints(repo), code=gather_code(repo))
-    text, _, _ = chat(model, prompt, temperature=0.2)
+    # not lower: at 0.2 Nemotron fell into a loop repeating env vars until it hit max_tokens
+    text, _, _ = chat(model, prompt, temperature=0.6)
     reply = parse_json(text, key="files") or {}
     files = {}
     for f in reply.get("files") or []:
