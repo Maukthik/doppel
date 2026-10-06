@@ -85,7 +85,11 @@ Hard rules:
   (uwsgi), test and lint tools, and frontend builds. The base image has NO C compiler. Lockfile
   installs (`uv sync`, `poetry install`, `pip install .` or `-e .`) install everything the project
   lists, so if it lists such a server, `pip install` the other dependencies by name instead.
-- Keep every command short: set each env var once, never repeat a setting.
+- Keep every command short: set each env var once, never repeat a setting. Only use env var and
+  setting names that appear in the code below; never invent one.
+- SQLite needs the folder of each database file to exist. Read where the settings put every
+  SQLite file (the main database, task queues, caches) and `mkdir -p` those folders in `seed`
+  before anything opens them; they are usually git-ignored, so the checkout does not have them.
 - Read settings files carefully: use real setting names and module paths from the code below.
 
 Return ONLY JSON:
@@ -101,7 +105,7 @@ Repository code:
 
 FEEDBACK = """
 A previous attempt FAILED. Fix the cause, keep what worked, and return both files again.
-Error:
+{history}Error of the last attempt:
 {error}
 
 Previous files:
@@ -181,14 +185,23 @@ def gather_code(repo: str | Path, limit: int = MAX_CODE) -> str:
 # ---------------------------------------------------------------- 2. draft
 
 
+def last_line(error: str) -> str:
+    lines = [ln.strip() for ln in error.strip().splitlines() if ln.strip()]
+    return lines[-1][:300] if lines else ""
+
+
 def draft(repo: str | Path, error: str = "", previous: dict | None = None, chat=nemotron_chat,
-          model: str | None = None) -> dict:
+          model: str | None = None, history: list[str] | None = None) -> dict:
     """Ask Nemotron for the two files. Returns {"files": {name: text}, "notes": str}."""
     model = model or os.getenv("INIT_MODEL", "nvidia/Nemotron-3-Ultra-550b-a55b")
     feedback = ""
     if error:
         shown = "\n".join(f"--- {k}\n{v}" for k, v in (previous or {}).items())
-        feedback = FEEDBACK.format(error=_clip_error(error), files=shown)
+        earlier = ""
+        if history:
+            earlier = ("Earlier attempts, oldest first. Each changed something and still failed, so do "
+                       "not go back to them:\n" + "\n".join(f"- {h}" for h in history) + "\n")
+        feedback = FEEDBACK.format(history=earlier, error=_clip_error(error), files=shown)
     prompt = PROMPT.format(feedback=feedback, hints=gather_hints(repo), code=gather_code(repo))
     # not lower: at 0.2 Nemotron fell into a loop repeating env vars until it hit max_tokens
     text, _, _ = chat(model, prompt, temperature=0.6)
@@ -339,10 +352,11 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
     "files" holds the calibrated files when "ok" is true. Writes nothing to disk."""
     repo = Path(repo).resolve()
     error, previous, result = "", None, {"ok": False, "error": "no attempt made"}
+    history: list[str] = []  # one line per failed attempt, so the model stops going in circles
     for attempt in range(1, tries + 1):
         log(f"[init] attempt {attempt}/{tries}: asking Nemotron for {SPEC_FILE} and {SEED_FILE}")
         try:
-            drafted = draft(repo, error, previous, chat=chat)
+            drafted = draft(repo, error, previous, chat=chat, history=history[:-1])
         except Exception as e:  # noqa: BLE001
             error, result = f"the reply could not be used: {e}", {"ok": False, "error": str(e)}
             log(f"[init] {error}")
@@ -358,6 +372,7 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
             return result
         error = result["error"]
         log(f"[init] failed: {error.splitlines()[0][:200] if error else 'unknown error'}")
+        history.append(f"attempt {attempt}: {error.splitlines()[0][:200] if error else '?'} -> {last_line(error)}")
         if result.get("infra"):
             log("[init] that is a network or sandbox problem, not the setup: stopping instead of redrafting")
             return result

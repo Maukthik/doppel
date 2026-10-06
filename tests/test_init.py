@@ -106,6 +106,18 @@ def test_the_cause_at_the_bottom_of_a_long_error_reaches_the_model(tmp_path):
     assert "uv sync --frozen" in model.prompts[0]          # and the command that failed
 
 
+def test_later_drafts_see_every_earlier_failure_not_just_the_last(tmp_path):
+    app = shop_without_spec(tmp_path)
+    bad = [SHOP_SPEC.replace('start = "python app.py"', f'start = "python missing{i}.py"') for i in (1, 2)]
+    model = ScriptedModel([reply(bad[0]), reply(bad[1]), reply(SHOP_SPEC)])
+    result = bootstrap.init(app, backend="local", tries=3, chat=model, log=lambda m: None)
+    assert result["ok"] and result["attempts"] == 3
+    third = model.prompts[-2]                     # the last setup prompt (the final one is personas)
+    assert "Earlier attempts" in third and "attempt 1:" in third and "missing1.py" in third
+    assert "missing2.py" in third                 # the last attempt's full error and files
+    assert "Earlier attempts" not in model.prompts[1]   # nothing earlier than the last on attempt 2
+
+
 def test_draft_keeps_only_the_two_allowed_files(tmp_path):
     app = shop_without_spec(tmp_path)
     text = json.dumps({"files": [{"path": "doppel.toml", "content": SHOP_SPEC},
