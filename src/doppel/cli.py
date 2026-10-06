@@ -111,8 +111,13 @@ def cmd_init(a) -> int:
     from doppel.bootstrap import init, write
     result = init(a.app, backend=a.backend, tries=a.tries, personas=a.n)
     if not result["ok"]:
-        print(f"doppel init: no working setup after {a.tries} attempt(s). Last error:\n{result['error']}",
-              file=sys.stderr)
+        if result.get("infra"):
+            print("doppel init: the sandbox API timed out or dropped the connection, so the setup was never "
+                  "tried. A slow upload is the usual cause: raise DOPPEL_HTTP_TIMEOUT (seconds, default 180) "
+                  f"and run it again.\n{result['error']}", file=sys.stderr)
+        else:
+            print(f"doppel init: no working setup after {result.get('attempts', a.tries)} attempt(s). "
+                  f"Last error:\n{result['error']}", file=sys.stderr)
         if a.keep_draft:
             for path in write(Path(a.app), result.get("files", {}), force=a.force):
                 print(f"  draft kept: {path}")

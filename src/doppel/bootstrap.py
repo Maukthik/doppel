@@ -270,6 +270,14 @@ def _workspace(repo: Path, files: dict, root: Path) -> Path:
     return work
 
 
+def _infrastructure(e: Exception) -> bool:
+    """A network or sandbox-API failure says nothing about the drafted setup, so redrafting can't fix it."""
+    import subprocess
+
+    from doppel.backends.nebius import _transient
+    return _transient(e) and not isinstance(e, RuntimeError | subprocess.TimeoutExpired)
+
+
 def _run_twin(backend: str):
     if backend == "local":
         from doppel.backends.local import run_twin
@@ -292,7 +300,7 @@ def try_files(repo: Path, files: dict, backend: str = "nebius", run_twin=None, c
         try:
             smoke = run_twin(work, work, spec, [smoke_persona(spec)])
         except Exception as e:  # noqa: BLE001 - every failure is feedback for the next draft
-            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            return {"ok": False, "error": f"{type(e).__name__}: {e}", "infra": _infrastructure(e)}
         if smoke.get("failed"):
             return {"ok": False, "error": smoke["failed"][0]["error"]}
         problem = smoke_problem(smoke["base"][0], spec) if smoke["base"] else "the smoke persona never ran"
@@ -337,6 +345,9 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
             return result
         error = result["error"]
         log(f"[init] failed: {error.splitlines()[0][:200] if error else 'unknown error'}")
+        if result.get("infra"):
+            log("[init] that is a network or sandbox problem, not the setup: stopping instead of redrafting")
+            return result
     return result
 
 

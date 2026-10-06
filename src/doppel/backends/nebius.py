@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import shlex
 from pathlib import Path
 
@@ -205,7 +206,11 @@ def pair(personas: list[dict], base: list, head: list) -> dict:
 def make_client():
     from contree_sdk import Contree
     from contree_sdk.config import ContreeConfig
-    return Contree(config=ContreeConfig(operation_poll_secs_min=0.05, operation_poll_secs_max=1.0))
+    # the SDK's default HTTP timeout is 10 s per request: too short to upload a few-hundred-kB file
+    # (a screenshot, a lockfile) on a slow home uplink, which fails the whole build with ApiTimeoutError
+    timeout = float(os.getenv("DOPPEL_HTTP_TIMEOUT", "180"))
+    return Contree(config=ContreeConfig(operation_poll_secs_min=0.05, operation_poll_secs_max=1.0,
+                                        transport_timeout=timeout))
 
 
 def run_twin(base_dir, head_dir, spec: TwinSpec, personas: list[dict], client=None, refine=None) -> dict:

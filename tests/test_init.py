@@ -75,6 +75,27 @@ def test_a_reply_without_a_spec_counts_as_a_failed_attempt(tmp_path):
     assert result["ok"] and result["attempts"] == 2
 
 
+def test_a_network_failure_stops_the_loop_instead_of_redrafting(tmp_path):
+    class ApiTimeoutError(Exception):
+        pass
+
+    def flaky_api(*args, **kwargs):
+        raise ApiTimeoutError("POST /sandboxes/v1/files timed out")
+
+    app = shop_without_spec(tmp_path)
+    model = ScriptedModel([reply(SHOP_SPEC), reply(SHOP_SPEC)])
+    result = bootstrap.init(app, tries=3, chat=model, run_twin=flaky_api, log=lambda m: None)
+    assert not result["ok"] and result["infra"] and result["attempts"] == 1
+    assert len(model.prompts) == 1                     # one draft, not three
+    assert "doppel.toml" in result["files"]            # the draft is kept for --keep-draft
+
+
+def test_a_hanging_seed_is_the_setup_s_fault_not_the_network_s():
+    import subprocess
+    assert not bootstrap._infrastructure(subprocess.TimeoutExpired("python seed.py", 600))
+    assert not bootstrap._infrastructure(RuntimeError("app never became ready"))
+
+
 def test_draft_keeps_only_the_two_allowed_files(tmp_path):
     app = shop_without_spec(tmp_path)
     text = json.dumps({"files": [{"path": "doppel.toml", "content": SHOP_SPEC},
