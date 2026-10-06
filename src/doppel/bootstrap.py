@@ -60,7 +60,7 @@ guide = \"\"\"...\"\"\"          # 2-4 sentences for the user-writer: how to log
 [personas.login]             # only if most API routes need a login, else omit this whole table
 method = "POST"
 path = "/..."
-auth = ["user", "password"]  # HTTP Basic, OR json = {{...}} for a JSON body; omit both if not needed
+auth = ["<a username your seed creates>", "<its password>"]  # HTTP Basic, OR json = {{...}}; omit if not needed
 save = {{ token = "dotted.path.in.response" }}   # omit if the token is fixed (see seed rules)
 header = {{ Authorization = "Bearer {{token}}" }}
 [diff]
@@ -487,6 +487,9 @@ def route_uses_basic(repo: Path, path: str) -> bool:
     return False
 
 
+PLACEHOLDERS = {"user", "username", "password", "pass", "passwd", "secret", "user@example.com", "your-password"}
+
+
 def check_spec(repo: str | Path, toml_text: str) -> list[str]:
     """Mistakes in doppel.toml that are certain to fail, found without booting anything."""
     try:
@@ -507,6 +510,11 @@ def check_spec(repo: str | Path, toml_text: str) -> list[str]:
         if app.get(key) and not str(app[key]).startswith("/"):
             problems.append(f"[app] {key} must be a path starting with /, got {app[key]!r}")
     login = data.get("personas", {}).get("login") or {}
+    creds = [str(x) for x in (login.get("auth") or [])] + [str(v) for v in (login.get("json") or {}).values()]
+    copied = [c for c in creds if c.lower() in PLACEHOLDERS or (c.startswith("<") and c.endswith(">"))]
+    if copied:
+        problems.append(f"[personas.login] sends {copied}, placeholder text copied from the template, not a real "
+                        "account: use a username and the password that doppel_seed.py actually creates")
     if login.get("path") and not login.get("auth") and route_uses_basic(Path(repo), str(login["path"])):
         problems.append(f"[personas.login] {login['path']} authenticates with HTTP Basic (see its decorator), so the "
                         "login needs auth = [\"<username>\", \"<password>\"], not a JSON body or a header")
@@ -733,6 +741,16 @@ def same_error(a: str, b: str) -> bool:
     return bool(a and b) and norm(a) == norm(b)
 
 
+def headline(error: str) -> str:
+    """One line for the attempt history. A failed command's cause is at the bottom of its output; a smoke
+    or coverage failure says it in the first line (what follows is evidence: routes, scans, seed logs)."""
+    core = error.split("\nThe login step sends:")[0].split("\nWhat the databases held")[0]
+    first = core.splitlines()[0][:160] if core.strip() else "?"
+    if core.startswith(("the login step", "the twin boots", "GET ", "POST ")):
+        return first
+    return f"{first} -> {last_line(core)}"
+
+
 def last_line(error: str) -> str:
     lines = [ln.strip() for ln in error.strip().splitlines() if ln.strip()]
     return lines[-1][:300] if lines else ""
@@ -801,7 +819,8 @@ def login_advice(spec: TwinSpec, repo: Path | None) -> str:
                          "in it), so a value written by the seed is never accepted as-is.")
         return ("\nYour login sends a fixed token from the seed." + traps + " If the app has a route that "
                 "issues tokens or logs in, use it instead: [personas.login] with that route's method and path, "
-                "auth = [user, password] (HTTP Basic) or json = {...}, save = { token = \"<field in its answer>\" }, "
+                "auth = [\"<a seeded username>\", \"<its password>\"] (HTTP Basic) or json = {...}, "
+                "save = { token = \"<field in its answer>\" }, "
                 "and header = { Authorization = \"Bearer {token}\" } (or the scheme the auth code expects)." + where)
     return ("\nThe app refused the seeded credentials. Check, in this order: that the seed and the server use the "
             "SAME database (set its location once in [app] env, not only for the seed); that the seed sets the "
@@ -1057,8 +1076,8 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
     for attempt in range(1, tries + 1):
         log(f"[init] attempt {attempt}/{tries}: asking Nemotron for {SPEC_FILE} and {SEED_FILE}")
         try:
-            ends = [last_line(h.split(" -> ", 1)[-1]) for h in history[:-1]]
-            repeated = next((i + 1 for i, e in enumerate(ends) if same_error(e, last_line(error))), 0)
+            ends = [re.sub(r"^attempt \d+: (reached \w+: )?", "", h) for h in history[:-1]]
+            repeated = next((i + 1 for i, e in enumerate(ends) if error and same_error(e, headline(error))), 0)
             try:
                 drafted = draft(repo, error, previous, chat=chat, history=history[:-1], repeated=repeated,
                                 best_stage=best["stage"])
@@ -1102,8 +1121,7 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
             log("[init] that is a network or sandbox problem, not the setup: stopping instead of redrafting")
             return result
         stage = stage_reached(error)
-        history.append(f"attempt {attempt}: reached {STAGES[max(stage, 0)]}: "
-                       f"{error.splitlines()[0][:160] if error else '?'} -> {last_line(error)}")
+        history.append(f"attempt {attempt}: reached {STAGES[max(stage, 0)]}: {headline(error)}")
         if stage >= best["stage"]:
             best = {"stage": stage, "files": files, "error": error}
             previous = files

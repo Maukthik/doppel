@@ -746,3 +746,23 @@ def test_a_json_login_on_a_basic_auth_route_and_a_mismatched_password_are_caught
     seed = 'PASSWORD = "s3cret"\nUser(username="alice", password=PASSWORD)\n'
     assert "the seed sets ['s3cret']" in bootstrap.check_login_matches_seed(as_basic, seed)[0]
     assert bootstrap.check_login_matches_seed(as_basic, seed.replace("s3cret", "doppel-pass")) == []
+
+
+def test_placeholder_credentials_copied_from_the_template_are_caught(tmp_path):
+    copied = '[app]\nstart = "x"\n[personas.login]\nmethod = "POST"\npath = "/t"\nauth = ["user", "password"]\n'
+    assert "placeholder text copied from the template" in bootstrap.check_spec(tmp_path, copied)[0]
+    angled = copied.replace('["user", "password"]', '["<a seeded username>", "<its password>"]')
+    assert "placeholder" in bootstrap.check_spec(tmp_path, angled)[0]
+    real = copied.replace('["user", "password"]', '["alice", "doppel-pass"]')
+    assert bootstrap.check_spec(tmp_path, real) == []
+    seed = 'u = User(username="alice")\nu.password = "doppel-pass"\n'            # microblog's real seed shape
+    assert "the seed sets ['doppel-pass']" in bootstrap.check_login_matches_seed(copied, seed)[0]
+
+
+def test_the_history_keeps_the_headline_not_the_seed_log_tail():
+    login = ("the login step POST /api/tokens was refused with 401: {...}. wrong.\nadvice\n"
+             "\nWhat the databases held right after the seed:\n[dbscan] x: users=3\nINFO alembic upgrade")
+    assert bootstrap.headline(login).startswith("the login step POST /api/tokens was refused with 401")
+    assert "alembic" not in bootstrap.headline(login)
+    crash = "RuntimeError: seed failed (python doppel_seed.py):\nTraceback ...\nTypeError: 'enumerate' object"
+    assert bootstrap.headline(crash).endswith("-> TypeError: 'enumerate' object")
