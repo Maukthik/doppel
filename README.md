@@ -129,6 +129,23 @@ With `--rehearse` (on in the Action), personas first run once on base; any stuck
 to Nemotron with the app's real answers and are fixed before the comparison. Every report states
 coverage ("the app served X of Y requests"), so "no regressions" is never confused with "couldn't test".
 
+## Replay site
+
+`doppel site` turns recorded runs into a static site: the hash-leak story up front, a gallery of
+runs, and the benchmark. Each run page shows what happened inside the twin on one time axis (the
+checkpoint, the two worlds, every user's throwaway run), then every request in both worlds and the
+judge's verdicts. Nothing runs when a page opens; it replays what was recorded and says when.
+
+```bash
+doppel site --gallery site/gallery.json --out _site    # then open _site/index.html
+```
+
+`site/gallery.json` lists the runs to publish: a `doppel run --json` file, or a benchmark result with
+the arm to show. Credentials and password hashes are masked before publishing (the hash scheme stays
+visible, so a leak is still a leak), and the build fails if any credential from the environment would
+appear on a page. `.github/workflows/site.yml` publishes it on GitHub Pages on every push to main
+(one-time setup: Settings, Pages, Source: GitHub Actions).
+
 ## Twin spec
 
 Let Doppel write it (needs `NEBIUS_API_KEY` and `NEBIUS_PROJECT_ID`):

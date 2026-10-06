@@ -205,6 +205,13 @@ def cmd_view(a) -> int:
     return 0
 
 
+def cmd_site(a) -> int:
+    from doppel.site import build
+    files = build(Path(a.gallery), Path(a.out))
+    print(f"wrote {len(files)} pages to {a.out} (open {Path(a.out) / 'index.html'})")
+    return 0
+
+
 def cmd_comment(a) -> int:
     import os
 
@@ -270,6 +277,9 @@ def main(argv=None) -> int:
                    help="run.json, a folder holding it, or an init trace folder (default: .doppel-trace)")
     v.add_argument("--out", help="where to write the page (default: doppel-view.html next to the trace)")
     v.add_argument("--no-open", action="store_true", help="write the page without opening a browser")
+    st = sub.add_parser("site", help="build the static replay site from recorded runs (for GitHub Pages)")
+    st.add_argument("--gallery", default="site/gallery.json", help="which runs to publish (default: site/gallery.json)")
+    st.add_argument("--out", default="_site", help="output folder (default: _site)")
     c = sub.add_parser("comment", help="post or update the report as a PR comment (in GitHub Actions)")
     c.add_argument("--report", required=True)
     c.add_argument("--pr-number", type=int, help="default: from the GitHub event")
@@ -284,6 +294,8 @@ def main(argv=None) -> int:
             return cmd_init(a)
         if a.cmd == "view":
             return cmd_view(a)
+        if a.cmd == "site":
+            return cmd_site(a)
         return cmd_run(a)
     except Exception as e:  # noqa: BLE001 - exit 2 = Doppel itself failed (1 means regressions found)
         print(f"doppel: error: {type(e).__name__}: {e}", file=sys.stderr)

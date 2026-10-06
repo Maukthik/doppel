@@ -22,6 +22,7 @@ from pathlib import Path
 
 from doppel import runner
 from doppel.spec import TwinSpec
+from doppel.timeline import Timeline
 
 SKIP = shutil.ignore_patterns(".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules")
 
@@ -133,7 +134,7 @@ def build_world(code_dir: Path, seeded: Path, spec: TwinSpec, work: Path) -> Pat
 
 
 def replay_world(world: Path, spec: TwinSpec, personas: list[dict], work: Path, tag: str = "",
-                 watch: dict | None = None) -> list:
+                 watch: dict | None = None, tl: Timeline | None = None, lane: str = "") -> list:
     """Every persona gets its own fresh copy of the migrated world, so one persona's
     side effects (an extra order, a sold-out item) can't leak into another's results.
     In the sandbox backend each copy is a fork of one checkpoint and they run in parallel.
@@ -141,11 +142,17 @@ def replay_world(world: Path, spec: TwinSpec, personas: list[dict], work: Path, 
     out = []
     for i, persona in enumerate(personas):
         fork = work / f"persona{tag}{i}"
+        start = tl.now() if tl else 0.0
         shutil.copytree(world, fork)
         try:
             out += _serve_and_replay(fork, spec, [persona], watch)
+            if tl:
+                tl.add(lane, persona.get("name", f"persona {i + 1}"), start, kind="persona",
+                       requests=len(out[-1].get("steps", [])))
         except Exception as e:  # noqa: BLE001 - one broken persona doesn't sink the run
             out.append(e)
+            if tl:
+                tl.add(lane, persona.get("name", f"persona {i + 1}"), start, ok=False, kind="persona")
         shutil.rmtree(fork, ignore_errors=True)
     return out
 
@@ -161,11 +168,14 @@ def run_twin(base_dir: str | Path, head_dir: str | Path, spec: TwinSpec, persona
     "rehearsal": base recordings before refine, or None}. refine(personas, recordings) -> personas."""
     from doppel.backends.nebius import pair
     base_dir, head_dir = Path(base_dir).resolve(), Path(head_dir).resolve()
+    tl = Timeline("local")
     with tempfile.TemporaryDirectory(prefix="doppel-", ignore_cleanup_errors=True) as tmp:
         work = Path(tmp)
         seeded = work / "seeded"
-        shutil.copytree(base_dir, seeded, ignore=SKIP)
-        seed_log = _run(spec.seed, seeded, "seed", spec.env)
+        with tl.span("build", "copy base code", kind="step"):
+            shutil.copytree(base_dir, seeded, ignore=SKIP)
+        with tl.span("build", "seed data (once)", kind="checkpoint"):
+            seed_log = _run(spec.seed, seeded, "seed", spec.env)
         if spec.seed:
             from doppel.dbscan import scan
             here = os.getcwd()
@@ -177,14 +187,17 @@ def run_twin(base_dir: str | Path, head_dir: str | Path, spec: TwinSpec, persona
         worlds = {}
         for label, code in (("base", base_dir), ("head", head_dir)):
             (work / label).mkdir()
-            worlds[label] = build_world(code, seeded, spec, work / label)
+            with tl.span("build", f"{label} world", kind="fork"):
+                worlds[label] = build_world(code, seeded, spec, work / label)
         rehearsal = None
         if refine is not None:
-            rehearsal = [r for r in replay_world(worlds["base"], spec, personas, work / "base", "r")
-                         if isinstance(r, dict)]
+            rehearsal = [r for r in replay_world(worlds["base"], spec, personas, work / "base", "r",
+                                                 tl=tl, lane="rehearsal") if isinstance(r, dict)]
             personas = refine(personas, rehearsal)
         watch = watch or {}
-        base = replay_world(worlds["base"], spec, personas, work / "base", watch=watch.get("base"))
-        head = replay_world(worlds["head"], spec, personas, work / "head", watch=watch.get("head"))
+        base = replay_world(worlds["base"], spec, personas, work / "base", watch=watch.get("base"),
+                            tl=tl, lane="base")
+        head = replay_world(worlds["head"], spec, personas, work / "head", watch=watch.get("head"),
+                            tl=tl, lane="head")
         return {**pair(personas, base, head), "personas": personas, "rehearsal": rehearsal,
-                "seed_log": seed_log[-4000:]}
+                "seed_log": seed_log[-4000:], "timeline": tl.to_dict()}

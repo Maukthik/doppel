@@ -1,0 +1,48 @@
+name: site
+
+# Builds the replay site from recorded runs and publishes it on GitHub Pages.
+# One-time setup: Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e .
+      - name: Record the shop demo fresh (local backend, no secrets)
+        run: doppel run --base examples/shop/base --head examples/shop/head --personas examples/shop/personas.json --json site/runs/shop-local.json --out /tmp/shop.md
+      - name: Build the site (fails if a credential would be published)
+        run: doppel site --gallery site/gallery.json --out _site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
