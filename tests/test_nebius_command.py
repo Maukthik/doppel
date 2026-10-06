@@ -14,11 +14,14 @@ from doppel.spec import TwinSpec
                                    "env DEBUG=1 sh -c 'echo serving on 0.0.0.0:$PORT'",
                                    "sh -c 'echo serving on 0.0.0.0:$PORT'"])       # port read from the environment
 def test_the_start_command_sees_the_port_however_it_reads_it(tmp_path, monkeypatch, start):
-    monkeypatch.setattr(nebius, "APP", str(tmp_path))
+    # forward slashes: on Windows the test's `sh` (Git Bash) reads C:/Users/... but eats the backslashes
+    # in C:\Users\..., which made all three cases fail there with "cd: No such file or directory"
+    folder = tmp_path.as_posix()
+    monkeypatch.setattr(nebius, "APP", folder)
     line = nebius.persona_command(TwinSpec(start=start, ready="/"))
     app_part = line.split("; python3 /doppel/runner.py")[0]   # start the app, skip the replay
-    subprocess.run(["sh", "-c", app_part.replace("/tmp/app.log", str(tmp_path / "app.log"))
-                    .replace("/tmp/app.pid", str(tmp_path / "app.pid"))], check=True, timeout=10)
+    subprocess.run(["sh", "-c", app_part.replace("/tmp/app.log", f"{folder}/app.log")
+                    .replace("/tmp/app.pid", f"{folder}/app.pid")], check=True, timeout=10)
     log = tmp_path / "app.log"
     deadline = time.monotonic() + 5                      # the app runs in the background: wait for its line
     while time.monotonic() < deadline and not log.read_text().strip():
