@@ -101,7 +101,7 @@ Return ONLY JSON:
 {{"files": [{{"path": "doppel.toml", "content": "..."}}, {{"path": "doppel_seed.py", "content": "..."}}],
   "notes": "one or two sentences: what you assumed"}}
 {feedback}
-Repository setup hints:
+{install_hint}Repository setup hints:
 {hints}
 
 Repository API index (every top-level function and class, with model fields):
@@ -113,7 +113,7 @@ Repository code (the most relevant files; a big repo is cut, the API index is no
 
 FEEDBACK = """
 A previous attempt FAILED. Fix the cause, keep what worked, and return both files again.
-{history}{repeat}Error of the last attempt:
+{kept}{history}{repeat}Error of the last attempt:
 {error}
 {source}
 Previous files:
@@ -246,8 +246,166 @@ def related_source(repo: str | Path, error: str, limit: int = 10_000) -> str:
             break
         out.append(snip)
         used += len(snip)
-    return ("\nSource the error points at (real code from this repo; trust it over your memory):\n"
-            + "\n\n".join(out) + "\n") if out else ""
+    routes = route_source(repo) if re.search(r"(refused with|answered) 404", error) else ""
+    return (("\nSource the error points at (real code from this repo; trust it over your memory):\n"
+             + "\n\n".join(out) + "\n") if out else "") + routes
+
+
+# ---------------------------------------------------------------- install: derived, not guessed
+#
+# Every run, Nemotron rediscovered the install from scratch (uv sync, pip install -r pyproject.toml,
+# pip install -e . ...), each wrong guess costing a sandbox boot. Doppel can read the dependency list
+# itself, drop what can't build without a compiler, and hand the model a command that works.
+
+NEEDS_COMPILER = {"uwsgi": None, "mod-wsgi": None, "mysqlclient": None, "python-ldap": None,
+                  "pycairo": None, "psycopg2": "psycopg2-binary"}  # None: drop it; str: install this instead
+WHOLE_PROJECT = re.compile(r"\buv sync\b|\bpoetry install\b|\bpdm install\b|\bpip install\s+(-e\s+)?\.(\s|$|\[)")
+
+
+def _req_name(req: str) -> str:
+    return re.split(r"[\s<>=!~;\[(]", req.strip(), maxsplit=1)[0].lower().replace("_", "-")
+
+
+def dependencies(repo: str | Path) -> tuple[list[str], str]:
+    """The app's runtime requirements and the file they came from."""
+    repo = Path(repo)
+    pyproject = repo / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            data = tomllib.loads(pyproject.read_text("utf-8"))
+        except tomllib.TOMLDecodeError:
+            data = {}
+        deps = data.get("project", {}).get("dependencies")
+        if deps:
+            return list(deps), "pyproject.toml"
+        poetry = data.get("tool", {}).get("poetry", {}).get("dependencies") or {}
+        if poetry:
+            return [n for n in poetry if n.lower() != "python"], "pyproject.toml [tool.poetry]"
+    for name in ("requirements.txt", "requirements/base.txt", "requirements/prod.txt"):
+        f = repo / name
+        if f.is_file():
+            reqs = [ln.split("#")[0].strip() for ln in f.read_text("utf-8", "replace").splitlines()]
+            return [r for r in reqs if r and not r.startswith("-")], name
+    return [], ""
+
+
+def compiled_deps(repo: str | Path) -> list[str]:
+    return [_req_name(r) for r in dependencies(repo)[0] if _req_name(r) in NEEDS_COMPILER]
+
+
+def derived_install(repo: str | Path) -> str:
+    """A pip command for the app's dependencies with compiler-only packages dropped or swapped."""
+    reqs, _ = dependencies(repo)
+    keep = []
+    for r in reqs:
+        swap = NEEDS_COMPILER.get(_req_name(r), r) if _req_name(r) in NEEDS_COMPILER else r
+        if swap:
+            keep.append("'" + swap.replace("'", "") + "'")
+    return "pip install --quiet " + " ".join(keep) if keep else ""
+
+
+def install_hint(repo: str | Path) -> str:
+    cmd, source = derived_install(repo), dependencies(repo)[1]
+    if not cmd:
+        return ""
+    dropped = compiled_deps(repo)
+    why = f" ({', '.join(dropped)} removed: it needs a C compiler)" if dropped else ""
+    return (f"Suggested install, derived by Doppel from {source}{why}. Use it as `install` unless the code "
+            f"shows it is incomplete:\n{cmd}\n\n")
+
+
+def check_spec(repo: str | Path, toml_text: str) -> list[str]:
+    """Mistakes in doppel.toml that are certain to fail, found without booting anything."""
+    try:
+        data = tomllib.loads(toml_text)
+    except tomllib.TOMLDecodeError as e:
+        return [f"{SPEC_FILE} is not valid TOML: {e}"]
+    app, problems = data.get("app", {}), []
+    install = app.get("install", "")
+    if re.search(r"-r\s+\S*pyproject\.toml", install):
+        problems.append("install runs `pip install -r pyproject.toml`, but pip can only read requirements "
+                        "files that way, not pyproject.toml")
+    dropped = compiled_deps(repo)
+    if dropped and WHOLE_PROJECT.search(install):
+        problems.append(f"install `{install}` installs everything the project lists, including "
+                        f"{', '.join(dropped)}, which needs a C compiler the image doesn't have. "
+                        f"Use: {derived_install(repo)}")
+    for key in ("ready",):
+        if app.get(key) and not str(app[key]).startswith("/"):
+            problems.append(f"[app] {key} must be a path starting with /, got {app[key]!r}")
+    login = data.get("personas", {}).get("login") or {}
+    if login.get("path") and not str(login["path"]).startswith("/"):
+        problems.append(f"[personas.login] path must start with /, got {login['path']!r}")
+    return problems
+
+
+# ---------------------------------------------------------------- what already worked
+
+STAGES = ("install", "seed", "start", "login", "users")
+
+
+def stage_reached(error: str) -> int:
+    """How many stages passed before this error (0 = install failed, 4 = only the users fell short)."""
+    if error.startswith(("The files were checked", f"{SEED_FILE} was checked", f"{SPEC_FILE} ")):
+        return -1  # caught before booting: says nothing about what works
+    if "install (base) failed" in error or "install (head) failed" in error:
+        return 0
+    if "seed failed" in error or "migrate" in error.split("\n", 1)[0]:
+        return 1
+    if "the login step" in error:
+        return 3
+    if error.startswith("the twin boots, but"):
+        return 4
+    return 2  # the app didn't start or answer
+
+
+def kept_note(best: int) -> str:
+    if best <= 0:
+        return ""
+    worked = ", ".join(STAGES[:best])
+    keep = {1: "the `install` command", 2: "`install`, `seed`, `migrate` and doppel_seed.py",
+            3: "`install`, `seed`, `migrate`, `start`, `ready` and doppel_seed.py",
+            4: "everything in [app] and doppel_seed.py"}[min(best, 4)]
+    return (f"Already proven to work in an earlier attempt: {worked}. Keep {keep} exactly as in the "
+            f"previous files below, and change only what the error points at.\n")
+
+
+ROUTE_FILES = re.compile(r"(^|/)(urls|routes|routing|router|routers|api)\.py$|(^|/)(urls|routes)/")
+
+
+ROUTE_LINE = re.compile(r"\b(re_)?path\(|\burl\(|\binclude\(|\.register\(|@action\b|url_path|"
+                        r"@\w+\.(route|get|post|put|patch|delete|api_route)\(|\bAPIRouter\(|"
+                        r"add_url_rule|^\s*class \w+(ViewSet|View|Resource)\b|Blueprint\(|prefix=")
+
+
+def route_source(repo: Path, limit: int = 8_000) -> str:
+    """The app's routes for a 404 (the model guessed a path that isn't routed): only the lines that
+    declare routes, from every routing file, so a long views module doesn't crowd out urls.py."""
+    out, used = [], 0
+    files = sorted((p for p in _py_files(repo) if ROUTE_FILES.search(p.relative_to(repo).as_posix())),
+                   key=lambda p: (p.name != "urls.py", p.relative_to(repo).as_posix()))
+    for path in files:
+        lines = path.read_text("utf-8", "replace").splitlines()
+        picked: set[int] = set()
+        for i, ln in enumerate(lines):
+            if ROUTE_LINE.search(ln):
+                picked.add(i)
+                # a call split over lines (`path(\n "api/user/", include(...))`) or a decorator
+                # (`@action(...)` then `def profile`): the next lines carry the route itself
+                if ln.rstrip().endswith(("(", ",")) or ln.lstrip().startswith("@"):
+                    picked.update(range(i + 1, min(i + 3, len(lines))))
+        keep = [f"{i + 1:>5}: {lines[i].rstrip()}" for i in sorted(picked)]
+        if not keep:
+            continue
+        block = f"### {path.relative_to(repo).as_posix()} (route lines only)\n" + "\n".join(keep) + "\n"
+        if used + len(block) > limit:
+            block = _clip(block, max(0, limit - used))
+        out.append(block)
+        used += len(block)
+        if used >= limit:
+            break
+    return ("\nThe app's routes (a 404 means that path is not routed; pick one from here):\n"
+            + "".join(out)) if out else ""
 
 
 def same_error(a: str, b: str) -> bool:
@@ -264,7 +422,8 @@ def last_line(error: str) -> str:
 
 
 def draft(repo: str | Path, error: str = "", previous: dict | None = None, chat=nemotron_chat,
-          model: str | None = None, history: list[str] | None = None, repeated: int = 0) -> dict:
+          model: str | None = None, history: list[str] | None = None, repeated: int = 0,
+          best_stage: int = 0) -> dict:
     """Ask Nemotron for the two files. Returns {"files": {name: text}, "notes": str}."""
     model = model or os.getenv("INIT_MODEL", "nvidia/Nemotron-3-Ultra-550b-a55b")
     feedback = ""
@@ -277,9 +436,10 @@ def draft(repo: str | Path, error: str = "", previous: dict | None = None, chat=
         repeat = (f"The last attempt failed with the SAME error as attempt {repeated}: the change made in "
                   "between did not reach the cause. Do not adjust the same thing again; read the source "
                   "below and take a different approach.\n") if repeated else ""
-        feedback = FEEDBACK.format(history=earlier, repeat=repeat, error=_clip_error(error),
+        feedback = FEEDBACK.format(kept=kept_note(best_stage), history=earlier, repeat=repeat, error=_clip_error(error),
                                    source=related_source(repo, error), files=shown)
-    prompt = PROMPT.format(feedback=feedback, hints=gather_hints(repo), index=api_index(repo),
+    prompt = PROMPT.format(feedback=feedback, install_hint=install_hint(repo), hints=gather_hints(repo),
+                           index=api_index(repo),
                            code=gather_code(repo))
     # not lower: at 0.2 Nemotron fell into a loop repeating env vars until it hit max_tokens
     text, _, _ = chat(model, prompt, temperature=0.6)
@@ -452,49 +612,92 @@ def try_files(repo: Path, files: dict, backend: str = "nebius", run_twin=None, c
 # ---------------------------------------------------------------- the loop
 
 
+STATE_FILE = ".doppel-init.json"  # progress kept between runs, removed once a setup works
+
+
+def load_state(repo: Path) -> dict:
+    try:
+        state = json.loads((repo / STATE_FILE).read_text("utf-8"))
+        return state if isinstance(state.get("best"), dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(repo: Path, best: dict, history: list[str]) -> None:
+    try:
+        (repo / STATE_FILE).write_text(json.dumps({"best": best, "history": history[-12:]}, indent=1), "utf-8")
+    except OSError:
+        pass  # progress is a convenience; never fail init over it
+
+
 def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotron_chat, run_twin=None,
          personas: int = 6, log=lambda msg: print(msg, file=sys.stderr),
-         min_coverage: float = MIN_COVERAGE) -> dict:
+         min_coverage: float = MIN_COVERAGE, resume: bool = True) -> dict:
     """Draft, verify, repair, calibrate. Returns the last attempt with "attempts" and "notes" added;
-    "files" holds the calibrated files when "ok" is true. Writes nothing to disk."""
+    "files" holds the calibrated files when "ok" is true. Only writes its progress file (STATE_FILE).
+
+    Never moves backwards: each new draft starts from the attempt that got furthest (install, seed,
+    start, login, users), with the parts it proved told to stay as they are. Static checks of the
+    spec and the seed run before any sandbox boots. Progress carries over to the next run."""
     repo = Path(repo).resolve()
-    error, previous, result = "", None, {"ok": False, "error": "no attempt made"}
-    history: list[str] = []  # one line per failed attempt, so the model stops going in circles
+    state = load_state(repo) if resume else {}
+    best = state.get("best") or {"stage": 0, "files": None, "error": ""}
+    history: list[str] = list(state.get("history") or [])
+    error, previous = best["error"], best["files"]
+    if previous:
+        log(f"[init] resuming from the last run: got past {', '.join(STAGES[:best['stage']]) or 'nothing'} "
+            f"(delete {STATE_FILE} or pass --fresh to start over)")
+    result: dict = {"ok": False, "error": "no attempt made"}
     for attempt in range(1, tries + 1):
         log(f"[init] attempt {attempt}/{tries}: asking Nemotron for {SPEC_FILE} and {SEED_FILE}")
         try:
             ends = [last_line(h.split(" -> ", 1)[-1]) for h in history[:-1]]
             repeated = next((i + 1 for i, e in enumerate(ends) if same_error(e, last_line(error))), 0)
-            drafted = draft(repo, error, previous, chat=chat, history=history[:-1], repeated=repeated)
+            drafted = draft(repo, error, previous, chat=chat, history=history[:-1], repeated=repeated,
+                            best_stage=best["stage"])
         except Exception as e:  # noqa: BLE001
             error, result = f"the reply could not be used: {e}", {"ok": False, "error": str(e)}
             log(f"[init] {error}")
+            history.append(f"attempt {attempt}: unusable reply -> {str(e)[:160]}")
+            error, previous = (best["error"], best["files"]) if best["files"] else (error, previous)
             continue
-        previous = drafted["files"]
-        problems = check_seed(repo, previous[SEED_FILE]) if SEED_FILE in previous else []
+        files = drafted["files"]
+        problems = check_spec(repo, files[SPEC_FILE])
+        problems += check_seed(repo, files[SEED_FILE]) if SEED_FILE in files else []
         if problems:
-            error = (f"{SEED_FILE} was checked against the repo's code before booting and would crash:\n"
+            error = ("The files were checked against the repo before booting and would fail:\n"
                      + "\n".join(f"- {p}" for p in problems))
-            result = {"ok": False, "error": error, "attempts": attempt, "notes": drafted["notes"],
-                      "files": previous}
-            log(f"[init] seed check found {len(problems)} problem(s), no sandbox needed: {problems[0][:160]}")
-            history.append(f"attempt {attempt}: seed check -> {problems[0][:200]}")
+            previous = files
+            result = {"ok": False, "error": error, "attempts": attempt, "notes": drafted["notes"], "files": files}
+            log(f"[init] checks found {len(problems)} problem(s), no sandbox needed: {problems[0][:160]}")
+            history.append(f"attempt {attempt}: checked before booting -> {problems[0][:200]}")
             continue
         log(f"[init] booting the twin ({backend}) to check it")
-        result = try_files(repo, previous, backend=backend, run_twin=run_twin, chat=chat, personas=personas,
+        result = try_files(repo, files, backend=backend, run_twin=run_twin, chat=chat, personas=personas,
                            min_coverage=min_coverage)
         result.update(attempts=attempt, notes=drafted["notes"])
-        result.setdefault("files", previous)
+        result.setdefault("files", files)
         if result["ok"]:
             log(f"[init] works: {result['personas']} users replayed, {result['coverage']:.0%} of requests "
                 f"served, ignoring {len(result['noise'])} noisy key(s)")
+            (repo / STATE_FILE).unlink(missing_ok=True)
             return result
         error = result["error"]
         log(f"[init] failed: {error.splitlines()[0][:200] if error else 'unknown error'}")
-        history.append(f"attempt {attempt}: {error.splitlines()[0][:200] if error else '?'} -> {last_line(error)}")
         if result.get("infra"):
             log("[init] that is a network or sandbox problem, not the setup: stopping instead of redrafting")
             return result
+        stage = stage_reached(error)
+        history.append(f"attempt {attempt}: reached {STAGES[max(stage, 0)]}: "
+                       f"{error.splitlines()[0][:160] if error else '?'} -> {last_line(error)}")
+        if stage >= best["stage"]:
+            best = {"stage": stage, "files": files, "error": error}
+            previous = files
+        else:  # went backwards: continue from the attempt that got furthest, not from this one
+            log(f"[init] that went backwards (failed at {STAGES[stage]}); continuing from the best attempt, "
+                f"which got past {', '.join(STAGES[:best['stage']])}")
+            error, previous = best["error"], best["files"]
+        save_state(repo, best, history)
     return result
 
 

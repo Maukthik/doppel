@@ -109,7 +109,8 @@ def cmd_personas(a) -> int:
 
 def cmd_init(a) -> int:
     from doppel.bootstrap import init, write
-    result = init(a.app, backend=a.backend, tries=a.tries, personas=a.n, min_coverage=a.min_coverage)
+    result = init(a.app, backend=a.backend, tries=a.tries, personas=a.n, min_coverage=a.min_coverage,
+                  resume=not a.fresh)
     if not result["ok"]:
         if result.get("infra"):
             print("doppel init: the sandbox API timed out or dropped the connection, so the setup was never "
@@ -188,6 +189,7 @@ def main(argv=None) -> int:
     i.add_argument("-n", type=int, default=6, help="invented users for the noise calibration")
     i.add_argument("--min-coverage", type=float, default=0.4,
                    help="share of the invented users' requests that must be served (default 0.4)")
+    i.add_argument("--fresh", action="store_true", help="ignore progress saved by an earlier run")
     i.add_argument("--force", action="store_true", help="overwrite existing doppel.toml / doppel_seed.py")
     i.add_argument("--keep-draft", action="store_true", help="write the last draft even if it failed")
     c = sub.add_parser("comment", help="post or update the report as a PR comment (in GitHub Actions)")

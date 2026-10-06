@@ -65,7 +65,7 @@ def test_init_gives_up_after_its_tries_and_keeps_the_last_error(tmp_path):
     broken = reply(SHOP_SPEC.replace('ready = "/health"', 'ready = "/health"\nstart = "x"'))  # invalid TOML
     model = ScriptedModel([broken, broken])
     result = bootstrap.init(app, backend="local", tries=2, chat=model, log=lambda m: None)
-    assert not result["ok"] and result["attempts"] == 2 and "invalid" in result["error"]
+    assert not result["ok"] and result["attempts"] == 2 and "not valid TOML" in result["error"]
 
 
 def test_a_reply_without_a_spec_counts_as_a_failed_attempt(tmp_path):
@@ -394,3 +394,90 @@ def test_a_setup_whose_users_are_all_refused_is_sent_back_with_what_the_app_said
     assert "got only 0% of their requests served" in result["error"]
     assert "status counts: {401: 6}" in result["error"]
     assert "Authentication credentials were not provided" in result["error"]
+
+
+# --- install is derived, the spec is checked, and init never moves backwards ------------------
+
+PYPROJECT = textwrap.dedent('''
+    [project]
+    name = "linkding"
+    dependencies = ["django>=6.0.7", "djangorestframework>=3.16", "uwsgi>=2.0.28", "psycopg2>=2.9",
+                    "huey>=2.5"]
+''')
+LOGIN_SPEC = ('[app]\ninstall = "pip install django"\nstart = "python app.py"\nready = "/health"\n\n'
+              '[personas.login]\nmethod = "GET"\npath = "/api/user/"\n')
+
+
+def test_install_is_derived_from_the_dependency_list_without_compiled_packages(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(PYPROJECT)
+    cmd = bootstrap.derived_install(tmp_path)
+    assert cmd == ("pip install --quiet 'django>=6.0.7' 'djangorestframework>=3.16' 'psycopg2-binary' "
+                   "'huey>=2.5'")
+    hint = bootstrap.install_hint(tmp_path)
+    assert "derived by Doppel from pyproject.toml (uwsgi, psycopg2 removed" in hint and cmd in hint
+    (tmp_path / "pyproject.toml").unlink()
+    (tmp_path / "requirements.txt").write_text("flask==3.0  # web\n-r extra.txt\ngunicorn\n")
+    assert bootstrap.derived_install(tmp_path) == "pip install --quiet 'flask==3.0' 'gunicorn'"
+
+
+def test_certain_spec_mistakes_are_caught_without_booting(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(PYPROJECT)
+    spec = lambda install, ready="/health": f'[app]\ninstall = "{install}"\nstart = "x"\nready = "{ready}"\n'  # noqa: E731
+    problems = bootstrap.check_spec(tmp_path, spec("pip install -r pyproject.toml"))
+    assert "pip can only read requirements files" in problems[0]
+    for whole in ("uv sync --no-dev", "pip install -e .", "pip install .", "poetry install"):
+        problems = bootstrap.check_spec(tmp_path, spec(whole))
+        assert problems and "uwsgi, psycopg2" in problems[0] and "Use: pip install --quiet" in problems[0], whole
+    assert "must be a path starting with /" in bootstrap.check_spec(tmp_path, spec("pip install x", "health"))[0]
+    assert bootstrap.check_spec(tmp_path, spec(bootstrap.derived_install(tmp_path).replace("'", ""))) == []
+
+
+def test_stage_reached_reads_how_far_an_error_got():
+    assert bootstrap.stage_reached("RuntimeError: install (base) failed (uv sync):\n...") == 0
+    assert bootstrap.stage_reached("RuntimeError: seed failed (python doppel_seed.py):\n...") == 1
+    assert bootstrap.stage_reached("RuntimeError: persona 'x' failed (exit 2):\napp not ready") == 2
+    assert bootstrap.stage_reached("the login step GET /api/user/ was refused with 404: ...") == 3
+    assert bootstrap.stage_reached("the twin boots, but the invented users got only 11%") == 4
+    assert bootstrap.stage_reached("The files were checked against the repo before booting") == -1  # no boot
+
+
+def fake_twin(outcomes):
+    """A run_twin that plays back outcomes: an exception to raise, or a status for the login step."""
+    def run(base, head, spec, personas):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        rec = {"persona": personas[0]["name"], "steps": [
+            {"i": 0, "request": "GET /api/user/", "status": outcome, "body": "<html>Page not found</html>", "ms": 1},
+            {"i": 1, "request": "GET /health", "status": 200, "body": {}, "ms": 1}]}
+        return {"base": [rec], "head": [rec], "failed": []}
+    return run
+
+
+def test_a_draft_that_goes_backwards_is_dropped_for_the_one_that_got_furthest(tmp_path):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "urls.py").write_text("urlpatterns = [path('api/user/profile/', profile)]\n")
+    worse = LOGIN_SPEC.replace("pip install django", "pip install nothing-like-this")
+    model = ScriptedModel([reply(LOGIN_SPEC), reply(worse), reply(LOGIN_SPEC)])
+    run = fake_twin([404, RuntimeError("install (base) failed (pip install nothing-like-this):\nNo matching"), 404])
+    logs = []
+    bootstrap.init(tmp_path, tries=3, chat=model, run_twin=run, log=logs.append, resume=False)
+    third = model.prompts[2]
+    assert "pip install django" in third.split("Previous files:")[1]           # attempt 1's files, not 2's
+    assert "Already proven to work in an earlier attempt: install, seed, start" in third
+    assert "api/user/profile/" in third                                        # the URL config, for the 404
+    assert any("went backwards" in line for line in logs)
+
+
+def test_progress_carries_over_to_the_next_run_and_is_removed_on_success(tmp_path):
+    app = shop_without_spec(tmp_path)
+    broken = SHOP_SPEC.replace('start = "python app.py"', 'start = "python missing.py"')
+    bootstrap.init(app, backend="local", tries=1, chat=ScriptedModel([reply(broken)]), log=lambda m: None)
+    state = json.loads((app / bootstrap.STATE_FILE).read_text())
+    assert state["best"]["stage"] == 2 and "missing.py" in state["best"]["files"]["doppel.toml"]
+    model = ScriptedModel([reply(SHOP_SPEC)])
+    logs = []
+    result = bootstrap.init(app, backend="local", tries=1, chat=model, log=logs.append)
+    assert result["ok"] and "missing.py" in model.prompts[0]                  # it started from the last run
+    assert any("resuming from the last run" in line for line in logs)
+    assert not (app / bootstrap.STATE_FILE).exists()
