@@ -133,6 +133,8 @@ A failure goes back to the model (up to `--tries 3`). It then replays invented u
 
 - `doppel init --trace` saves every attempt to `.doppel-trace/`: the prompt, the reply, each check, what the
   twin did, the database scan, and why init kept or dropped the attempt.
+- `doppel view .doppel-trace` turns that trace into one web page (opened in your browser): each attempt on a
+  five-stage rail, with the checks, smoke requests, database scan and drafted files one click away.
 - `doppel init --check` tests the `doppel.toml` and `doppel_seed.py` already in the app, with no drafting:
   the way to finish a setup by hand (add `--calibrate` to replay invented users too).
 

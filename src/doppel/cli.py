@@ -165,6 +165,22 @@ def cmd_init(a) -> int:
     return 0
 
 
+def cmd_view(a) -> int:
+    from doppel.viewer import is_trace, write_view
+    path = Path(a.path)
+    if not is_trace(path):
+        print(f"doppel view: {path} is not an init trace (it has no attempt-N folders). Run "
+              "`doppel init --trace` in the app's folder first, then `doppel view .doppel-trace` there.",
+              file=sys.stderr)
+        return 2
+    out = write_view(path, Path(a.out) if a.out else None)
+    print(f"wrote {out}")
+    if not a.no_open:
+        import webbrowser
+        webbrowser.open(out.resolve().as_uri())
+    return 0
+
+
 def cmd_comment(a) -> int:
     import os
 
@@ -225,6 +241,10 @@ def main(argv=None) -> int:
                    help="with --check: also replay invented users (costs model calls and a second boot)")
     i.add_argument("--force", action="store_true", help="overwrite existing doppel.toml / doppel_seed.py")
     i.add_argument("--keep-draft", action="store_true", help="write the last draft even if it failed")
+    v = sub.add_parser("view", help="turn an init trace into a web page and open it")
+    v.add_argument("path", nargs="?", default=".doppel-trace", help="the trace folder (default: .doppel-trace)")
+    v.add_argument("--out", help="where to write the page (default: doppel-view.html next to the trace)")
+    v.add_argument("--no-open", action="store_true", help="write the page without opening a browser")
     c = sub.add_parser("comment", help="post or update the report as a PR comment (in GitHub Actions)")
     c.add_argument("--report", required=True)
     c.add_argument("--pr-number", type=int, help="default: from the GitHub event")
@@ -237,6 +257,8 @@ def main(argv=None) -> int:
             return cmd_personas(a)
         if a.cmd == "init":
             return cmd_init(a)
+        if a.cmd == "view":
+            return cmd_view(a)
         return cmd_run(a)
     except Exception as e:  # noqa: BLE001 - exit 2 = Doppel itself failed (1 means regressions found)
         print(f"doppel: error: {type(e).__name__}: {e}", file=sys.stderr)
