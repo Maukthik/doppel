@@ -932,9 +932,15 @@ def flaky_statuses(base: list[dict], head: list[dict]) -> list[str]:
     return out
 
 
+ANSWERED = (400, 409, 422)  # the app read the request and said why it refused: validation working
+
+
 def coverage(recordings: list[dict]) -> float:
+    """Share of requests the app really handled: successes, plus validation answers (400, 409, 422),
+    which careless users are *meant* to get. Counting those as failures pushed init toward users who
+    never send bad input, and bad input is how the twin found the shop's quantity-0 bug."""
     steps = [s for r in recordings for s in r["steps"]]
-    return sum(1 for s in steps if 0 < s["status"] < 400) / len(steps) if steps else 0.0
+    return sum(1 for s in steps if 0 < s["status"] < 400 or s["status"] in ANSWERED) / len(steps) if steps else 0.0
 
 
 def with_ignore(toml_text: str, extra: list[str]) -> str:
@@ -1232,8 +1238,25 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
         for line in (ln for ln in error.splitlines() if ln.startswith("[dbscan]")):
             log(f"[init]   inside: {line[len('[dbscan] '):]}")
         if result.get("infra"):
-            log("[init] that is a network or sandbox problem, not the setup: stopping instead of redrafting")
-            return result
+            log("[init] that is a network or sandbox problem, not the setup: trying the same files once more")
+            result = try_files(repo, files, backend=backend, run_twin=run_twin, chat=chat, personas=personas,
+                               min_coverage=min_coverage)
+            result.update(attempts=attempt, notes=drafted["notes"])
+            result.setdefault("files", files)
+            tracer.write("4-boot.txt", boot_report(result))
+            if result["ok"]:
+                log(f"[init] works: {result['personas']} users replayed, {result['coverage']:.0%} of requests "
+                    f"served, ignoring {len(result['noise'])} noisy key(s)")
+                (repo / STATE_FILE).unlink(missing_ok=True)
+                tracer.write("6-calibration.txt", calibration_report(result))
+                tracer.note(f"attempt {attempt}: WORKS after a network retry, {result['coverage']:.0%} served")
+                return result
+            error = result["error"]
+            if result.get("infra"):
+                log("[init] the network failed again: stopping instead of redrafting (the setup was never tried)")
+                tracer.note(f"attempt {attempt}: network failed twice, stopped")
+                return result
+            log(f"[init] failed: {error.splitlines()[0][:200] if error else 'unknown error'}")
         stage = stage_reached(error)
         history.append(f"attempt {attempt}: reached {STAGES[max(stage, 0)]}: {headline(error)}")
         if stage >= best["stage"]:

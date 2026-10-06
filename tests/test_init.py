@@ -815,3 +815,58 @@ def test_check_mode_tests_the_files_in_the_repo_without_a_model(tmp_path):
     caught = bootstrap.check(app, backend="local", log=lambda m: None, chat=None)
     assert not caught["ok"] and "smoke_steps" not in caught                  # never booted
     assert "placeholder" in bootstrap.checks_report(caught["checks"])
+
+
+# --- the demo comment, network retries, and what counts as served -------------------------------
+
+def test_the_suspicion_table_agrees_with_the_verdicts_and_quotes_measured_values():
+    from doppel.diff import Finding
+    from doppel.judge import Verdict
+    from doppel.report import settle_suspicions, suspicions_section
+    findings = [Finding("body", "coupon buyer", 0, "POST /orders", "changed: total", {"total": 137953},
+                        {"total": 140292}),
+                Finding("body", "browser", 0, "GET /products/3", "changed: in_stock (added)",
+                        {"in_stock": "(absent)"}, {"in_stock": True})]
+    verdicts = [Verdict("regression", "tax before discount"), Verdict("intended", "announced")]
+    sus = [{"id": "s1", "claim": "Tax is applied before the coupon", "status": "confirmed", "changes": ["f1"],
+            "evidence": "model prose"},
+           {"id": "s2", "claim": "in_stock field added", "status": "confirmed", "changes": ["f2"], "evidence": "x"},
+           {"id": "s3", "claim": "Totals differ by a few paise", "status": "confirmed", "changes": ["f1"],
+            "evidence": "a difference of a few paise"},
+           {"id": "s4", "claim": "negative qty accepted", "status": "untested", "changes": [], "evidence": "no probe"}]
+    settled = settle_suspicions(sus, findings, verdicts)
+    assert [x["id"] for x in settled] == ["s1", "s2", "s4"]                    # s3 merged into s1
+    assert settled[0]["claim"].endswith("(+1 similar suspicion)")
+    assert settled[0]["evidence"] == ('coupon buyer: POST /orders changed: total '
+                                      '({"total": 137953} → {"total": 140292})')
+    assert settled[1]["status"] == "intended"
+    table = suspicions_section(settled)
+    assert "🟢 confirmed, intended" in table and "few paise" not in table and "model prose" not in table
+    assert table.index("Tax is applied") < table.index("negative qty") < table.index("in_stock field")
+
+
+def test_a_transport_error_counts_as_a_network_problem_and_gets_one_retry_with_the_same_files(tmp_path):
+    from doppel.backends.nebius import _transient
+
+    class ContreeTransportError(Exception):
+        pass
+
+    assert _transient(ContreeTransportError("connection reset"))
+    app = shop_without_spec(tmp_path)
+    from doppel.backends.local import run_twin as real
+    calls = []
+
+    def flaky(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ContreeTransportError("dropped")
+        return real(*args, **kwargs)
+
+    model = ScriptedModel([reply(SHOP_SPEC)])
+    result = bootstrap.init(app, tries=1, chat=model, run_twin=flaky, log=lambda m: None)
+    assert result["ok"] and len(model.prompts) == 2                          # one draft (+ personas), no redraft
+
+
+def test_validation_answers_count_as_handled_requests():
+    rec = [{"persona": "careless", "steps": [{"status": s} for s in (200, 400, 409, 422, 404, 401, 500)]}]
+    assert bootstrap.coverage(rec) == 4 / 7

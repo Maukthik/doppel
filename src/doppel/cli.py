@@ -76,8 +76,10 @@ def cmd_run(a) -> int:
         if judged:
             from doppel.judge import escalate
             judged["verdicts"] = escalate(judged["verdicts"], checks)
-    md = markdown(findings, len(worlds["base"]), steps, judged, cov,
-                  [{**x, **checks.get(x["id"], {})} for x in sus])
+    from doppel.report import settle_suspicions
+    settled = settle_suspicions([{**x, **checks.get(x["id"], {})} for x in sus], findings,
+                                judged["verdicts"] if judged else None) if sus else []
+    md = markdown(findings, len(worlds["base"]), steps, judged, cov, settled)
     print(md)
     print(f"({time.perf_counter() - t0:.1f} s)", file=sys.stderr)
     if a.out:

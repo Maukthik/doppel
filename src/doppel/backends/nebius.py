@@ -198,7 +198,7 @@ def changed_files(base_dir, head_dir) -> list[str]:
 
 def _transient(e: Exception) -> bool:
     name = type(e).__name__.lower()
-    return any(k in name for k in ("timeout", "timedout", "connect", "unavailable", "network"))
+    return any(k in name for k in ("timeout", "timedout", "connect", "unavailable", "network", "transport", "reset"))
 
 
 def pair(personas: list[dict], base: list, head: list) -> dict:

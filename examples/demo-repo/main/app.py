@@ -89,6 +89,7 @@ class Handler(BaseHTTPRequestHandler):
             total = order_total(subtotal, coupon)
             cur = conn.execute("INSERT INTO orders (user_id, items, subtotal, total, coupon) VALUES (?, ?, ?, ?, ?)",
                                (data.get("user_id"), json.dumps(items), subtotal, total, coupon))
+            conn.commit()  # commit before answering, or the client's next read can race the write
             self.send(201, {"id": cur.lastrowid, "user_id": data.get("user_id"), "items": items,
                             "subtotal": subtotal, "total": total, "coupon": coupon})
 

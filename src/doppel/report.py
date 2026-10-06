@@ -41,7 +41,47 @@ def coverage_line(cov: dict | None) -> str:
     return line
 
 
-CHECK = {"confirmed": "🔴 confirmed", "refuted": "🟢 refuted", "untested": "⚪ untested"}
+CHECK = {"confirmed": "🔴 confirmed", "intended": "🟢 confirmed, intended", "refuted": "🟢 refuted",
+         "untested": "⚪ untested"}
+
+
+def _value(value, limit: int = 70) -> str:
+    text = json.dumps(value, ensure_ascii=False, default=str) if not isinstance(value, str) else value
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def settle_suspicions(suspicions: list[dict], findings: list, verdicts: list | None) -> list[dict]:
+    """Make the suspicion table agree with the verdicts above it and say only what the twin measured.
+
+    - A confirmed suspicion whose changes the judge called intended shows as intended, not red (the
+      shop's in_stock field was a red "confirmed" right under the verdict that called it intended).
+    - Its evidence is the measured change itself (request, field, old -> new), never model prose: the
+      checker once wrote "a few paise" next to totals that differed by 2339 paise.
+    - Suspicions confirmed by exactly the same changes are merged into the first one."""
+    out, seen = [], {}
+    for x in suspicions:
+        x = dict(x)
+        cited = [int(c[1:]) - 1 for c in x.get("changes") or [] if str(c)[1:].isdigit()]
+        cited = [i for i in cited if 0 <= i < len(findings)]
+        if x.get("status") == "confirmed" and cited:
+            key = frozenset(cited)
+            if key in seen:
+                seen[key]["also"] = seen[key].get("also", 0) + 1
+                continue
+            labels = {verdicts[i].label for i in cited if verdicts and verdicts[i] is not None}
+            if labels == {"intended"}:
+                x["status"] = "intended"
+            x["evidence"] = "; ".join(
+                f"{findings[i].persona}: {findings[i].request} {findings[i].detail}"
+                + (f" ({_value(findings[i].base)} → {_value(findings[i].head)})" if findings[i].kind != "slow" else "")
+                for i in cited[:3]) + (f" (+{len(cited) - 3} more)" if len(cited) > 3 else "")
+            seen[key] = x
+        out.append(x)
+    for x in out:
+        if x.get("also"):
+            n = x.pop("also")
+            x["claim"] += f" (+{n} similar suspicion{'s' if n > 1 else ''})"
+    return out
 
 
 def suspicions_section(suspicions: list[dict] | None) -> str:
@@ -50,7 +90,7 @@ def suspicions_section(suspicions: list[dict] | None) -> str:
         return ""
     rows = ["### 🔎 Reviewer's suspicions, checked by the twin", "",
             "| | Suspicion | Evidence from the twin |", "|---|---|---|"]
-    order = {"confirmed": 0, "untested": 1, "refuted": 2}
+    order = {"confirmed": 0, "untested": 1, "intended": 2, "refuted": 3}
     for x in sorted(suspicions, key=lambda x: order.get(x.get("status", "untested"), 1)):
         rows.append(f"| {CHECK.get(x.get('status', 'untested'))} | {x['claim'].replace('|', '/')} | "
                     f"{str(x.get('evidence', '')).replace('|', '/')} |")
