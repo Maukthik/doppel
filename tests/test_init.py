@@ -68,11 +68,11 @@ def test_init_gives_up_after_its_tries_and_keeps_the_last_error(tmp_path):
     assert not result["ok"] and result["attempts"] == 2 and "not valid TOML" in result["error"]
 
 
-def test_a_reply_without_a_spec_counts_as_a_failed_attempt(tmp_path):
+def test_a_cut_off_reply_is_asked_again_without_spending_an_attempt(tmp_path):
     app = shop_without_spec(tmp_path)
     model = ScriptedModel(["sorry, I cannot help", reply(SHOP_SPEC)])
     result = bootstrap.init(app, backend="local", tries=2, chat=model, log=lambda m: None)
-    assert result["ok"] and result["attempts"] == 2
+    assert result["ok"] and result["attempts"] == 1
 
 
 def test_a_network_failure_stops_the_loop_instead_of_redrafting(tmp_path):
@@ -596,3 +596,73 @@ def test_refused_credentials_get_password_hashing_advice_instead(tmp_path):
     problem = bootstrap.smoke_problem(rec, spec, repo)
     assert "sets the password through the app's own hashing" in problem
     assert "fixed token" not in problem
+
+
+# --- one set of settings for every command ------------------------------------------------------
+
+ENV_APP = textwrap.dedent('''
+    import json, os, sqlite3
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    DB = os.environ.get("APP_DB", "default.db")
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            users = [r[0] for r in sqlite3.connect(DB).execute("SELECT name FROM users")]
+            data = json.dumps({"db": DB, "users": users}).encode()
+            self.send_response(200 if users else 404)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    HTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()
+''')
+ENV_SEED = ('import os, sqlite3\ndb = sqlite3.connect(os.environ.get("APP_DB", "default.db"))\n'
+            'db.execute("CREATE TABLE users (name TEXT)")\ndb.execute("INSERT INTO users VALUES (\'alice\')")\n'
+            'db.commit()\n')
+
+
+def test_app_env_reaches_the_seed_and_the_server_alike(tmp_path):
+    from doppel.backends.local import run_twin
+    app = tmp_path / "envapp"
+    app.mkdir()
+    (app / "app.py").write_text(ENV_APP)
+    (app / "doppel_seed.py").write_text(ENV_SEED)
+    (app / "doppel.toml").write_text('[app]\nstart = "python app.py"\nready = "/"\nseed = "python doppel_seed.py"\n'
+                                    'env = { APP_DB = "twin.db" }\n')
+    spec = TwinSpec.load(app / "doppel.toml")
+    assert spec.env == {"APP_DB": "twin.db"} and spec.exports() == "export APP_DB=twin.db; "
+    out = run_twin(app, app, spec, [{"name": "reader", "goal": "g", "steps": [{"method": "GET", "path": "/"}]}])
+    body = out["base"][0]["steps"][0]["body"]
+    assert body == {"db": "twin.db", "users": ["alice"]}          # the server read the database the seed filled
+
+
+def test_settings_given_to_the_seed_but_not_the_server_are_caught(tmp_path):
+    toml = ('[app]\nstart = "gunicorn app:app"\nseed = "env APP_DB=/data/a.db python doppel_seed.py"\n'
+            'migrate = "APP_DB=/data/a.db alembic upgrade head"\n')
+    seed = 'import os\nos.environ["APP_DB"] = "/data/a.db"\nos.environ.setdefault("DJANGO_SETTINGS_MODULE", "x.dev")\n'
+    problems = "\n".join(bootstrap.check_env(tmp_path, toml, seed))
+    assert "`seed` sets APP_DB=/data/a.db but `start` does not" in problems
+    assert "`migrate` sets APP_DB=/data/a.db" in problems
+    assert "doppel_seed.py line 2 sets APP_DB" in problems
+    assert "DJANGO_SETTINGS_MODULE" in problems                       # nobody else sets that default...
+    (tmp_path / "manage.py").write_text('os.environ.setdefault("DJANGO_SETTINGS_MODULE", "x.dev")\n')
+    assert "DJANGO_SETTINGS_MODULE" not in "\n".join(bootstrap.check_env(tmp_path, toml, seed))  # ...now the app does
+    fixed = '[app]\nstart = "gunicorn app:app"\nseed = "python doppel_seed.py"\nenv = { APP_DB = "/data/a.db" }\n'
+    assert bootstrap.check_env(tmp_path, fixed, 'import os\nos.environ["APP_DB"] = "/data/a.db"\n') == []
+
+
+def test_a_plain_string_in_a_password_hash_field_is_caught(tmp_path):
+    seed = ("u = User(username='a', password_hash='doppel-pass')\nu.password_hash = 'x'\n"
+            "v = User(username='b', password_hash=generate_password_hash('doppel-pass'))\n")
+    problems = bootstrap.check_seed(tmp_path, seed)
+    assert sorted(p.split(":")[0] for p in problems) == ["doppel_seed.py line 1", "doppel_seed.py line 2"]
+    assert all("can never match" in p for p in problems)
+
+
+def test_pinned_requirements_win_over_loose_pyproject_ranges(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\ndependencies = ["flask"]\n')
+    (tmp_path / "requirements.txt").write_text("flask==3.0.3\nuwsgi==2.0.28\n")
+    assert bootstrap.derived_install(tmp_path) == "pip install --quiet 'flask==3.0.3'"

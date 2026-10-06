@@ -44,7 +44,8 @@ def persona_command(spec: TwinSpec) -> str:
     """Start the app in the background, replay one persona, stop the app, keep runner's exit code."""
     # export, not a `PORT=8000 cmd` prefix: a prefix only reaches the command's environment, so a
     # start command that spells the port out ("runserver 0.0.0.0:$PORT") would expand it to nothing
-    return (f"cd {APP} && (export PORT={PORT}; {spec.start} > /tmp/app.log 2>&1 & echo $! > /tmp/app.pid); "
+    return (f"cd {APP} && (export PORT={PORT}; {spec.exports()}{spec.start} > /tmp/app.log 2>&1 "
+            f"& echo $! > /tmp/app.pid); "
             f"python3 /doppel/runner.py --base-url http://127.0.0.1:{PORT} --personas /doppel/persona.json "
             f"--ready-path {shlex.quote(spec.ready)}; rc=$?; "
             f"kill $(cat /tmp/app.pid) 2>/dev/null; "
@@ -78,19 +79,19 @@ class NebiusTwin:
         img = await img.apply_files(code_files(base_dir))
         self._count(img)
         if s.install:
-            img = await self._step(img, s.install, "install (base)")
+            img = await self._step(img, s.exports() + s.install, "install (base)")
         if s.seed:
-            img = await self._step(img, s.seed, "seed")
+            img = await self._step(img, s.exports() + s.seed, "seed")
         seeded = img
         self.log(f"[twin] seeded checkpoint {seeded.uuid}")
 
-        base = await self._step(seeded, s.migrate, "migrate (base)") if s.migrate else seeded
+        base = await self._step(seeded, s.exports() + s.migrate, "migrate (base)") if s.migrate else seeded
         head = await seeded.apply_files(code_files(head_dir))
         self._count(head)
         if s.install:
-            head = await self._step(head, s.install, "install (head)")
+            head = await self._step(head, s.exports() + s.install, "install (head)")
         if s.migrate:
-            head = await self._step(head, s.migrate, "migrate (head)")
+            head = await self._step(head, s.exports() + s.migrate, "migrate (head)")
         self.log(f"[twin] base world {base.uuid} | head world {head.uuid}")
         await self.verify(base, base_dir, head, head_dir)
         return {"base": base, "head": head}

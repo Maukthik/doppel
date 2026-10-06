@@ -46,6 +46,12 @@ class TwinSpec:
     slow_min_ms: float = 50.0
     persona_guide: str = ""
     login: dict | None = None
+    env: dict = field(default_factory=dict)  # [app] env: set for install, seed, migrate and start alike
+
+    def exports(self) -> str:
+        """`export K='V'; ` for each [app] env entry, for commands run through a POSIX shell."""
+        import shlex
+        return "".join(f"export {k}={shlex.quote(str(v))}; " for k, v in self.env.items())
 
     @classmethod
     def load(cls, path: str | Path) -> TwinSpec:
@@ -59,4 +65,5 @@ class TwinSpec:
                    slow_ratio=float(diff.get("slow_ratio", 2.0)),
                    slow_min_ms=float(diff.get("slow_min_ms", 50.0)),
                    persona_guide=str(personas.get("guide", "")).strip(),
-                   login=personas.get("login") if isinstance(personas.get("login"), dict) else None)
+                   login=personas.get("login") if isinstance(personas.get("login"), dict) else None,
+                   env={str(k): str(v) for k, v in (app.get("env") or {}).items()})

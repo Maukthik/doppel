@@ -53,10 +53,11 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _run(command: str, cwd: Path, what: str) -> None:
+def _run(command: str, cwd: Path, what: str, env: dict | None = None) -> None:
     if not command:
         return
-    p = subprocess.run(**_popen_args(command), cwd=cwd, capture_output=True, text=True, timeout=600)
+    p = subprocess.run(**_popen_args(command), cwd=cwd, capture_output=True, text=True, timeout=600,
+                       env={**os.environ, **(env or {})})
     if p.returncode != 0:
         raise RuntimeError(f"{what} failed ({command}) in {cwd}:\n{p.stdout}{p.stderr}")
 
@@ -80,7 +81,7 @@ def _wait_ready(app: subprocess.Popen, base_url: str, path: str, timeout: float)
 
 def _serve_and_replay(world: Path, spec: TwinSpec, personas: list[dict]) -> list[dict]:
     port = _free_port()
-    env = {**os.environ, "PORT": str(port), "PYTHONDONTWRITEBYTECODE": "1"}
+    env = {**os.environ, **spec.env, "PORT": str(port), "PYTHONDONTWRITEBYTECODE": "1"}
     app = subprocess.Popen(**_popen_args(spec.start), cwd=world, env=env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     base_url = f"http://127.0.0.1:{port}"
@@ -103,7 +104,7 @@ def build_world(code_dir: Path, seeded: Path, spec: TwinSpec, work: Path) -> Pat
     world = work / "world"
     shutil.copytree(seeded, world, ignore=SKIP)
     _overlay(code_dir, world)
-    _run(spec.migrate, world, "migrate")
+    _run(spec.migrate, world, "migrate", spec.env)
     return world
 
 
@@ -139,7 +140,7 @@ def run_twin(base_dir: str | Path, head_dir: str | Path, spec: TwinSpec, persona
         work = Path(tmp)
         seeded = work / "seeded"
         shutil.copytree(base_dir, seeded, ignore=SKIP)
-        _run(spec.seed, seeded, "seed")
+        _run(spec.seed, seeded, "seed", spec.env)
         worlds = {}
         for label, code in (("base", base_dir), ("head", head_dir)):
             (work / label).mkdir()

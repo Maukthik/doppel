@@ -17,6 +17,7 @@ import ast
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -53,6 +54,7 @@ start = "..."                # start the server in the FOREGROUND, listening on 
 ready = "/..."               # a GET path that answers < 500 once the app is up (a health route, docs, or a list)
 seed = "..."                 # run once: create the database schema, then `python doppel_seed.py`
 migrate = "..."              # run in each copy after the code changes: apply schema migrations ("" if none)
+env = {{ NAME = "value" }}     # env vars for EVERY command above (install, seed, migrate, start), set once
 [personas]
 guide = \"\"\"...\"\"\"          # 2-4 sentences for the user-writer: how to log in, which seeded accounts exist
 [personas.login]             # only if most API routes need a login, else omit this whole table
@@ -81,6 +83,9 @@ in Django, session.add(Model(...)) in SQLAlchemy), not with service or helper fu
 are shown below, helpers may not be. Fill every required field, including dates, with fixed values;
 but anything with an expiry (tokens, sessions, invitations) must still be valid when the twin runs, so
 give expiry dates far in the future, like the year 2100.
+Keep doppel_seed.py short (under 80 lines) and the notes to two sentences.
+Set passwords through the app's own hashing (a password property, set_password, create_user), never by
+writing a plain string into a password-hash field.
 Be deterministic: no randomness, no network calls. Use only names, fields and parameters that appear in
 the API index below; the seed is checked against the real code before anything runs.
 
@@ -89,8 +94,10 @@ Hard rules:
   production uses Postgres, MySQL or Redis; set that through the app's own settings or env vars.
 - Turn off background workers, schedulers, email, analytics and outbound HTTP (metadata fetching,
   webhooks) using the app's own settings or env vars, so runs are fast and repeatable.
-- Commands run with a POSIX shell in the repo root. Set env vars inline, e.g.
-  "env APP_DB=sqlite python manage.py migrate". Prefer the dev server or a single-worker server.
+- Commands run with a POSIX shell in the repo root. Put every env var (database URL, settings module,
+  feature switches) in [app] env, never inline in one command and never inside doppel_seed.py: the seed
+  and the server must see the same settings, or the seed fills one database while the app reads
+  another. Prefer the dev server or a single-worker server.
 - Install only what the app needs to serve its API. Skip production servers that need a compiler
   (uwsgi), test and lint tools, and frontend builds. The base image has NO C compiler. Lockfile
   installs (`uv sync`, `poetry install`, `pip install .` or `-e .`) install everything the project
@@ -275,6 +282,13 @@ def _req_name(req: str) -> str:
 def dependencies(repo: str | Path) -> tuple[list[str], str]:
     """The app's runtime requirements and the file they came from."""
     repo = Path(repo)
+    for name in ("requirements.txt", "requirements/base.txt", "requirements/prod.txt"):
+        f = repo / name  # pinned versions the app is tested with beat the loose ranges in pyproject
+        if f.is_file():
+            reqs = [ln.split("#")[0].strip() for ln in f.read_text("utf-8", "replace").splitlines()]
+            reqs = [r for r in reqs if r and not r.startswith("-")]
+            if reqs:
+                return reqs, name
     pyproject = repo / "pyproject.toml"
     if pyproject.is_file():
         try:
@@ -318,6 +332,98 @@ def install_hint(repo: str | Path) -> str:
     why = f" ({', '.join(dropped)} removed: it needs a C compiler)" if dropped else ""
     return (f"Suggested install, derived by Doppel from {source}{why}. Use it as `install` unless the code "
             f"shows it is incomplete:\n{cmd}\n\n")
+
+
+ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(\S*)$")
+
+
+def command_env(cmd: str) -> dict[str, str]:
+    """K=V assignments a command sets inline (`env K=V cmd`, `K=V cmd`, `export K=V; cmd`)."""
+    out: dict[str, str] = {}
+    for part in re.split(r"&&|\|\||;", cmd or ""):
+        try:
+            words = shlex.split(part)
+        except ValueError:
+            words = part.split()
+        if words[:1] in (["env"], ["export"]):
+            words = words[1:]
+        for w in words:
+            m = ASSIGNMENT.match(w)
+            if not m:
+                break
+            out[m.group(1)] = m.group(2)
+    return out
+
+
+def _seed_env_writes(seed: str) -> list[tuple[int, str, str, bool]]:
+    """(line, name, value, is_setdefault) for each os.environ write with constant arguments."""
+    try:
+        tree = ast.parse(seed)
+    except SyntaxError:
+        return []
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Subscript) \
+                and ast.unparse(node.targets[0].value).endswith("environ") \
+                and isinstance(node.targets[0].slice, ast.Constant) and isinstance(node.value, ast.Constant):
+            out.append((node.lineno, str(node.targets[0].slice.value), str(node.value.value), False))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr in ("setdefault", "putenv") \
+                and ast.unparse(node.func.value).endswith(("environ", "os")) \
+                and len(node.args) == 2 and all(isinstance(a, ast.Constant) for a in node.args):
+            key, value = (str(a.value) for a in node.args)
+            out.append((node.lineno, key, value, node.func.attr == "setdefault"))
+    return out
+
+
+def check_env(repo: str | Path, toml_text: str, seed: str = "") -> list[str]:
+    """The seed and the server must run with the same settings (microblog: the seed filled the database
+    named in an env var only the seed had, the server read its default one, and every login got 401)."""
+    try:
+        app = tomllib.loads(toml_text).get("app", {})
+    except tomllib.TOMLDecodeError:
+        return []
+    shared = {str(k): str(v) for k, v in (app.get("env") or {}).items()}
+    start = {**shared, **command_env(app.get("start", ""))}
+    problems = []
+    for stage in ("seed", "migrate"):
+        for name, value in command_env(app.get(stage, "")).items():
+            if start.get(name) != value:
+                theirs = f"sets {name}={start[name]}" if name in start else "does not"
+                problems.append(f"`{stage}` sets {name}={value} but `start` {theirs}, so the app won't see "
+                                f"what the {stage} did; put {name} in [app] env once")
+    repo = Path(repo)
+    for line, name, value, setdefault in _seed_env_writes(seed):
+        if start.get(name) == value:
+            continue
+        if setdefault and _repo_setdefault(repo, name, value):
+            continue  # the app sets the same default itself (manage.py, wsgi.py)
+        problems.append(f"{SEED_FILE} line {line} sets {name}={value!r} for itself, but the server doesn't get it; "
+                        f"put {name} in [app] env so the seed and the server agree")
+    return problems
+
+
+def _repo_setdefault(repo: Path, name: str, value: str) -> bool:
+    pattern = re.compile(rf"setdefault\(\s*['\"]{re.escape(name)}['\"]\s*,\s*['\"]{re.escape(value)}['\"]")
+    return any(pattern.search(p.read_text("utf-8", "replace")) for p in _py_files(repo)
+               if p.name in ("manage.py", "wsgi.py", "asgi.py", "app.py", "__init__.py", "settings.py"))
+
+
+DB_SETTING = re.compile(r"DATABASE|SQLALCHEMY|DB_URL|DB_PATH|DB_NAME|\bsqlite\b|database_url", re.I)
+
+
+def database_config(repo: Path, limit: int = 2_500) -> str:
+    """Where the app finds its database: the seed must write there."""
+    hits = []
+    for path in _py_files(repo):
+        rel = path.relative_to(repo).as_posix()
+        if not re.search(r"settings|config|app\.py$|__init__\.py$|database|db\.py$", rel):
+            continue
+        for n, ln in enumerate(path.read_text("utf-8", "replace").splitlines(), 1):
+            if DB_SETTING.search(ln) and not ln.strip().startswith("#"):
+                hits.append(f"{rel}:{n}: {ln.strip()}")
+    text = _clip("\n".join(hits), limit)
+    return f"\nWhere the app finds its database (the seed must fill exactly this one):\n{text}" if hits else ""
 
 
 def check_spec(repo: str | Path, toml_text: str) -> list[str]:
@@ -633,10 +739,11 @@ def login_advice(spec: TwinSpec, repo: Path | None) -> str:
                 "issues tokens or logs in, use it instead: [personas.login] with that route's method and path, "
                 "auth = [user, password] (HTTP Basic) or json = {...}, save = { token = \"<field in its answer>\" }, "
                 "and header = { Authorization = \"Bearer {token}\" } (or the scheme the auth code expects)." + where)
-    return ("\nThe app refused the seeded credentials. Check that the seed sets the password through the app's "
-            "own hashing (a set_password method or a password property), that the login sends the field the "
-            "auth code looks users up by (username or email), and that this route is the one that accepts them."
-            + where)
+    return ("\nThe app refused the seeded credentials. Check, in this order: that the seed and the server use the "
+            "SAME database (set its location once in [app] env, not only for the seed); that the seed sets the "
+            "password through the app's own hashing (a set_password method or a password property); that the "
+            "login sends the field the auth code looks users up by (username or email); and that this route is "
+            "the one that accepts them." + (database_config(repo) if repo else "") + where)
 
 
 def smoke_problem(recording: dict, spec: TwinSpec, repo: Path | None = None) -> str:
@@ -829,8 +936,13 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
         try:
             ends = [last_line(h.split(" -> ", 1)[-1]) for h in history[:-1]]
             repeated = next((i + 1 for i, e in enumerate(ends) if same_error(e, last_line(error))), 0)
-            drafted = draft(repo, error, previous, chat=chat, history=history[:-1], repeated=repeated,
-                            best_stage=best["stage"])
+            try:
+                drafted = draft(repo, error, previous, chat=chat, history=history[:-1], repeated=repeated,
+                                best_stage=best["stage"])
+            except ValueError as cut_off:  # a reply cut off or without the files: ask once more, no boot spent
+                log(f"[init] the reply could not be used ({str(cut_off)[:80]}...); asking again")
+                drafted = draft(repo, error, previous, chat=chat, history=history[:-1], repeated=repeated,
+                                best_stage=best["stage"])
         except Exception as e:  # noqa: BLE001
             error, result = f"the reply could not be used: {e}", {"ok": False, "error": str(e)}
             log(f"[init] {error}")
@@ -838,7 +950,7 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
             error, previous = (best["error"], best["files"]) if best["files"] else (error, previous)
             continue
         files = drafted["files"]
-        problems = check_spec(repo, files[SPEC_FILE])
+        problems = check_spec(repo, files[SPEC_FILE]) + check_env(repo, files[SPEC_FILE], files.get(SEED_FILE, ""))
         problems += check_seed(repo, files[SEED_FILE]) if SEED_FILE in files else []
         if problems:
             error = ("The files were checked against the repo before booting and would fail:\n"
@@ -1065,6 +1177,20 @@ def check_seed(repo: str | Path, seed: str) -> list[str]:
     except SyntaxError as e:
         return [f"{SEED_FILE} line {e.lineno}: syntax error: {e.msg}"]
     problems: list[str] = removed_api_uses(repo, tree)
+    for node in ast.walk(tree):
+        plain = None
+        if isinstance(node, ast.Call):
+            plain = next((k for k in node.keywords if k.arg and "hash" in k.arg.lower()
+                          and isinstance(k.value, ast.Constant) and isinstance(k.value.value, str)), None)
+            name = plain.arg if plain else ""
+        elif isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Attribute) \
+                and "hash" in node.targets[0].attr.lower() and isinstance(node.value, ast.Constant) \
+                and isinstance(node.value.value, str):
+            plain, name = node, node.targets[0].attr
+        if plain is not None:
+            problems.append(f"{SEED_FILE} line {node.lineno}: writes a plain string into {name}; a login hashes "
+                            "the password it gets and compares, so this can never match. Set the password "
+                            "through the app's own hashing (password=..., set_password(...), create_user(...))")
     functions: dict[str, tuple[ast.AST, str, Path]] = {}  # local name -> (def or class, shown name, file)
     modules: dict[str, Path] = {}                          # local alias -> repo module file
     for node in ast.walk(tree):

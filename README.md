@@ -141,6 +141,7 @@ start = "python app.py"   # must listen on $PORT
 ready = "/health"
 seed = "python seed.py"   # runs once on the base code; both worlds start from this data
 migrate = ""              # runs in each world after its code is in place
+env = { DATABASE_URL = "sqlite:///twin.db" }   # one set of env vars for install, seed, migrate and start
 
 [diff]
 ignore = ["created_at"]   # JSON keys allowed to differ
