@@ -100,14 +100,18 @@ def _trace_env(world: Path, watch: dict | None) -> dict:
 def _serve_and_replay(world: Path, spec: TwinSpec, personas: list[dict], watch: dict | None = None) -> list[dict]:
     port = _free_port()
     env = {**os.environ, **spec.env, "PORT": str(port), "PYTHONDONTWRITEBYTECODE": "1", **_trace_env(world, watch)}
+    log_path = world / ".doppel-app.log"
+    log_file = open(log_path, "w", encoding="utf-8", errors="replace")  # noqa: SIM115 - closed below
     app = subprocess.Popen(**_popen_args(spec.start), cwd=world, env=env,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                           stdout=log_file, stderr=subprocess.STDOUT, text=True)
     base_url = f"http://127.0.0.1:{port}"
     try:
         if not _wait_ready(app, base_url, spec.ready, timeout=30):
             app.kill()
+            app.wait(timeout=5)
+            log_file.flush()
             raise RuntimeError(f"{world}: app never became ready at {base_url}{spec.ready}\n"
-                               f"{app.communicate(timeout=5)[1]}")
+                               f"{log_path.read_text('utf-8', errors='replace')[-3000:]}")
         recordings = runner.replay(base_url, personas)
     finally:
         if app.poll() is None:
@@ -116,6 +120,9 @@ def _serve_and_replay(world: Path, spec: TwinSpec, personas: list[dict], watch: 
                 app.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 app.kill()
+        log_file.close()
+    log_text = log_path.read_text("utf-8", errors="replace") if log_path.exists() else ""
+    recordings = [runner.attach_app_log(r, log_text) for r in recordings]
     if watch:
         from doppel import reach
         hits = reach.parse_hits((world / reach.TRACE_DIR / "reached.txt").read_text("utf-8")

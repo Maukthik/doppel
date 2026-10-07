@@ -42,6 +42,9 @@ def code_files(root: str | Path) -> dict[str, Path]:
             if p.is_file() and not SKIP_PARTS & set(p.relative_to(root).parts)}
 
 
+from doppel.runner import APP_LOG_LINES, APP_LOG_MARKER, attach_app_log  # noqa: E402
+
+
 def persona_command(spec: TwinSpec, trace: bool = False) -> str:
     """Start the app in the background, replay one persona, stop the app, keep runner's exit code.
     With trace, Doppel's line tracer (doppel.reach) loads in the app and its hits go to stderr."""
@@ -56,7 +59,9 @@ def persona_command(spec: TwinSpec, trace: bool = False) -> str:
             f"& echo $! > /tmp/app.pid); "
             f"python3 /doppel/runner.py --base-url http://127.0.0.1:{PORT} --personas /doppel/persona.json "
             f"--ready-path {shlex.quote(spec.ready)}; rc=$?; "
-            f"kill $(cat /tmp/app.pid) 2>/dev/null; sleep 0.2; {report}"
+            f"kill $(cat /tmp/app.pid) 2>/dev/null; sleep 0.2; "
+            f"echo '{APP_LOG_MARKER}' >&2; tail -n {APP_LOG_LINES} /tmp/app.log >&2; echo '{APP_LOG_MARKER}' >&2; "
+            f"{report}"
             f"if [ $rc -ne 0 ]; then echo '--- app log ---' >&2; tail -n 40 /tmp/app.log >&2; fi; exit $rc")
 
 
@@ -175,8 +180,9 @@ class NebiusTwin:
             raise RuntimeError(f"persona '{persona.get('name')}' failed (exit {out.exit_code}):\n"
                                f"{text[-1500:]}\n{(out.stderr or '')[-1500:]}")
         if watch:
-            recordings[0]["reached"] = reach.parse_hits(out.stderr or "")
-        return recordings[0]
+            recordings[0]["reached"] = reach.parse_hits((out.stderr or "").split(APP_LOG_MARKER)[-1])
+        parts = (out.stderr or "").split(APP_LOG_MARKER)
+        return attach_app_log(recordings[0], parts[1] if len(parts) >= 3 else "")
 
     async def _replay_all(self, world, personas: list[dict], sem, watch: dict | None = None,
                           lane: str = "") -> list:

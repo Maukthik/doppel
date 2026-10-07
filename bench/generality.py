@@ -274,7 +274,7 @@ def summary() -> Path:
                      score("doppel", "regression"), score("doppel", "safe"),
                      score("review", "regression"), score("tests", "regression")])
         if init and not init["ok"]:
-            notes.append(f"- **{app['name']}** setup failed: {init['error'].strip().splitlines()[-1][:200]}")
+            notes.append(f"- **{app['name']}** setup failed: {init['error'].strip().splitlines()[0][:200]}")
     head = ["App", "Framework", "Login", "Database", "`doppel init`", "Served (A/A)", "False diffs (A/A)",
             "Doppel caught", "Doppel false alarms", "AI review caught", "Tests caught"]
     md = ["# Generality benchmark", "",

@@ -217,10 +217,12 @@ FRAME = re.compile(r'File "([^"]+\.py)", line (\d+)')
 
 def _repo_file(repo: Path, path: str) -> Path | None:
     """The repo file a sandbox or temp path points at (/app/bookmarks/x.py -> bookmarks/x.py)."""
-    parts = Path(path.replace("\\", "/")).parts
+    parts = [p for p in Path(path.replace("\\", "/")).parts if p not in ("/", "\\") and not p.endswith(":\\")]
     for i in range(len(parts)):
         candidate = repo.joinpath(*parts[i:])
-        if parts[i:] and candidate.is_file() and not SKIP_PARTS & set(parts[i:]):
+        # inside the repo only: a library frame (/usr/lib/python3.12/socketserver.py) is not app code
+        if parts[i:] and candidate.is_file() and not SKIP_PARTS & set(parts[i:]) \
+                and candidate.resolve().is_relative_to(repo.resolve()):
             return candidate
     return None
 
@@ -981,12 +983,24 @@ def seed_evidence(seed_log: str, login: dict | None = None, ignored: bool = Fals
     return verdict + out
 
 
+MISSING_TABLE = re.compile(r"no such table|relation \"?\w+\"? does not exist|Table '[\w.]+' doesn't exist", re.I)
+
+
 def smoke_problem(recording: dict, spec: TwinSpec, repo: Path | None = None) -> str:
     """Why the smoke run is not good enough, or "" if it is."""
     steps = recording.get("steps", [])
     for s in steps:
         if s["status"] == 0 or s["status"] >= 500:
-            return f"{s['request']} answered {s['status'] or 'nothing'}: {str(s.get('body'))[:500]}"
+            log = recording.get("app_log", "")
+            told = (f"\nThe app's own log (its last lines) says why:\n{log[-3000:]}" if log
+                    else "\n(the app's log was empty: it printed no traceback)")
+            if MISSING_TABLE.search(log):
+                told += ("\nA table is missing although the seed creates the schema: the server opened a DIFFERENT "
+                         "database file than the one the seed filled (compare the path in the scan below with where "
+                         "the app's config puts it, e.g. Flask's instance folder sits next to the package, not "
+                         "inside it). Point both at the same file, or let the seed use the app's own factory/config."
+                         + (database_config(repo) if repo else ""))
+            return f"{s['request']} answered {s['status'] or 'nothing'} (the app crashed).{told}"
     from doppel.rehearsal import login_step_count
     n = login_step_count(spec.login) if spec.login else 0
     if spec.login and len(steps) >= n:
@@ -1132,8 +1146,9 @@ def try_files(repo: Path, files: dict, backend: str = "nebius", run_twin=None, c
         problem = smoke_problem(smoke["base"][0], spec, work) if smoke["base"] else "the smoke persona never ran"
         if problem:
             ignored = bool((spec.login or {}).get("auth")) and bool(NOT_PROVIDED.search(problem))
+            crash = "(the app crashed)" in problem  # a crash is not a wrong password: no login verdict
             return {"ok": False, "error": problem + login_sent(spec.login)
-                    + seed_evidence(smoke.get("seed_log", ""), spec.login, ignored), **seen}
+                    + seed_evidence(smoke.get("seed_log", ""), None if crash else spec.login, ignored), **seen}
         if not calibrate:
             return {"ok": True, "error": "", "files": files, "noise": [], "flaky": [], "coverage": None,
                     "personas": 0, "repaired": [], "calibrated": False, **seen}

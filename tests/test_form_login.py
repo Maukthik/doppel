@@ -145,3 +145,41 @@ def test_form_credentials_are_checked_against_hashed_seed_passwords():
         assert not bootstrap.check_login_matches_seed(FORM_LOGIN, seed)
 
 
+
+
+CRASHING_SEED = 'import os, json\nos.makedirs("instance", exist_ok=True)\n' \
+                'json.dump({"alice": "doppel-pass"}, open("instance/users.json", "w"))\n'   # wrong place
+
+
+def test_a_crash_sends_the_apps_own_traceback_back_and_no_password_advice(tmp_path):
+    app = session_app(tmp_path)
+    model = ScriptedModel([reply(FORM_LOGIN, CRASHING_SEED), reply(FORM_LOGIN, SEED)], personas=USERS)
+    result = bootstrap.init(app, backend="local", tries=3, chat=model, log=lambda m: None)
+    assert result["ok"] and result["attempts"] == 2
+    told = model.prompts[1]
+    assert "(the app crashed)" in told and "FileNotFoundError" in told and "users.json" in told
+    assert "PASSWORD the seed" not in told
+
+
+def test_a_missing_table_points_at_two_different_database_files():
+    from doppel.spec import TwinSpec
+    rec = {"steps": [{"request": "POST /login", "status": 500, "body": {}}],
+           "app_log": "Traceback ...\nsqlite3.OperationalError: no such table: user"}
+    problem = bootstrap.smoke_problem(rec, TwinSpec(start="x"))
+    assert "DIFFERENT database file" in problem and "no such table: user" in problem
+
+
+def test_a_healthy_recording_carries_no_app_log():
+    from doppel.runner import attach_app_log
+    ok = attach_app_log({"steps": [{"status": 200}, {"status": 404}]}, "lots of access log lines")
+    bad = attach_app_log({"steps": [{"status": 200}, {"status": 500}]}, "\n".join(f"l{i}" for i in range(99)))
+    assert "app_log" not in ok and bad["app_log"].splitlines() == [f"l{i}" for i in range(39, 99)]
+
+
+def test_library_frames_in_a_traceback_are_not_mistaken_for_app_files(tmp_path):
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    error = ('  File "/usr/lib/python3.12/socketserver.py", line 761, in __init__\n'
+             '  File "/app/app.py", line 1, in <module>\n')
+    assert bootstrap._repo_file(tmp_path, "/usr/lib/python3.12/socketserver.py") is None
+    assert bootstrap._repo_file(tmp_path, "/app/app.py") == tmp_path / "app.py"
+    assert "app.py (around line 1)" in bootstrap.related_source(tmp_path, error)

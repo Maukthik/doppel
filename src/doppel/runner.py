@@ -203,6 +203,23 @@ def call(base_url: str, method: str, path: str, body, timeout: float, headers: d
     return status, payload, round(ms, 1)
 
 
+APP_LOG_MARKER = "@@doppel-app-log@@"
+APP_LOG_LINES = 60
+
+
+def crashed(recording: dict) -> bool:
+    """Did any request in this recording crash the app (no answer, or a 5xx)?"""
+    return any(s.get("status", 200) == 0 or s.get("status", 200) >= 500 for s in recording.get("steps", []))
+
+
+def attach_app_log(recording: dict, log_text: str) -> dict:
+    """Keep the end of the app's own log on a recording whose requests crashed: the traceback is the
+    only place that says WHY (a generic 500 page never does)."""
+    if crashed(recording) and log_text.strip():
+        recording["app_log"] = "\n".join(log_text.strip().splitlines()[-APP_LOG_LINES:])
+    return recording
+
+
 def placeholders(value) -> set[str]:
     """Every {name} used anywhere in a persona (paths, bodies, headers)."""
     return set(_PLACEHOLDER.findall(json.dumps(value)))
