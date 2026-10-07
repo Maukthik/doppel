@@ -29,13 +29,16 @@ Return ONLY JSON: {{"personas": [persona, ...]}} with exactly {n} personas. Each
     "vars": {{"name": value, ...}},
     "headers": {{"Header-Name": "value"}} (optional, sent with every step),
     "steps": [{{"method": "GET|POST|PUT|PATCH|DELETE", "path": "/route?query",
-               "json": {{...}} (only for requests with a body),
+               "json": {{...}} (only for requests with a JSON body),
+               "form": {{...}} (instead of "json", for an HTML form post: field name -> value),
                "headers": {{...}} (optional, this step only),
                "auth": ["username", "password"] (optional, HTTP Basic auth for this step),
                "save": {{"var_name": "dotted.path.in.response"}} (optional)}}, ...]}}
 Use "{{var}}" in path, json or headers to reuse saved or preset values (an id or a token returned
 by an earlier step), e.g. "headers": {{"Authorization": "Bearer {{token}}"}} after a login step that
-saves {{"token": "access_token"}}.
+saves {{"token": "access_token"}}. Each persona keeps its cookies like a browser, so a session login
+(a form post to the login view) carries over to later steps; a CSRF cookie is sent back automatically,
+but visit a page that sets it (often the login form, with GET) before the first form post.
 Rules:
 - Only use routes that exist in the code below, with their full path (including any URL prefix the
   app registers them under). 2-8 steps per persona.
@@ -137,6 +140,9 @@ def validate(raw) -> list[dict]:
             step = {"method": method, "path": path}
             if isinstance(s.get("json"), (dict, list)):
                 step["json"] = s["json"]
+            elif isinstance(s.get("form"), dict):
+                step["form"] = {str(k): v if isinstance(v, (str, int, float)) else json.dumps(v)
+                                for k, v in s["form"].items()}
             if isinstance(s.get("save"), dict):
                 step["save"] = {str(k): str(v) for k, v in s["save"].items()}
             if isinstance(s.get("headers"), dict):

@@ -9,6 +9,10 @@ prints a JSON list of recordings to stdout.
 A persona is {"name": ..., "vars": {...}, "headers": {...}, "steps": [step, ...]}. A step is
     {"method": "POST", "path": "/orders", "json": {...}, "save": {"order_id": "id"},
      "headers": {"Authorization": "Bearer {token}"}, "auth": ["alice", "secret"]}
+or, for an HTML form, "form": {"username": "alice", "password": "secret"} instead of "json".
+Each persona keeps its own cookies across its steps, like one browser: a session cookie set by a
+login stays for the next request. When the app has set a CSRF cookie (Django's csrftoken, Flask-WTF,
+...), unsafe requests send it back as an X-CSRFToken header, which those frameworks accept.
 "{name}" placeholders in path, json and headers are filled from vars; "save" copies values from
 the JSON response (dotted paths like "items.0.id") into vars for later steps. Persona headers
 apply to every step (step headers win); "auth" sends HTTP Basic credentials.
@@ -17,11 +21,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.cookiejar
 import json
 import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
@@ -69,13 +75,41 @@ def build_headers(persona: dict, step: dict, variables: dict) -> dict:
     return headers
 
 
-def call(base_url: str, method: str, path: str, body, timeout: float, headers: dict | None = None):
-    data = json.dumps(body).encode() if body is not None else None
-    headers = {**({"Content-Type": "application/json"} if data is not None else {}), **(headers or {})}
-    req = urllib.request.Request(base_url.rstrip("/") + path, data=data, method=method, headers=headers)
+UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def browser() -> tuple[urllib.request.OpenerDirector, http.cookiejar.CookieJar]:
+    """An opener that keeps cookies, one per persona."""
+    jar = http.cookiejar.CookieJar()
+    return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar)), jar
+
+
+def csrf_headers(jar: http.cookiejar.CookieJar | None, method: str, headers: dict) -> dict:
+    """Send a CSRF cookie back as the header Django and Flask-WTF read, on unsafe requests only."""
+    if jar is None or method not in UNSAFE or any(k.lower() in ("x-csrftoken", "x-csrf-token") for k in headers):
+        return {}
+    token = next((c.value for c in jar if "csrf" in c.name.lower() and c.value), None)
+    return {"X-CSRFToken": token} if token else {}
+
+
+def call(base_url: str, method: str, path: str, body, timeout: float, headers: dict | None = None,
+         form=None, opener=None, jar=None):
+    if form is not None:
+        data = urllib.parse.urlencode(form, doseq=True).encode()
+        kind = {"Content-Type": "application/x-www-form-urlencoded"}
+    elif body is not None:
+        data, kind = json.dumps(body).encode(), {"Content-Type": "application/json"}
+    else:
+        data, kind = None, {}
+    headers = {**kind, **(headers or {})}
+    headers.update(csrf_headers(jar, method, headers))
+    url = base_url.rstrip("/") + path
+    if jar is not None and method in UNSAFE:
+        headers.setdefault("Referer", url)  # Django's CSRF check wants a same-origin Referer over HTTPS
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
     t0 = time.perf_counter()
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with (opener.open if opener else urllib.request.urlopen)(req, timeout=timeout) as resp:
             status, raw = resp.status, resp.read()
     except urllib.error.HTTPError as e:
         status, raw = e.code, e.read()
@@ -118,6 +152,7 @@ def replay(base_url: str, personas: list[dict], timeout: float = 10.0) -> list[d
     recordings = []
     for persona in personas:
         variables = dict(persona.get("vars") or {})
+        opener, jar = browser()
         wanted = placeholders({k: persona.get(k) for k in ("headers", "steps")})
         saved = {v for step in persona.get("steps") or [] for v in (step.get("save") or {})}
         steps = []
@@ -125,15 +160,16 @@ def replay(base_url: str, personas: list[dict], timeout: float = 10.0) -> list[d
             method = str(step.get("method", "GET")).upper()
             path = str(render(step.get("path", "/"), variables))
             body = render(step["json"], variables) if "json" in step else None
+            form = render(step["form"], variables) if isinstance(step.get("form"), dict) else None
             status, payload, ms = call(base_url, method, path, body, timeout,
-                                       build_headers(persona, step, variables))
+                                       build_headers(persona, step, variables), form=form, opener=opener, jar=jar)
             for var, dotted in (step.get("save") or {}).items():
                 value = extract(payload, dotted)
                 if value is not None:
                     variables[var] = value
             if 200 <= status < 300:
                 auto_capture(payload, wanted - saved, variables, path)
-            steps.append({"i": i, "request": f"{method} {path}", "sent": body,
+            steps.append({"i": i, "request": f"{method} {path}", "sent": body if form is None else form,
                           "status": status, "body": payload, "ms": ms})
         recordings.append({"persona": persona.get("name", "?"), "steps": steps})
     return recordings

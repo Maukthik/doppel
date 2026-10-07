@@ -17,7 +17,8 @@ Read from doppel.toml in the app's folder:
     [personas.login]          # optional: a login step Doppel adds to personas that never log in
     method = "POST"
     path = "/api/tokens"
-    auth = ["alice", "secret"]            # HTTP Basic (or json = {...} for a JSON body)
+    auth = ["alice", "secret"]            # HTTP Basic (or json = {...} for a JSON body, form = {...} for a
+                                          # login form; the session cookie it sets is kept)
     save = { token = "access_token" }
     header = { Authorization = "Bearer {token}" }
 

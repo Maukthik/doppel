@@ -31,7 +31,8 @@ login flow that exist in the code. Keep each persona's name and goal. Keep delib
 (careless users sending invalid data on purpose), but it must reach the route it is testing.
 
 Persona format reminder: steps may carry "auth": ["username", "password"] for HTTP Basic auth,
-"headers": {{...}} (e.g. {{"Authorization": "Bearer {{token}}"}}), "json": {{...}} for a body, and
+"headers": {{...}} (e.g. {{"Authorization": "Bearer {{token}}"}}), "json": {{...}} for a body, "form": {{...}}
+for an HTML form post (cookies, including a session and a CSRF cookie, carry over between steps), and
 "save": {{"var": "dotted.path"}} to keep a value from the response. Persona-level "headers" apply
 to every step.
 
@@ -86,7 +87,7 @@ def _transcript(persona: dict, recording: dict) -> str:
 
 def with_login(persona: dict, login: dict) -> dict:
     """The persona with the app owner's login step in front and its token header on every step."""
-    step = {k: login[k] for k in ("method", "path", "auth", "json", "save") if k in login}
+    step = {k: login[k] for k in ("method", "path", "auth", "json", "form", "save") if k in login}
     step.setdefault("method", "POST")
     return {**persona, "steps": [step, *persona["steps"]],
             "headers": {**(login.get("header") or {}), **(persona.get("headers") or {})}}
