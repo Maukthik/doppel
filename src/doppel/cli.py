@@ -22,8 +22,7 @@ load_dotenv()
 
 
 def cmd_run(a) -> int:
-    spec_path = Path(a.spec) if a.spec else Path(a.head) / "doppel.toml"
-    spec = TwinSpec.load(spec_path)
+    spec = load_spec(a.base, a.head, a.spec)
     personas = json.loads(Path(a.personas).read_text(encoding="utf-8"))
 
     if a.backend == "local":
@@ -61,6 +60,11 @@ def cmd_run(a) -> int:
         print(f"[twin] persona '{f['persona']}' failed: {f['error']}", file=sys.stderr)
     from doppel.rehearsal import coverage
     cov = {**coverage(worlds["base"]), "repaired": repaired}
+    touched = setup_files_changed(a.base, a.head, a.personas)
+    if touched:
+        cov["setup_note"] = (f"⚠️ This PR edits Doppel's own setup ({', '.join(touched)}). The comparison settings "
+                             "([diff]) come from the base branch, so the PR can't hide its own changes; "
+                             "review these edits by hand.")
     reached = reach.summarize(found, worlds) if found else []
     if reached:
         cov["reach"] = reached
@@ -68,6 +72,15 @@ def cmd_run(a) -> int:
         cov["reach_note"] = ("The changed code runs when the app loads (module or class level), so which users "
                              "reached it can't be measured line by line.")
     findings = compare(worlds["base"], worlds["head"], spec.ignore, spec.slow_ratio, spec.slow_min_ms)
+    # a persona that ran on base but broke on head (the app no longer starts, the runner crashed) is the
+    # loudest regression there is, not a persona to drop: report it as an error finding
+    from doppel.diff import Finding
+    broke = [f for f in worlds.get("failed", []) if f.get("world") == "head"]
+    findings = [Finding("error", f["persona"], 0, "(whole persona)", "ran on base, failed on head",
+                        "ran", f["error"][:200]) for f in broke] + findings
+    if not worlds["base"] and not broke:
+        raise RuntimeError(f"no persona replayed in either world ({len(worlds.get('failed', []))} failed): "
+                           "the twin tested nothing, so this is not a pass")
     steps = sum(len(r["steps"]) for r in worlds["base"])
     judged = None
     if a.pr and findings:
@@ -106,6 +119,30 @@ def cmd_run(a) -> int:
         regressions = [v for v in judged["verdicts"] if v.label == "regression"] if judged else findings
         return 1 if regressions else 0
     return 0
+
+
+SETUP_FILES = ("doppel.toml", "doppel_seed.py", "doppel-personas.json")
+
+
+def load_spec(base, head, explicit: str | None = None) -> TwinSpec:
+    """The twin spec for a run. An explicit --spec is used as given. Otherwise [app] (install, start,
+    migrate) comes from the PR, which may legitimately add a dependency or a migration, but [diff]
+    (ignored keys, slowness thresholds) comes from the base branch: a PR that adds "total" to
+    [diff] ignore must not be able to hide its own change to totals."""
+    if explicit:
+        return TwinSpec.load(explicit)
+    head_toml, base_toml = Path(head) / "doppel.toml", Path(base) / "doppel.toml"
+    spec = TwinSpec.load(head_toml if head_toml.exists() else base_toml)
+    if base_toml.exists() and head_toml.exists():
+        trusted = TwinSpec.load(base_toml)
+        spec.ignore, spec.slow_ratio, spec.slow_min_ms = trusted.ignore, trusted.slow_ratio, trusted.slow_min_ms
+    return spec
+
+
+def setup_files_changed(base, head, personas: str | None = None) -> list[str]:
+    """Doppel's own setup files (spec, seed, personas) that the PR adds, removes or edits."""
+    names = set(SETUP_FILES) | ({Path(personas).name} if personas else set())
+    return [rel for rel in _changed(base, head) if Path(rel).name in names]
 
 
 def _changed(base, head) -> list[str]:

@@ -30,8 +30,11 @@ LOW_COVERAGE = 0.3
 
 
 def coverage_line(cov: dict | None) -> str:
-    if not cov or not cov.get("requests"):
+    if not cov:
         return ""
+    note = f" {cov['setup_note']}" if cov.get("setup_note") else ""
+    if not cov.get("requests"):
+        return note.strip()
     line = (f"Coverage: the app served {cov['served']} of {cov['requests']} requests "
             f"({100 * cov['served'] / cov['requests']:.0f}%) on base.")
     if cov.get("stuck_personas"):
@@ -43,7 +46,7 @@ def coverage_line(cov: dict | None) -> str:
         line += " " + reach_line(cov["reach"])
     elif cov.get("reach_note"):
         line += " " + cov["reach_note"]
-    return line
+    return line + note
 
 
 CHECK = {"confirmed": "🔴 confirmed", "intended": "🟢 confirmed, intended", "refuted": "🟢 refuted",

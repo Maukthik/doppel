@@ -244,7 +244,10 @@ def pair(personas: list[dict], base: list, head: list) -> dict:
             ok_head.append(rh)
         else:
             err = rb if not isinstance(rb, dict) else rh
-            failed.append({"persona": p.get("name"), "error": f"{type(err).__name__}: {str(err)[:300]}"})
+            world = "both" if not isinstance(rb, dict) and not isinstance(rh, dict) else \
+                ("base" if not isinstance(rb, dict) else "head")
+            failed.append({"persona": p.get("name"), "world": world,
+                           "error": f"{type(err).__name__}: {str(err)[:300]}"})
     return {"base": ok_base, "head": ok_head, "failed": failed}
 
 

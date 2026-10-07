@@ -212,7 +212,7 @@ def regression_tests(findings: list[Finding], verdicts: list[Verdict], personas:
     by_name = {p["name"]: p for p in personas}
     out, seen = [TEST_HEADER.format(name=name)], set()
     for f, v in zip(findings, verdicts, strict=True):
-        if v.label != "regression" or f.persona not in by_name or f.kind == "slow":
+        if v.label != "regression" or f.persona not in by_name or f.kind == "slow" or f.request.startswith("("):
             continue
         fn = f"test_{_slug(f.persona)}_step{f.step}_{_slug(f.request)}"
         if fn in seen:

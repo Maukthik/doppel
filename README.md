@@ -109,8 +109,10 @@ jobs:
 ```
 
 Every PR gets one comment (updated on each push), the report in the job summary, and the personas,
-raw recordings and regression tests as run artifacts. The check fails on regressions. Without a
-`doppel-personas.json`, Nemotron invents the users. PRs from forks don't get secrets, so the twin
+raw recordings and regression tests as run artifacts. The check fails on regressions, and a persona that
+runs on base but fails on head (say the app no longer starts) counts as one; a run where no persona replayed
+at all exits 2 instead of passing. Personas come from `doppel-personas.json` on the base branch, so a PR
+can't pick the users that test it; without one, Nemotron invents them. PRs from forks don't get secrets, so the twin
 runs on branches of the repo itself. `examples/demo-repo` sets up a repo to watch it work.
 
 ## Benchmark on a real app (stage 5)
@@ -185,6 +187,10 @@ ignore = ["created_at"]   # JSON keys allowed to differ
 slow_ratio = 2.0
 slow_min_ms = 50
 ```
+
+On a pull request, `[app]` is read from the PR (it may add a dependency or a migration) and `[diff]` from
+the base branch, so a PR can't add the fields it changes to `ignore`. A PR that edits `doppel.toml`,
+`doppel_seed.py` or the personas file gets a warning in its comment.
 
 ## License
 
