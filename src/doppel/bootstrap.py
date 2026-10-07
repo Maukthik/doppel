@@ -819,12 +819,44 @@ def smoke_persona(spec: TwinSpec) -> dict:
 
 
 TOKEN_TRAPS = re.compile(r"\bjwt\b|encode\(|hash|expir|signer|signing|itsdangerous|hmac", re.I)
+# the route never read the credentials at all (DRF's NotAuthenticated, and the usual wordings elsewhere)
+NOT_PROVIDED = re.compile(r"credentials were not provided|no credentials|not authenticated|missing (auth|token)"
+                          r"|authorization header (is )?(missing|required)", re.I)
+API_AUTH = re.compile(r"AUTHENTICATION_CLASSES|authentication_classes|Authentication\b|BasicAuth")
 
 
-def login_advice(spec: TwinSpec, repo: Path | None) -> str:
+def basic_ignored_advice(repo: Path | None) -> str:
+    """HTTP Basic sent, and the app answered as if nothing was sent: no auth class reads Basic here.
+
+    linkding, 8 Oct: four attempts tweaked the password while the API only reads "Token <key>"
+    (bookmarks.api.auth.LinkdingTokenAuthentication) and has no route that trades a password for a token."""
+    classes = ""
+    if repo:
+        hits = []
+        for path in _py_files(repo):
+            rel = path.relative_to(repo).as_posix()
+            if "test" in rel:
+                continue
+            for n, ln in enumerate(path.read_text("utf-8", "replace").splitlines(), 1):
+                if API_AUTH.search(ln) and not ln.lstrip().startswith("#"):
+                    hits.append(f"{rel}:{n}: {ln.strip()}")
+        if hits:
+            classes = "\nWhere this app sets up API authentication:\n" + "\n".join(hits[:20])
+    return ("\nThe app answered as if NO credentials were sent: the route never read the HTTP Basic header, so the "
+            "password is not the problem and changing it will not help. Use the scheme the app's authentication "
+            "classes below actually read. If that is a token stored in the app's database and no route trades a "
+            "password for one, seed a token with a FIXED key in the app's own token model and log in with only a "
+            "header: [personas.login] with a cheap authenticated GET, header = { Authorization = \"<keyword> "
+            "<the fixed key>\" } (the keyword the auth class accepts, such as Token or Bearer), and no auth, json "
+            "or save." + classes + (auth_source(repo) if repo else ""))
+
+
+def login_advice(spec: TwinSpec, repo: Path | None, body: str = "") -> str:
     """What to try instead, by the shape of the login that was refused (the same 401 three times in a
     row on microblog: the model kept sending a seeded token the app could never accept)."""
     login = spec.login or {}
+    if login.get("auth") and NOT_PROVIDED.search(body or ""):
+        return basic_ignored_advice(repo)
     issuing = login_routes(repo) if repo else ""
     where = f"\nRoutes that look like they issue credentials:\n{issuing}" if issuing else ""
     if not login.get("auth") and not login.get("json") and not login.get("save"):
@@ -869,7 +901,7 @@ def _login_identity(login: dict | None) -> str:
     return str(next((v for k, v in body.items() if k.lower() in ("username", "email", "login", "user")), ""))
 
 
-def seed_evidence(seed_log: str, login: dict | None = None) -> str:
+def seed_evidence(seed_log: str, login: dict | None = None, ignored: bool = False) -> str:
     """What the seed printed and what the databases held right after it: facts, not guesses, for the
     next draft (microblog: five refused logins in a row before anyone looked inside)."""
     if not seed_log.strip():
@@ -888,6 +920,9 @@ def seed_evidence(seed_log: str, login: dict | None = None) -> str:
     elif who and known and who not in known:
         verdict = (f"\nThe login uses {who!r}, but the seeded users are: {', '.join(dict.fromkeys(known))}. "
                    "Log in as one of them, or seed that user.")
+    elif who and who in known and ignored:
+        verdict = (f"\nUser {who!r} exists and its password is hashed: the account is fine. The login failed "
+                   "because the route never read the credentials (see above), not because of the password.")
     elif who and who in known:
         verdict = (f"\nUser {who!r} exists and its password is hashed, so the account is fine: the PASSWORD the "
                    "seed hashed differs from the one the login sends, or the login sends it in a form this route "
@@ -912,7 +947,7 @@ def smoke_problem(recording: dict, spec: TwinSpec, repo: Path | None = None) -> 
         if s["status"] == 0 or s["status"] >= 500:
             return f"{s['request']} answered {s['status'] or 'nothing'}: {str(s.get('body'))[:500]}"
     if spec.login and steps and steps[0]["status"] >= 400:
-        advice = login_advice(spec, repo) if steps[0]["status"] in (401, 403) else ""
+        advice = login_advice(spec, repo, str(steps[0].get("body"))) if steps[0]["status"] in (401, 403) else ""
         return (f"the login step {steps[0]['request']} was refused with {steps[0]['status']}: "
                 f"{str(steps[0].get('body'))[:500]}. The seeded account or the login settings are wrong.{advice}")
     return ""
@@ -1034,8 +1069,9 @@ def try_files(repo: Path, files: dict, backend: str = "nebius", run_twin=None, c
             return {"ok": False, "error": smoke["failed"][0]["error"], **seen}
         problem = smoke_problem(smoke["base"][0], spec, work) if smoke["base"] else "the smoke persona never ran"
         if problem:
+            ignored = bool((spec.login or {}).get("auth")) and bool(NOT_PROVIDED.search(problem))
             return {"ok": False, "error": problem + login_sent(spec.login)
-                    + seed_evidence(smoke.get("seed_log", ""), spec.login), **seen}
+                    + seed_evidence(smoke.get("seed_log", ""), spec.login, ignored), **seen}
         if not calibrate:
             return {"ok": True, "error": "", "files": files, "noise": [], "flaky": [], "coverage": None,
                     "personas": 0, "repaired": [], "calibrated": False, **seen}

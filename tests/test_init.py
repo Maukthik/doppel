@@ -918,3 +918,24 @@ def test_the_file_tree_leaves_out_doppels_own_files(tmp_path):
     (tmp_path / "manage.py").write_text("")
     tree = bootstrap.file_tree(tmp_path)
     assert "manage.py" in tree and ".doppel" not in tree
+
+
+def test_a_login_the_app_never_read_is_not_blamed_on_the_password(tmp_path):
+    # linkding, 8 Oct: the login sent HTTP Basic, the API only reads "Token <key>", DRF answered "credentials
+    # were not provided", and four attempts changed the password because that is what the advice said
+    (tmp_path / "bookmarks" / "api").mkdir(parents=True)
+    (tmp_path / "bookmarks" / "api" / "auth.py").write_text(
+        "class LinkdingTokenAuthentication(TokenAuthentication):\n    keywords = ['Token', 'Bearer']\n")
+    (tmp_path / "settings.py").write_text(
+        'REST_FRAMEWORK = {"DEFAULT_AUTHENTICATION_CLASSES": ["bookmarks.api.auth.LinkdingTokenAuthentication"]}\n')
+    spec = TwinSpec(start="x", ready="/health", login={"method": "GET", "path": "/api/user/profile/",
+                                                       "auth": ["doppel", "doppel-pass"], "save": {"token": "key"}})
+    refused = {"steps": [{"request": "GET /api/user/profile/", "status": 401,
+                          "body": {"detail": "Authentication credentials were not provided."}}]}
+    text = bootstrap.smoke_problem(refused, spec, tmp_path)
+    assert "never read the HTTP Basic header" in text and "FIXED key" in text
+    assert "LinkdingTokenAuthentication" in text and "same literal password" not in text
+    log = "[dbscan] /app/db.sqlite3: auth_user=1\n[dbscan]   auth_user: username=doppel password=hashed(pbkdf2)"
+    assert "not because of the password" in bootstrap.seed_evidence(log, spec.login, ignored=True)
+    wrong = {"steps": [{"request": "GET /api/user/profile/", "status": 401, "body": {"detail": "Invalid password."}}]}
+    assert "never read the HTTP Basic header" not in bootstrap.smoke_problem(wrong, spec, tmp_path)
