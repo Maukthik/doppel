@@ -208,7 +208,8 @@ def gather_code(repo: str | Path, limit: int = MAX_CODE) -> str:
 
 NAME_PATTERNS = (r"(\w+)\(\) got an unexpected keyword argument", r"(\w+)\(\) missing \d+ required",
                  r"(\w+)\(\) takes", r"has no attribute '(\w+)'", r"cannot import name '(\w+)'",
-                 r"NOT NULL constraint failed: \w+?_(\w+)\.", r"(\w+) matching query does not exist")
+                 r"NOT NULL constraint failed: \w+?_(\w+)\.", r"UNIQUE constraint failed: \w+?_(\w+)\.",
+                 r"(\w+) matching query does not exist")
 FRAME = re.compile(r'File "([^"]+\.py)", line (\d+)')
 
 
@@ -222,8 +223,11 @@ def _repo_file(repo: Path, path: str) -> Path | None:
     return None
 
 
-def _definition(repo: Path, name: str, lines: int = 30) -> str:
-    pattern = re.compile(rf"^\s*(async\s+def|def|class)\s+{re.escape(name)}\b")
+def _definition(repo: Path, name: str, lines: int = 30, any_case: bool = False) -> str:
+    """The first def or class called `name`. any_case: a class whose name matches ignoring case, for
+    database table names (bookmarks_apitoken -> class ApiToken)."""
+    pattern = (re.compile(rf"^\s*class\s+{re.escape(name)}\b", re.I) if any_case
+               else re.compile(rf"^\s*(async\s+def|def|class)\s+{re.escape(name)}\b"))
     for p in sorted(repo.rglob("*.py")):
         rel = p.relative_to(repo)
         if SKIP_PARTS & set(rel.parts):
@@ -250,7 +254,8 @@ def related_source(repo: str | Path, error: str, limit: int = 10_000) -> str:
         snippets.append(f"### {f.relative_to(repo).as_posix()} (around line {n})\n" + "\n".join(text[lo:n + 12]))
     names = dict.fromkeys(m for pat in NAME_PATTERNS for m in re.findall(pat, error))
     for name in names:
-        found = _definition(repo, name) or (_definition(repo, name.title().replace("_", "")) if "_" in name else "")
+        found = (_definition(repo, name) or (_definition(repo, name.title().replace("_", "")) if "_" in name else "")
+                 or _definition(repo, name.replace("_", ""), any_case=True))
         if found:
             snippets.append(found)
     out, used = [], 0
@@ -259,6 +264,11 @@ def related_source(repo: str | Path, error: str, limit: int = 10_000) -> str:
             break
         out.append(snip)
         used += len(snip)
+    if re.search(r"UNIQUE constraint failed|duplicate key value violates unique constraint", error):
+        # linkding: the seed gave every user's ApiToken the same key; the model's save() makes a random
+        # one when the key is left empty, which the model can only know from the source above
+        out.insert(0, "A UNIQUE constraint failed: two rows got the same value for that field. Give each row its "
+                      "own value, or leave the field out if the model below fills it in itself (look at save()).")
     routes = route_source(repo) if re.search(r"(refused with|answered) 404", error) else ""
     routes += auth_source(repo) if re.search(r"(refused with|answered) 40[13]", error) else ""
     return (("\nSource the error points at (real code from this repo; trust it over your memory):\n"

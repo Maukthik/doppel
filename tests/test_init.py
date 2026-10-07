@@ -134,6 +134,20 @@ def test_errors_come_with_the_real_source_they_point_at(tmp_path):
     assert bootstrap.related_source(tmp_path, "ValueError: nothing to look up") == ""
 
 
+def test_a_unique_failure_shows_the_model_class_behind_the_table(tmp_path):
+    # linkding, 8 Oct: three attempts gave every user's ApiToken the same key. The table name
+    # (bookmarks_apitoken) doesn't spell the class (ApiToken), so the model never saw that save()
+    # makes a random key when it is left empty.
+    (tmp_path / "bookmarks").mkdir()
+    (tmp_path / "bookmarks" / "models.py").write_text(
+        "class ApiToken(models.Model):\n    key = models.CharField(max_length=40, unique=True)\n\n"
+        "    def save(self, *args, **kwargs):\n        if not self.key:\n            self.key = self.generate_key()\n")
+    src = bootstrap.related_source(tmp_path, "django.db.utils.IntegrityError: UNIQUE constraint failed: "
+                                             "bookmarks_apitoken.key")
+    assert "class ApiToken(models.Model)" in src and "self.key = self.generate_key()" in src
+    assert "Give each row its own value, or leave the field out" in src
+
+
 def test_the_same_error_twice_is_called_out(tmp_path):
     app = shop_without_spec(tmp_path)
     broken = SHOP_SPEC.replace('start = "python app.py"', 'start = "python missing.py"')
