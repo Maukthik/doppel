@@ -154,8 +154,8 @@ def file_tree(repo: Path, limit: int = 300) -> str:
     rows = []
     for p in sorted(repo.rglob("*")):
         rel = p.relative_to(repo)
-        if SKIP_PARTS & set(rel.parts) or len(rel.parts) > 3:
-            continue
+        if SKIP_PARTS & set(rel.parts) or len(rel.parts) > 3 or rel.parts[0].startswith(".doppel-"):
+            continue  # .doppel-trace/ and .doppel-init.json are Doppel's own files, not the app's
         rows.append(rel.as_posix() + ("/" if p.is_dir() else ""))
         if len(rows) >= limit:
             rows.append("...")
@@ -264,6 +264,12 @@ def related_source(repo: str | Path, error: str, limit: int = 10_000) -> str:
             break
         out.append(snip)
         used += len(snip)
+    if re.search(r"NOT NULL constraint failed|violates not-null constraint", error):
+        # linkding: Tag.date_added is a plain DateTimeField with no default, so get_or_create(name=...)
+        # fails; the model had the whole models.py in its prompt and still missed it
+        out.insert(0, "A NOT NULL constraint failed: a required field got no value. Pass that field explicitly "
+                      "in every create()/get_or_create() for that model (in defaults= for get_or_create), "
+                      "e.g. a fixed datetime for a date field. Its definition is below.")
     if re.search(r"UNIQUE constraint failed|duplicate key value violates unique constraint", error):
         # linkding: the seed gave every user's ApiToken the same key; the model's save() makes a random
         # one when the key is left empty, which the model can only know from the source above

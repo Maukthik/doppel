@@ -21,6 +21,7 @@ import os
 import shlex
 from pathlib import Path
 
+from doppel.errors import failure_text
 from doppel.spec import TwinSpec
 from doppel.timeline import Timeline
 
@@ -74,8 +75,7 @@ class NebiusTwin:
             out = await image.run(shell=f"cd {APP} && {shell}", disposable=False, timeout=1200)
         self._count(out)
         if out.exit_code != 0:
-            raise RuntimeError(f"{what} failed ({shown or shell}):\n"
-                               f"{(out.stdout or '')[-2000:]}{(out.stderr or '')[-2000:]}")
+            raise RuntimeError(f"{what} failed ({shown or shell}):\n" + failure_text(out.stdout, out.stderr))
         return out
 
     def _count(self, image) -> None:

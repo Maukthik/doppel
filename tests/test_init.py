@@ -884,3 +884,37 @@ def test_a_transport_error_counts_as_a_network_problem_and_gets_one_retry_with_t
 def test_validation_answers_count_as_handled_requests():
     rec = [{"persona": "careless", "steps": [{"status": s} for s in (200, 400, 409, 422, 404, 401, 500)]}]
     assert bootstrap.coverage(rec) == 4 / 7
+
+
+def test_a_long_traceback_keeps_the_seed_line_that_failed():
+    # linkding, 8 Oct: the last 2000 characters of a Django traceback started at "7, in manager_method",
+    # so the model never saw which line of its doppel_seed.py raised
+    django = "".join(f'  File "/usr/local/lib/python3.13/site-packages/django/db/x{i}.py", line {i}, in f\n'
+                     f"    return something_long_enough_to_fill_the_tail({i})\n" for i in range(40))
+    stderr = ('Traceback (most recent call last):\n  File "/app/doppel_seed.py", line 27, in <module>\n'
+              "    tech_tag, _ = Tag.objects.get_or_create(name='tech', owner=users[0])\n" + django +
+              "django.db.utils.IntegrityError: NOT NULL constraint failed: bookmarks_tag.date_added\n")
+    stdout = "".join(f"  Applying bookmarks.{i:04d}_x... OK\n" for i in range(50)) + "[dbscan] bookmarks_tag=0\n"
+    from doppel.errors import failure_text
+    text = failure_text(stdout, stderr)
+    assert 'File "/app/doppel_seed.py", line 27' in text and "Tag.objects.get_or_create(name='tech'" in text
+    assert text.rstrip().endswith("bookmarks_tag.date_added")
+    assert "Applying bookmarks" not in text and "[dbscan] bookmarks_tag=0" in text
+
+
+def test_a_not_null_failure_explains_itself_and_shows_the_model(tmp_path):
+    (tmp_path / "bookmarks").mkdir()
+    (tmp_path / "bookmarks" / "models.py").write_text(
+        "class Tag(models.Model):\n    name = models.CharField(max_length=64)\n"
+        "    date_added = models.DateTimeField()\n")
+    src = bootstrap.related_source(tmp_path, "IntegrityError: NOT NULL constraint failed: bookmarks_tag.date_added")
+    assert "class Tag(models.Model)" in src and "date_added = models.DateTimeField()" in src
+    assert "Pass that field explicitly" in src
+
+
+def test_the_file_tree_leaves_out_doppels_own_files(tmp_path):
+    (tmp_path / ".doppel-trace" / "attempt-1").mkdir(parents=True)
+    (tmp_path / ".doppel-init.json").write_text("{}")
+    (tmp_path / "manage.py").write_text("")
+    tree = bootstrap.file_tree(tmp_path)
+    assert "manage.py" in tree and ".doppel" not in tree
