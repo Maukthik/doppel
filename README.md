@@ -30,7 +30,7 @@ slower requests. Then it tells you which differences the PR meant to make and wh
 | 3 | Nemotron judge: intended vs regression, using the PR description; writes a test per regression | done |
 | 4 | GitHub Action: comment on every PR, artifacts, fails the check on regressions | done: live on a demo repo |
 | 5 | Benchmark on a real app (30 PRs to microblog-api + 10 held out): tests 12/20, AI review 17/20, review-guided Doppel 16/20 with 0 false alarms; tests + Doppel together 20/20 | done |
-| 5b | `doppel init`: Nemotron drafts the twin spec and seed, boots them, fixes what breaks, finds noisy keys | done: microblog-api set up with no hand edits (4 attempts, 81% of requests served) |
+| 5b | `doppel init`: Nemotron drafts the twin spec and seed, boots them, fixes what breaks, finds noisy keys | done: microblog-api (Flask) and linkding (Django) set up with no hand edits; on linkding it found the same 3 noise keys as the hand-written answer key ([bench/init](bench/init)) |
 | 6 | README results, video, submission | in progress |
 
 ## Try it (stage 1, offline)

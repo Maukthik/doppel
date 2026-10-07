@@ -42,7 +42,8 @@ Seed once, a fresh world per persona, replay, diff, Markdown report, offline tes
   fixes what breaks, calibrates noisy keys. microblog-api: 4 attempts, 81% served, no hand edits.
 - [x] `--trace` (every attempt as readable files) and `--check` (test hand-made files).
 - [x] Suspicion table agrees with the verdicts; transport errors retried.
-- [ ] `doppel init` on linkding (Django), compared with the answer key in `bench/init/linkding/`.
+- [x] `doppel init` on linkding (Django), compared with the answer key in `bench/init/linkding/`:
+  no hand edits, 64% served, the same 3 noise keys; 15 attempts over four runs, with four fixes to init's feedback.
 - [ ] Doppel on 3–5 real recent PRs of a second repo.
 
 ## Stage 6: ship (planned Oct 25–28)
