@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from doppel.personas import cost_usd, nemotron_chat, parse_json
 
@@ -118,6 +119,44 @@ def _probe_lines(personas: list[dict], base: list[dict], head: list[dict], limit
     return "\n".join(lines)[:limit] or "(no probe personas ran)"
 
 
+def _get(obj, name):
+    return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
+
+
+def probe_of(persona: dict) -> str:
+    """The suspicion id a probe persona was written for ("s1"), from its tag or its name."""
+    tag = str(persona.get("probe") or "")
+    if re.fullmatch(r"s\d+", tag):
+        return tag
+    m = re.match(r"probe[\s_:-]*(s\d+)", str(persona.get("name", "")), re.I)
+    return m.group(1).lower() if m else ""
+
+
+def reconcile(suspicions: list[dict], findings, labels: list, personas: list[dict]) -> list[dict]:
+    """A suspicion is never refuted or untested while a regression came from its own probe.
+
+    The checker is a model reading transcripts; on r17 it refuted "password_hash is exposed" while
+    probe_s1, written for that suspicion, recorded GET /api/users/1 gaining password_hash. The
+    twin's measurement wins: such a suspicion is confirmed, citing the probe's changes. labels holds
+    the judge's label per finding; only findings the judge called a regression count, so an unjudged
+    run (or a probe whose change was intended) leaves the checker's verdict as it was."""
+    owner = {p.get("name"): probe_of(p) for p in personas if is_probe(p)}
+    out = []
+    for x in suspicions:
+        x = dict(x)
+        if x.get("status") != "confirmed":
+            hits = [i for i, f in enumerate(findings)
+                    if owner.get(_get(f, "persona")) == x.get("id") and
+                    i < len(labels) and labels[i] == "regression"]
+            if hits:
+                x["status"], x["changes"] = "confirmed", [f"f{i + 1}" for i in hits]
+                x["evidence"] = "; ".join(f"{_get(findings[i], 'persona')}: {_get(findings[i], 'request')} "
+                                          f"{_get(findings[i], 'detail')}" for i in hits[:3]) + \
+                    (f" (+{len(hits) - 3} more)" if len(hits) > 3 else "")
+        out.append(x)
+    return out
+
+
 def check(suspicions: list[dict], findings, verdicts, personas: list[dict], base: list[dict],
           head: list[dict], model: str | None = None, chat=nemotron_chat) -> dict:
     """Returns {"checks": {sid: {"status", "evidence"}}, "usd": ...}. No suspicions: no call."""
@@ -143,4 +182,7 @@ def check(suspicions: list[dict], findings, verdicts, personas: list[dict], base
         if status == "confirmed" and not cited:  # no observed change behind it: it is not proof
             status, evidence = "untested", f"(no observed change cited) {evidence}"
         checks[s["id"]] = {"status": status, "evidence": evidence, "changes": cited}
+    labels = [v.label if v else None for v in (verdicts or [None] * len(findings))]
+    fixed = reconcile([{**s, **checks[s["id"]]} for s in suspicions], findings, labels, personas)
+    checks = {x["id"]: {k: x[k] for k in ("status", "evidence", "changes")} for x in fixed}
     return {"checks": checks, "usd": cost_usd(model, tin, tout)}

@@ -14,6 +14,8 @@ import json
 import re
 from pathlib import Path
 
+from doppel.suspects import reconcile
+
 STAGES = ["install", "seed", "start", "login", "users"]
 PROMPT_LIMIT = 300_000
 
@@ -317,7 +319,9 @@ def run_data(raw: dict, app: str = "app") -> dict:
             "coverage": raw.get("coverage", {}), "changes": raw.get("changes", []),
             "findings": [{**f, "label": labels[i], "why": (verdicts[i] or {}).get("why", "") if verdicts else ""}
                          for i, f in enumerate(findings)],
-            "suspicions": raw.get("suspicions", []), "users": users,
+            "suspicions": reconcile(raw.get("suspicions", []), findings,
+                                    [(v or {}).get("label") for v in verdicts] if verdicts else [None] * len(findings),
+                                    raw.get("personas", [])), "users": users,
             "judged": bool(verdicts), "failed": worlds.get("failed", []),
             "timeline": worlds.get("timeline") or raw.get("timeline"), "recorded": raw.get("recorded", {})}
 
@@ -369,6 +373,9 @@ border:0;border-bottom:1px solid var(--line);background:none;font:inherit;color:
 .why.intended{border-color:var(--pass)}
 table.sus{width:100%;background:var(--paper);border:1px solid var(--line);border-radius:14px;border-collapse:separate;overflow:hidden}
 table.sus td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tr.grp-item td{background:#F7F9FB;font-size:.9rem;padding-top:6px;padding-bottom:6px}
+.grp-toggle{font:inherit;font-size:.85rem;color:var(--free);background:none;border:1px solid var(--line);border-radius:8px;padding:2px 10px;margin-top:6px;cursor:pointer}
+.grp-toggle:focus-visible{outline:3px solid var(--free);outline-offset:2px}
 .tl{margin:0 0 18px;background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:16px 18px 12px}
 .tl-top{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;align-items:baseline;margin:0 0 12px}
 .tl-top p{margin:0;color:var(--quiet);font-size:.92rem}
@@ -379,12 +386,14 @@ table.sus td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-alig
 .lane-name{font-size:.86rem;color:var(--quiet);padding-top:2px}
 .lane-name b{display:block;color:var(--ink);font-weight:600}
 .track{position:relative}
-.bar{position:absolute;height:14px;border-radius:4px;transform-origin:left center;min-width:3px}
-.bar.checkpoint{background:var(--ink)}.bar.fork{background:var(--free)}.bar.step{background:var(--rail)}
+.bar{position:absolute;height:14px;border-radius:4px;transform-origin:left center;min-width:3px;overflow:hidden}
+.bar-name{display:block;color:#fff;font-size:10.5px;line-height:14px;padding:0 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar.k-step .bar-name{color:var(--ink)}
+.bar.checkpoint{background:var(--ink)}.bar.fork{background:var(--free)}.bar.k-step{background:var(--rail)}
 .bar.w-base{background:#7C93AE}.bar.w-head{background:#3E5C7E}.bar.w-rehearsal{background:var(--rail)}
 .bar.failed{background:var(--stop)}
 .bar.phase{background:var(--free)}.bar.phase.twin{background:var(--ink)}.bar.phase.personas{background:#7C93AE}.bar.phase.judge{background:#3E5C7E}
-.bar.hit{box-shadow:0 0 0 2px var(--paper),0 0 0 4px var(--stop)}
+.bar.hit{background:var(--stop)}
 .axis{display:grid;grid-template-columns:120px 1fr;gap:12px;font-size:.78rem;color:var(--quiet);margin-top:6px}
 .axis div{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums}
 .tl-legend{display:flex;flex-wrap:wrap;gap:16px;color:var(--quiet);font-size:.82rem;margin:10px 0 0}
@@ -437,13 +446,22 @@ const $ = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag);
 const show = v => typeof v === 'string' ? v : JSON.stringify(v, null, 2);
 const LABEL = {regression: 'Regression', intended: 'Intended', needs_human: 'Needs a human', changed: 'Changed'};
 const regressions = D.findings.filter(f => f.label === 'regression');
+// one group per distinct change: the same field added in 22 answers is one problem, not 22
+const signature = f => { const m = /^changed: ([\w.*\[\]-]+) \((\w+)\)/.exec(f.detail || '');
+  return m ? `${f.label}|${m[1].split('.').pop()}|${m[2]}` : `${f.label}|${(f.detail || '').replace(/ x\d+$/, '')}|${f.request}`; };
+const what = f => { const m = /^changed: ([\w.*\[\]-]+) \((\w+)\)/.exec(f.detail || ''); return m ? `${m[1].split('.').pop()} ${m[2]}` : f.detail; };
+const GROUPS = [];
+{ const at = {}; D.findings.forEach((f, i) => { const k = signature(f);
+    if (!(k in at)) { at[k] = GROUPS.length; GROUPS.push({label: f.label, what: what(f), items: []}); } GROUPS[at[k]].items.push(i); }); }
+const regGroups = GROUPS.filter(g => g.label === 'regression');
 const steps = D.users.reduce((n, u) => n + u.steps.length, 0);
 
 document.getElementById('title').textContent = D.pr.title || D.app;
 const v = document.getElementById('verdict');
 if (!D.findings.length) { v.textContent = 'No behavior changed: same answers in both worlds.'; v.className = 'verdict-big green'; }
 else if (!D.judged) { v.textContent = `${D.findings.length} behavior change(s), not judged (no PR description given).`; v.className = 'verdict-big'; }
-else if (regressions.length) { v.textContent = `${regressions.length} answer${regressions.length > 1 ? 's' : ''} changed in ways the pull request doesn't mention.`; v.className = 'verdict-big red'; }
+else if (regressions.length) { const g = regGroups.length, n = regressions.length;
+  v.textContent = `${g} regression${g > 1 ? 's' : ''} the pull request doesn't mention` + (n > g ? `, seen in ${n} answers.` : '.'); v.className = 'verdict-big red'; }
 else { v.textContent = 'No regressions: every change matches the pull request description.'; v.className = 'verdict-big green'; }
 document.getElementById('lede').textContent = `${D.users.length} invented users sent the same ${steps} requests to both worlds. ` +
   'Where the two answered differently, the judge compared the difference with what the pull request says it does.';
@@ -476,12 +494,16 @@ if (D.timeline && D.timeline.events && D.timeline.events.length) {
     // stack overlapping bars in rows so parallel runs are visible side by side
     const rows = [];
     for (const e of mine) { let r = rows.findIndex(end => end <= e.start + 1e-6); if (r < 0) { r = rows.length; rows.push(0); } rows[r] = e.end; e._row = r; }
-    const track = $('div', {class: 'track', style: `height:${rows.length * 18}px`});
+    // many parallel runs: thin rows, so 23 users at once is a dense block, not a tall list
+    const rh = rows.length > 8 ? 7 : 18, bh = rows.length > 8 ? 5 : 14;
+    const track = $('div', {class: 'track', style: `height:${rows.length * rh}px`});
     for (const e of mine) {
-      const cls = e.ok === false ? 'failed' : e.kind === 'persona' ? 'w-' + lane : e.kind === 'phase' ? 'phase ' + (e.part || '') : e.kind;
+      const cls = e.ok === false ? 'failed' : e.kind === 'persona' ? 'w-' + lane : e.kind === 'phase' ? 'phase ' + (e.part || '') : e.kind === 'step' ? 'k-step' : e.kind;
       const b = $('div', {class: `bar ${cls}` + (e.kind === 'persona' && hitUsers.has(e.label) && lane === 'head' ? ' hit' : ''),
         title: `${e.label}: ${(e.end - e.start).toFixed(2)} s` + (e.requests ? `, ${e.requests} requests` : '') + (e.ok === false ? ' (failed)' : ''),
-        style: `left:${100 * e.start / total}%;width:${Math.max(0.4, 100 * (e.end - e.start) / total)}%;top:${e._row * 18}px`});
+        style: `left:${100 * e.start / total}%;width:${Math.max(0.4, 100 * (e.end - e.start) / total)}%;top:${e._row * rh}px;height:${bh}px`});
+      // a build step wide enough for its name says what it is without hovering
+      if (lane === 'build' && (e.end - e.start) / total > 0.11) b.append($('span', {class: 'bar-name'}, e.label.replace(/ \(.*\)$/, '').replace(/^fork head world.*/, 'fork head world')));
       b.dataset.w = e.start / total; b.dataset.d = Math.max(0.04, (e.end - e.start) / total);
       track.append(b); bars.push(b);
     }
@@ -498,7 +520,7 @@ if (D.timeline && D.timeline.events && D.timeline.events.length) {
                               [e => e.kind === 'persona' && e.lane === 'head', '#3E5C7E', 'same user on the pull request'],
                               [e => e.ok === false, 'var(--stop)', 'failed']])
     if (has(test)) legend.append($('span', {}, $('i', {style: `background:${c}`}), t));
-  if (hitUsers.size && people.length) legend.append($('span', {}, $('i', {style: 'background:#3E5C7E;box-shadow:0 0 0 2px var(--stop)'}), 'saw a regression'));
+  if (hitUsers.size && people.length) legend.append($('span', {}, $('i', {style: 'background:var(--stop)'}), 'same user, saw the regression'));
   const list = $('ol', {class: 'tl-steps', id: 'tl-steps'});
   for (const e of ev) list.append($('li', {}, $('span', {}, `${e.start.toFixed(2)} s`), $('span', {}, `${(e.end - e.start).toFixed(2)} s`),
     $('span', {}, `${{build: '', rehearsal: 'rehearsal: ', base: 'before: ', head: 'after: '}[e.lane] ?? ''}${e.label}${e.ok === false ? ' (failed)' : ''}`)));
@@ -531,8 +553,24 @@ if (D.findings.length) {
   const box = document.getElementById('what');
   box.append($('h2', {}, 'What changed'), $('p', {class: 'sub'}, 'Every difference between the two worlds, with the judge\'s verdict. Select a request below to see both answers.'));
   const t = $('table', {class: 'sus'});
-  for (const f of D.findings) t.append($('tr', {}, $('td', {}, $('span', {class: 'tag ' + f.label}, LABEL[f.label] || f.label)),
-    $('td', {}, $('code', {}, f.request), $('div', {class: 'who'}, f.detail + ' · ' + f.persona)), $('td', {class: 'who'}, f.why)));
+  const order = {regression: 0, needs_human: 1, changed: 2, intended: 3};
+  const row = (f, cls = '') => $('tr', {class: cls}, $('td', {}, cls ? '' : $('span', {class: 'tag ' + f.label}, LABEL[f.label] || f.label)),
+    $('td', {}, $('code', {}, f.request), $('div', {class: 'who'}, f.detail + ' · ' + f.persona)), $('td', {class: 'who'}, cls ? '' : f.why));
+  [...GROUPS].sort((a, b) => (order[a.label] ?? 2) - (order[b.label] ?? 2)).forEach((g, gi) => {
+    const first = D.findings[g.items[0]];
+    if (g.items.length === 1) { t.append(row(first)); return; }
+    const reqs = [...new Set(g.items.map(i => D.findings[i].request))];
+    const id = `grp-${gi}`;
+    const more = $('button', {class: 'grp-toggle', type: 'button', 'aria-expanded': 'false', 'aria-controls': id}, `Show all ${g.items.length}`);
+    t.append($('tr', {class: 'grp'}, $('td', {}, $('span', {class: 'tag ' + g.label}, LABEL[g.label] || g.label)),
+      $('td', {}, $('b', {}, g.what), $('div', {class: 'who'}, `${g.items.length} answers from ${reqs.length} request${reqs.length > 1 ? 's' : ''}: ${reqs.slice(0, 4).join(', ')}${reqs.length > 4 ? ', and more' : ''}`), more),
+      $('td', {class: 'who'}, first.why)));
+    const kids = g.items.map(i => row(D.findings[i], 'grp-item'));
+    kids.forEach(k => { k.id = id; k.hidden = true; t.append(k); });
+    more.addEventListener('click', () => { const open = more.getAttribute('aria-expanded') !== 'true';
+      more.setAttribute('aria-expanded', String(open)); kids.forEach(k => k.hidden = !open);
+      more.textContent = open ? 'Hide them' : `Show all ${g.items.length}`; });
+  });
   box.append(t);
 }
 

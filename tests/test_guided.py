@@ -137,3 +137,39 @@ def test_probe_counter_and_checker_agree_when_the_tag_is_missing():
     assert sum(is_probe(p) for p in personas) == 2
     lines = _probe_lines(personas, rec, rec)
     assert "probe_s1" in lines and "round2 qty" in lines and "alice" not in lines
+
+
+def test_a_suspicion_is_never_refuted_while_its_own_probe_saw_a_regression():
+    # r17 on Nebius, 7 Oct: the checker refuted s1 ("password_hash is exposed") while probe_s1,
+    # written for s1, recorded GET /api/users/1 gaining password_hash
+    from doppel.diff import Finding
+    from doppel.judge import Verdict
+    from doppel.suspects import probe_of, reconcile
+    assert probe_of({"name": "probe_s1"}) == "s1" and probe_of({"name": "probe s3: carol"}) == "s3"
+    assert probe_of({"name": "x", "probe": "s2"}) == "s2" and probe_of({"name": "alice"}) == ""
+    personas = [{"name": "alice", "steps": []}, {"name": "probe_s1", "probe": "s1", "steps": []},
+                {"name": "probe s2: bob", "probe": "s2", "steps": []}]
+    findings = [Finding("body", "alice", 0, "GET /api/me", "changed: password_hash (added)"),
+                Finding("body", "probe_s1", 0, "GET /api/users/1", "changed: password_hash (added)"),
+                Finding("body", "probe s2: bob", 0, "GET /api/me", "changed: about_me")]
+    sus = [{"id": "s1", "claim": "hash exposed", "status": "refuted", "evidence": "no hash seen"},
+           {"id": "s2", "claim": "about_me lost", "status": "untested"},
+           {"id": "s3", "claim": "nothing", "status": "refuted"}]
+    out = {x["id"]: x for x in reconcile(sus, findings, ["regression", "regression", "intended"], personas)}
+    assert out["s1"]["status"] == "confirmed" and out["s1"]["changes"] == ["f2"]
+    assert "probe_s1: GET /api/users/1" in out["s1"]["evidence"]
+    assert out["s2"]["status"] == "untested"     # its probe's change was intended, not a regression
+    assert out["s3"]["status"] == "refuted"      # no probe of its own: the checker's word stands
+
+    def chat(model, prompt, **kw):  # the checker gets it wrong, as on r17
+        return '{"checks": [{"id": "s1", "status": "refuted", "evidence": "no hash seen"}]}', 10, 10
+    verdicts = [Verdict("regression", "leak"), Verdict("regression", "leak"), Verdict("intended", "ok")]
+    got = check(sus[:1], findings, verdicts, personas, [], [], chat=chat)["checks"]
+    assert got["s1"]["status"] == "confirmed" and got["s1"]["changes"] == ["f2"]
+
+
+def test_the_published_r17_run_shows_every_suspicion_confirmed():
+    from doppel.viewer import run_data
+    raw = json.loads((Path(__file__).resolve().parent.parent / "site/runs/r17-hash-leak-nebius.json").read_text())
+    assert {x["id"]: x["status"] for x in raw["suspicions"]}["s1"] == "refuted"   # as recorded
+    assert {x["status"] for x in run_data(raw)["suspicions"]} == {"confirmed"}     # as shown

@@ -195,7 +195,7 @@ def build(gallery: Path, out: Path, root: Path | None = None, env: dict | None =
     if out.exists():
         shutil.rmtree(out)
     (out / "runs").mkdir(parents=True)
-    written, cards = [], []
+    written, cards, fork = [], [], {}
     nav = '<p class="crumb"><a href="../index.html">Doppel replays</a></p>\n'
     for entry in cfg["runs"]:
         raw, compare = _load_entry(entry, root)
@@ -209,6 +209,12 @@ def build(gallery: Path, out: Path, root: Path | None = None, env: dict | None =
         path = out / "runs" / f"{entry['slug']}.html"
         path.write_text(page, encoding="utf-8")
         written.append(path)
+        tl = data.get("timeline") or {}
+        people = [e for e in tl.get("events", []) if e.get("kind") == "persona" and e.get("lane") in ("base", "head")]
+        if tl.get("backend") == "nebius" and people and (entry["slug"] == cfg.get("hero", {}).get("slug") or not fork):
+            peak = max(sum(1 for o in people if o["start"] < e["end"] and o["end"] > e["start"]) for e in people)
+            fork.update(users=len(data["users"]), runs=len(people), peak=peak, total=tl.get("total", 0),
+                        slug=entry["slug"])
         tone, verdict = _verdict(data)
         cards.append({"slug": entry["slug"], "title": data["pr"].get("title") or entry["slug"],
                       "story": entry.get("story", ""), "tone": tone, "verdict": verdict, "compare": compare,
@@ -223,6 +229,7 @@ def build(gallery: Path, out: Path, root: Path | None = None, env: dict | None =
         hero_raw, hero_cmp = _load_entry(hero, root)
         hero = {**hero, "evidence": _hero_evidence(sanitize(hero_raw), hero.get("field", "")),
                 "compare": hero_cmp}
+    hero["fork"] = fork
     index = render_index(cfg, cards, scores, hero, has_chart=(out / "chart.svg").exists())
     check_secrets(index, "index.html", env)
     (out / "index.html").write_text(index, encoding="utf-8")
@@ -255,6 +262,34 @@ def _json_lines(value, field: str) -> str:
     return "\n".join(lines)
 
 
+def fork_figure(stats: dict) -> str:
+    """The idea in one picture: one seeded checkpoint, two worlds, the same users through both, one
+    answer that differs. Drawn once on load; the caption carries real numbers from a Nebius run."""
+    lanes = []
+    for k in range(5):
+        y_b, y_h, delay = 58 + k * 12, 178 + k * 12, 1.0 + k * 0.12
+        red = k == 2
+        for y, cls in ((y_b, "b"), (y_h, "h hit" if red else "h")):
+            lanes.append(f'<line class="tr {cls}" x1="160" x2="354" y1="{y}" y2="{y}" style="--d:{delay:.2f}s"/>'
+                         f'<circle class="u {cls}" cx="0" cy="0" r="3.4" style="--y:{y}px;--d:{delay:.2f}s"/>')
+    if stats:
+        cap = (f'{stats["users"]} users through both worlds: {stats["runs"]} throwaway sandboxes, {stats["peak"]} at once, '
+               f'{stats["total"]:.0f} s for the whole twin. <a href="runs/{html.escape(stats["slug"])}.html">See the run</a>')
+    else:
+        cap = "Every user gets a fresh copy of each world, so no run can leak into another."
+    return f'''<figure class="fork" aria-label="One checkpoint forks into two worlds; the same users go through both; one answer differs">
+<svg viewBox="0 0 380 300" role="img" aria-hidden="true">
+<path class="br" d="M70 150 C 110 150, 110 90, 150 90"/><path class="br" d="M70 150 C 110 150, 110 210, 150 210"/>
+<rect class="cp" x="14" y="128" width="58" height="44" rx="8"/><text class="cpt" x="43" y="147">seeded</text><text class="cpt" x="43" y="161">checkpoint</text>
+<g class="w"><rect x="150" y="48" width="214" height="84" rx="10" class="wb"/><text x="160" y="42" class="wl">Before: main branch</text></g>
+<g class="w after"><rect x="150" y="168" width="214" height="84" rx="10" class="wb"/><text x="160" y="162" class="wl">After: the pull request</text></g>
+{"".join(lanes)}
+<g class="flag"><rect x="236" y="262" width="128" height="24" rx="6"/><text x="300" y="278">+ password_hash</text></g>
+</svg>
+<figcaption>{cap}</figcaption>
+</figure>'''
+
+
 def _mark(res: dict | None, kind: str) -> str:
     if not res:
         return ""
@@ -271,8 +306,10 @@ def render_index(cfg: dict, cards: list[dict], scores: dict, hero: dict, has_cha
         cmp = hero.get("compare", {})
         review_why = (cmp.get("review") or {}).get("why", "")
         parts.append(f'''<section class="hero" aria-labelledby="hero-title">
+<div class="hero-top"><div>
 <h1 id="hero-title">{e(hero.get("headline", ""))}</h1>
 <p class="lede">{e(hero.get("lede", ""))}</p>
+</div>{fork_figure(hero.get("fork") or {})}</div>
 <ol class="verdicts">
 <li><span class="who">The app's own tests</span><span class="said miss">{_mark(cmp.get("tests"), "tests")}</span></li>
 <li><span class="who">An AI code reviewer</span><span class="said miss">{_mark(cmp.get("review"), "review")}</span>
@@ -336,7 +373,29 @@ INDEX_CSS = r"""
 a{color:var(--free)}
 a:focus-visible{outline:3px solid var(--free);outline-offset:2px}
 .brand{font-weight:600;margin:0 0 40px;font-size:1rem}
+.hero-top{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:28px;align-items:center;margin:0 0 6px}
 .hero h1{font-size:clamp(1.9rem,4.2vw,2.9rem);line-height:1.12;max-width:20ch;margin:0 0 14px;letter-spacing:-.02em}
+.fork{margin:0}.fork svg{width:100%;height:auto;display:block}
+.fork figcaption{font-size:.85rem;color:var(--quiet);margin-top:4px}
+.fork .br{fill:none;stroke:var(--rail);stroke-width:2.5;stroke-dasharray:120;stroke-dashoffset:120;animation:draw .6s ease-out .25s forwards}
+.fork .cp{fill:var(--ink)}.fork .cpt{fill:#fff;font-size:9.5px;text-anchor:middle}
+.fork .wb{fill:var(--paper);stroke:var(--line);stroke-width:1.5}.fork .after .wb{stroke:#C9D3DE}
+.fork .wl{fill:var(--quiet);font-size:11px}
+.fork .w{opacity:0;animation:fade .4s ease-out .7s forwards}
+.fork .u{fill:#7C93AE;opacity:0;transform:translate(160px,var(--y));animation:walk 1.5s cubic-bezier(.4,0,.2,1) var(--d) forwards}
+.fork .u.h{fill:#3E5C7E}
+.fork .tr{stroke:#DCE3EA;stroke-width:2;stroke-dasharray:194;stroke-dashoffset:194;animation:draw 1.5s cubic-bezier(.4,0,.2,1) var(--d) forwards}
+.fork .tr.hit{animation:draw 1.5s cubic-bezier(.4,0,.2,1) var(--d) forwards,line-red .3s ease-out 2.7s forwards}
+@keyframes line-red{to{stroke:#E8B4BC}}
+.fork .u.hit{fill:#3E5C7E;animation:walk 1.5s cubic-bezier(.4,0,.2,1) var(--d) forwards,turn .3s ease-out 2.7s forwards}
+.fork .flag{opacity:0;animation:fade .35s ease-out 2.8s forwards}
+.fork .flag rect{fill:#F6DADF;stroke:var(--stop)}.fork .flag text{fill:var(--stop);font:600 11px "IBM Plex Mono",ui-monospace,monospace;text-anchor:middle}
+@keyframes draw{to{stroke-dashoffset:0}}
+@keyframes fade{to{opacity:1}}
+@keyframes walk{0%{opacity:0;transform:translate(160px,var(--y))}15%{opacity:1}100%{opacity:1;transform:translate(354px,var(--y))}}
+@keyframes turn{to{fill:var(--stop)}}
+@media (prefers-reduced-motion:reduce){.fork *{animation:none!important}.fork .br{stroke-dashoffset:0}.fork .w,.fork .flag{opacity:1}
+.fork .u{opacity:1;transform:translate(354px,var(--y))}.fork .u.hit{fill:var(--stop)}.fork .tr{stroke-dashoffset:0}.fork .tr.hit{stroke:#E8B4BC}}
 .hero .lede{font-size:1.08rem;margin:0 0 28px}
 .verdicts{list-style:none;padding:0;margin:0 0 22px;display:grid;gap:2px;background:var(--line);border:1px solid var(--line);border-radius:14px;overflow:hidden}
 .verdicts li{display:grid;grid-template-columns:200px 1fr;gap:6px 16px;padding:14px 18px;background:var(--paper);align-items:baseline}
@@ -366,7 +425,7 @@ table.scores{width:100%;background:var(--paper);border:1px solid var(--line);bor
 .scores th{font-weight:500;color:var(--quiet);font-size:.88rem}
 .scores tr.sum td{font-weight:600;border-bottom:0}
 footer{margin:56px 0 0;color:var(--quiet);font-size:.9rem;border-top:1px solid var(--line);padding-top:18px}
-@media (max-width:720px){.pair{grid-template-columns:1fr}.verdicts li{grid-template-columns:1fr}.verdicts q{grid-column:1}}
+@media (max-width:720px){.hero-top{grid-template-columns:1fr;margin-bottom:22px}.pair{grid-template-columns:1fr}.verdicts li{grid-template-columns:1fr}.verdicts q{grid-column:1}}
 """
 
 INDEX = r"""<!doctype html>
