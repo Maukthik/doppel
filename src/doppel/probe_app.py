@@ -451,11 +451,23 @@ def main() -> int:
     facts["sqlite_files"] = sqlite_files()
     facts["schema_files"] = schema_files()
     facts["errors"] = errors
-    text = json.dumps({k: v for k, v in facts.items() if k != "cwd"}, default=str)
-    for root in sorted({str(ROOT), str(ROOT.resolve())}, key=len, reverse=True):  # same in the sandbox and locally
-        text = text.replace(root + "/", "<repo>/").replace(root, "<repo>")
-    print(text)
+    print(json.dumps(scrub(facts, [str(ROOT), str(ROOT.resolve())]), default=str))
     return 0
+
+
+def scrub(value, roots: list[str]):
+    """Every path inside the app written as <repo>/..., with forward slashes, so the facts read the same in
+    the sandbox (/app), on Linux and on Windows (C:\\Users\\...\\app, any letter case)."""
+    if isinstance(value, dict):
+        return {k: scrub(v, roots) for k, v in value.items()}
+    if isinstance(value, list):
+        return [scrub(v, roots) for v in value]
+    if not isinstance(value, str):
+        return value
+    for root in sorted({r for r in roots if r}, key=len, reverse=True):
+        for form in {root, root.replace("\\", "/")}:
+            value = re.sub(re.escape(form), "<repo>", value, flags=re.I)
+    return re.sub(r"<repo>[^\s'\"]*", lambda m: m.group(0).replace("\\", "/"), value)
 
 
 def requires_python() -> str:
