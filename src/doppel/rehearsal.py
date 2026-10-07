@@ -85,11 +85,19 @@ def _transcript(persona: dict, recording: dict) -> str:
     return "\n".join(lines)
 
 
+def login_step_count(login: dict) -> int:
+    """Steps with_login puts in front: a form login first loads its page (which sets a CSRF cookie)."""
+    return 2 if isinstance(login.get("form"), dict) else 1
+
+
 def with_login(persona: dict, login: dict) -> dict:
-    """The persona with the app owner's login step in front and its token header on every step."""
+    """The persona with the app owner's login step in front and its token header on every step. A form
+    login is a GET of the login page and then the POST, like a browser: CSRF-protected forms need the
+    cookie that page sets."""
     step = {k: login[k] for k in ("method", "path", "auth", "json", "form", "save") if k in login}
     step.setdefault("method", "POST")
-    return {**persona, "steps": [step, *persona["steps"]],
+    front = [{"method": "GET", "path": login["path"]}, step] if login_step_count(login) == 2 else [step]
+    return {**persona, "steps": [*front, *persona["steps"]],
             "headers": {**(login.get("header") or {}), **(persona.get("headers") or {})}}
 
 

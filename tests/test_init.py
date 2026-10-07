@@ -63,9 +63,18 @@ def test_init_repairs_a_broken_draft_and_returns_working_files(tmp_path):
 def test_init_gives_up_after_its_tries_and_keeps_the_last_error(tmp_path):
     app = shop_without_spec(tmp_path)
     broken = reply(SHOP_SPEC.replace('ready = "/health"', 'ready = "/health"\nstart = "x"'))  # invalid TOML
-    model = ScriptedModel([broken, broken])
+    model = ScriptedModel([broken] * 4)
     result = bootstrap.init(app, backend="local", tries=2, chat=model, log=lambda m: None)
     assert not result["ok"] and result["attempts"] == 2 and "not valid TOML" in result["error"]
+    assert len(model.prompts) == 4   # caught before booting: `tries` free redrafts, then the 2 real attempts
+
+
+def test_a_draft_caught_before_booting_does_not_spend_an_attempt(tmp_path):
+    app = shop_without_spec(tmp_path)
+    broken = reply(SHOP_SPEC.replace('ready = "/health"', 'ready = "/health"\nstart = "x"'))
+    model = ScriptedModel([broken, reply(SHOP_SPEC)])
+    result = bootstrap.init(app, backend="local", tries=1, chat=model, log=lambda m: None)
+    assert result["ok"] and result["attempts"] == 1
 
 
 def test_a_cut_off_reply_is_asked_again_without_spending_an_attempt(tmp_path):
@@ -804,7 +813,7 @@ def test_trace_records_every_step_of_every_attempt(tmp_path):
     model = ScriptedModel([bad_seed, reply(broken), reply(SHOP_SPEC)])
     trace = tmp_path / "trace"
     result = bootstrap.init(app, backend="local", tries=3, chat=model, log=lambda m: None, trace=trace)
-    assert result["ok"] and result["attempts"] == 3
+    assert result["ok"] and result["attempts"] == 2   # the bad seed was caught before booting: a free redraft
     one, two, three = (trace / f"attempt-{i}" for i in (1, 2, 3))
     assert "You set up a web API" in (one / "1-prompt.txt").read_text()
     assert "FAIL  check_seed" in (one / "3-checks.txt").read_text() and not (one / "4-boot.txt").exists()

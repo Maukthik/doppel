@@ -57,12 +57,14 @@ migrate = "..."              # run in each copy after the code changes: apply sc
 env = {{ NAME = "value" }}     # env vars for EVERY command above (install, seed, migrate, start), set once
 [personas]
 guide = \"\"\"...\"\"\"          # 2-4 sentences for the user-writer: how to log in, which seeded accounts exist
-[personas.login]             # only if most API routes need a login, else omit this whole table
+[personas.login]             # only if most routes (API or pages) need a login, else omit this whole table
 method = "POST"
 path = "/..."
-auth = ["<a username your seed creates>", "<its password>"]  # HTTP Basic, OR json = {{...}}; omit if not needed
-save = {{ token = "dotted.path.in.response" }}   # omit if the token is fixed (see seed rules)
-header = {{ Authorization = "Bearer {{token}}" }}
+auth = ["<a username your seed creates>", "<its password>"]  # HTTP Basic, OR json = {{...}} for a JSON body,
+                             # OR form = {{ username = "...", password = "..." }} for an HTML login form
+                             # (request.form, a Form class, Django's LoginView): its session cookie is kept
+save = {{ token = "dotted.path.in.response" }}   # omit if the token is fixed (see seed rules) or for a form login
+header = {{ Authorization = "Bearer {{token}}" }}  # omit for a form login: the session cookie does the work
 [diff]
 ignore = [...]               # JSON keys that change on every run: timestamps, fresh tokens, random ids
 slow_ratio = 3.0
@@ -432,6 +434,8 @@ def seed_passwords(seed: str) -> set[str]:
               for t in n.targets if isinstance(t, ast.Name)}
 
     def literal(node):
+        if isinstance(node, ast.Call) and node.args and "hash" in ast.unparse(node.func).lower():
+            node = node.args[0]  # password=generate_password_hash("x"), make_password("x")
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             return node.value
         return consts.get(node.id) if isinstance(node, ast.Name) else None
@@ -440,6 +444,8 @@ def seed_passwords(seed: str) -> set[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             name = ast.unparse(node.func).rsplit(".", 1)[-1]
+            if "hash" in name.lower() and "check" not in name.lower() and node.args:
+                found.add(literal(node.args[0]))  # raw SQL seeds: VALUES (?, ?), ("alice", hash("x"))
             for kw in node.keywords:
                 if kw.arg in ("password", "raw_password", "pwd", "passwd"):
                     found.add(literal(kw.value))
@@ -459,8 +465,9 @@ def check_login_matches_seed(toml_text: str, seed: str) -> list[str]:
         login = tomllib.loads(toml_text).get("personas", {}).get("login") or {}
     except tomllib.TOMLDecodeError:
         return []
+    body = login.get("json") if isinstance(login.get("json"), dict) else login.get("form") or {}
     sent = login["auth"][1] if isinstance(login.get("auth"), list) and len(login["auth"]) == 2 else \
-        next((v for k, v in (login.get("json") or {}).items() if "pass" in k.lower()), None)
+        next((v for k, v in body.items() if "pass" in k.lower()), None) if isinstance(body, dict) else None
     set_by_seed = seed_passwords(seed)
     if sent and set_by_seed and sent not in set_by_seed:
         return [f"the login sends password {sent!r}, but the seed sets {sorted(set_by_seed)}; use the same one"]
@@ -503,6 +510,32 @@ def route_uses_basic(repo: Path, path: str) -> bool:
     return False
 
 
+FORM_LOGIN = re.compile(r"request\.form\b|request\.POST\b|LoginView|AuthenticationForm|validate_on_submit|"
+                        r"Form\(|OAuth2PasswordRequestForm|Form\(\.\.\.\)|= Form\(")
+ROUTE_DECL = re.compile(r"route\(|\.(get|post|put|api_route)\(|\bpath\(|re_path\(|url\(|add_url_rule\(")
+
+
+def route_reads_form(repo: Path, path: str) -> bool:
+    """Does the view declared for the last segment of `path` read an HTML form (request.form, a Form
+    class, Django's LoginView, FastAPI's OAuth2PasswordRequestForm) in the lines after it?"""
+    segment = path.rstrip("/").rsplit("/", 1)[-1]
+    if not segment:
+        return False
+    literal = re.compile(r"""['"/]""" + re.escape(segment) + r"""/?['"]""")  # "/login", "accounts/login/"
+    for f in sorted(Path(repo).rglob("*.py"))[:4000]:
+        if any(part in {"tests", "test", "venv", ".venv", "node_modules", "site-packages", "migrations"}
+               for part in f.parts):
+            continue
+        try:
+            lines = f.read_text("utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for k, ln in enumerate(lines):
+            if ROUTE_DECL.search(ln) and literal.search(ln) and FORM_LOGIN.search("\n".join(lines[k:k + 30])):
+                return True
+    return False
+
+
 PLACEHOLDERS = {"user", "username", "password", "pass", "passwd", "secret", "user@example.com", "your-password"}
 
 
@@ -526,7 +559,13 @@ def check_spec(repo: str | Path, toml_text: str) -> list[str]:
         if app.get(key) and not str(app[key]).startswith("/"):
             problems.append(f"[app] {key} must be a path starting with /, got {app[key]!r}")
     login = data.get("personas", {}).get("login") or {}
-    creds = [str(x) for x in (login.get("auth") or [])] + [str(v) for v in (login.get("json") or {}).values()]
+    creds = [str(x) for x in (login.get("auth") or [])] + [str(v) for v in (login.get("json") or {}).values()] \
+        + [str(v) for v in (login.get("form") or {}).values()]
+    if login.get("path") and str(login.get("method", "POST")).upper() == "POST" and not login.get("form") \
+            and (login.get("json") or login.get("auth")) and route_reads_form(Path(repo), str(login["path"])):
+        problems.append(f"[personas.login] {login['path']} reads an HTML form (request.form / a Form class / a login "
+                        "view), so JSON or HTTP Basic arrives empty: send form = { <its field names> = ... } instead, "
+                        "with the field names the view reads, and no save/header (the session cookie is kept)")
     copied = [c for c in creds if c.lower() in PLACEHOLDERS or (c.startswith("<") and c.endswith(">"))]
     if copied:
         problems.append(f"[personas.login] sends {copied}, placeholder text copied from the template, not a real "
@@ -888,6 +927,7 @@ def login_sent(login: dict | None) -> str:
         return ""
     how = (f"HTTP Basic as user {login['auth'][0]!r}" if login.get("auth")
            else f"a JSON body with {', '.join(sorted(login['json']))}" if isinstance(login.get("json"), dict)
+           else f"an HTML form with {', '.join(sorted(login['form']))}" if isinstance(login.get("form"), dict)
            else "only a header" if login.get("header") else "no credentials")
     return f"\nThe login step sends: {login.get('method', 'POST')} {login.get('path')} with {how}."
 
@@ -897,7 +937,8 @@ def _login_identity(login: dict | None) -> str:
         return ""
     if login.get("auth"):
         return str(login["auth"][0])
-    body = login.get("json") if isinstance(login.get("json"), dict) else {}
+    body = login.get("json") if isinstance(login.get("json"), dict) else \
+        login.get("form") if isinstance(login.get("form"), dict) else {}
     return str(next((v for k, v in body.items() if k.lower() in ("username", "email", "login", "user")), ""))
 
 
@@ -946,11 +987,32 @@ def smoke_problem(recording: dict, spec: TwinSpec, repo: Path | None = None) -> 
     for s in steps:
         if s["status"] == 0 or s["status"] >= 500:
             return f"{s['request']} answered {s['status'] or 'nothing'}: {str(s.get('body'))[:500]}"
-    if spec.login and steps and steps[0]["status"] >= 400:
-        advice = login_advice(spec, repo, str(steps[0].get("body"))) if steps[0]["status"] in (401, 403) else ""
-        return (f"the login step {steps[0]['request']} was refused with {steps[0]['status']}: "
-                f"{str(steps[0].get('body'))[:500]}. The seeded account or the login settings are wrong.{advice}")
+    from doppel.rehearsal import login_step_count
+    n = login_step_count(spec.login) if spec.login else 0
+    if spec.login and len(steps) >= n:
+        s = steps[n - 1]
+        if s["status"] >= 400:
+            advice = login_advice(spec, repo, str(s.get("body"))) if s["status"] in (401, 403) else ""
+            if s["status"] == 400 and not spec.login.get("form") and repo and \
+                    route_reads_form(repo, str(spec.login.get("path", ""))):
+                advice = ("\nThis login view reads an HTML form, so a JSON body or HTTP Basic arrives as missing "
+                          "fields (Flask answers 400 Bad Request). "
+                          "Send form = { <field names the view reads> } instead.")
+            return (f"the login step {s['request']} was refused with {s['status']}: "
+                    f"{str(s.get('body'))[:500]}. The seeded account or the login settings are wrong.{advice}")
+        if spec.login.get("form") and still_on_login_form(s.get("body")):
+            shown = " | ".join((s["body"]["html"].get("text") or [])[:12])
+            return (f"the login form {s['request']} came back instead of logging in (status {s['status']}), so the "
+                    f"app rejected the credentials. The page said: {shown[:500]}. Check the field names the view "
+                    "reads and that the seed hashed the same password the login sends.")
     return ""
+
+
+def still_on_login_form(body) -> bool:
+    """An HTML page that still offers a form with a password field: the login did not happen."""
+    page = body.get("html") if isinstance(body, dict) else None
+    return bool(page) and any(any("pass" in name.lower() for name in (f.get("fields") or {}))
+                              for f in page.get("forms") or [])
 
 
 def noisy_keys(base: list[dict], head: list[dict]) -> list[str]:
@@ -1231,9 +1293,12 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
         log(f"[init] resuming from the last run: got past {', '.join(STAGES[:best['stage']]) or 'nothing'} "
             f"(delete {STATE_FILE} or pass --fresh to start over)")
     result: dict = {"ok": False, "error": "no attempt made"}
-    for attempt in range(1, tries + 1):
+    attempt, drafts, free = 0, 0, tries  # a draft caught by the pre-boot checks costs no sandbox: redraft free
+    while attempt < tries:
+        attempt += 1
+        drafts += 1
         log(f"[init] attempt {attempt}/{tries}: asking Nemotron for {SPEC_FILE} and {SEED_FILE}")
-        tracer.start(attempt)
+        tracer.start(drafts)
 
         def exchange(prompt: str, text: str) -> None:
             tracer.write("1-prompt.txt", prompt)
@@ -1249,9 +1314,9 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
                 drafted = draft(repo, error, previous, chat=chat, history=history[:-1], repeated=repeated,
                                 best_stage=best["stage"], on_exchange=exchange)
         except Exception as e:  # noqa: BLE001
-            error, result = f"the reply could not be used: {e}", {"ok": False, "error": str(e)}
+            error, result = f"the reply could not be used: {e}", {"ok": False, "error": str(e), "attempts": attempt}
             log(f"[init] {error}")
-            history.append(f"attempt {attempt}: unusable reply -> {str(e)[:160]}")
+            history.append(f"attempt {drafts}: unusable reply -> {str(e)[:160]}")
             tracer.note(history[-1])
             error, previous = (best["error"], best["files"]) if best["files"] else (error, previous)
             continue
@@ -1267,8 +1332,12 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
             previous = files
             result = {"ok": False, "error": error, "attempts": attempt, "notes": drafted["notes"], "files": files}
             log(f"[init] checks found {len(problems)} problem(s), no sandbox needed: {problems[0][:160]}")
-            history.append(f"attempt {attempt}: checked before booting -> {problems[0][:200]}")
+            history.append(f"attempt {drafts}: checked before booting -> {problems[0][:200]}")
             tracer.note(history[-1] + "  [no sandbox used]")
+            if free > 0:
+                free -= 1
+                attempt -= 1
+                log(f"[init] redrafting without spending an attempt ({free} free redraft(s) left)")
             continue
         log(f"[init] booting the twin ({backend}) to check it")
         result = try_files(repo, files, backend=backend, run_twin=run_twin, chat=chat, personas=personas,
@@ -1283,7 +1352,7 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
                 f"served, ignoring {len(result['noise'])} noisy key(s)")
             (repo / STATE_FILE).unlink(missing_ok=True)
             tracer.write("6-calibration.txt", calibration_report(result))
-            tracer.note(f"attempt {attempt}: WORKS, {result['coverage']:.0%} served, noise {result['noise']}")
+            tracer.note(f"attempt {drafts}: WORKS, {result['coverage']:.0%} served, noise {result['noise']}")
             return result
         error = result["error"]
         log(f"[init] failed: {error.splitlines()[0][:200] if error else 'unknown error'}")
@@ -1301,16 +1370,16 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
                     f"served, ignoring {len(result['noise'])} noisy key(s)")
                 (repo / STATE_FILE).unlink(missing_ok=True)
                 tracer.write("6-calibration.txt", calibration_report(result))
-                tracer.note(f"attempt {attempt}: WORKS after a network retry, {result['coverage']:.0%} served")
+                tracer.note(f"attempt {drafts}: WORKS after a network retry, {result['coverage']:.0%} served")
                 return result
             error = result["error"]
             if result.get("infra"):
                 log("[init] the network failed again: stopping instead of redrafting (the setup was never tried)")
-                tracer.note(f"attempt {attempt}: network failed twice, stopped")
+                tracer.note(f"attempt {drafts}: network failed twice, stopped")
                 return result
             log(f"[init] failed: {error.splitlines()[0][:200] if error else 'unknown error'}")
         stage = stage_reached(error)
-        history.append(f"attempt {attempt}: reached {STAGES[max(stage, 0)]}: {headline(error)}")
+        history.append(f"attempt {drafts}: reached {STAGES[max(stage, 0)]}: {headline(error)}")
         if stage >= best["stage"]:
             best = {"stage": stage, "files": files, "error": error}
             previous = files
