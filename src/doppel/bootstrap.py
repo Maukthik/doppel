@@ -44,7 +44,7 @@ MAX_HINT_FILE, MAX_HINTS, MAX_CODE = 6_000, 60_000, 120_000
 
 PROMPT = """You set up a web API so that an automated tester can run it. The tester ("Doppel") boots the
 app inside an isolated Linux sandbox from a base image, loads starting data once, then forks copies
-and sends HTTP+JSON requests to it. You write two files.
+and sends HTTP requests to it (JSON APIs and HTML pages with forms alike). You write two files.
 
 1) doppel.toml (TOML), with these keys:
 [app]
@@ -116,7 +116,7 @@ Return ONLY JSON:
 {{"files": [{{"path": "doppel.toml", "content": "..."}}, {{"path": "doppel_seed.py", "content": "..."}}],
   "notes": "one or two sentences: what you assumed"}}
 {feedback}
-{install_hint}{versions}Repository setup hints:
+{facts}{install_hint}{versions}Repository setup hints:
 {hints}
 
 Repository API index (every top-level function and class, with model fields):
@@ -815,8 +815,9 @@ def last_line(error: str) -> str:
 
 def draft(repo: str | Path, error: str = "", previous: dict | None = None, chat=nemotron_chat,
           model: str | None = None, history: list[str] | None = None, repeated: int = 0,
-          best_stage: int = 0, on_exchange=None) -> dict:
-    """Ask Nemotron for the two files. Returns {"files": {name: text}, "notes": str}."""
+          best_stage: int = 0, on_exchange=None, facts: str = "") -> dict:
+    """Ask Nemotron for the two files. Returns {"files": {name: text}, "notes": str}. `facts` is the
+    probe's brief (doppel.probe.facts_text): ground truth from the running app."""
     model = model or os.getenv("INIT_MODEL", "nvidia/Nemotron-3-Ultra-550b-a55b")
     feedback = ""
     if error:
@@ -830,7 +831,12 @@ def draft(repo: str | Path, error: str = "", previous: dict | None = None, chat=
                   "below and take a different approach.\n") if repeated else ""
         feedback = FEEDBACK.format(kept=kept_note(best_stage), history=earlier, repeat=repeat, error=_clip_error(error),
                                    source=related_source(repo, error), files=shown)
-    prompt = PROMPT.format(feedback=feedback, install_hint=install_hint(repo), versions=versions_note(repo),
+    facts_block = (f"FACTS FROM THE RUNNING APP. Doppel installed this app in the sandbox and imported it the way its "
+                   f"framework does; these are true. Where they disagree with your reading of the code below, they "
+                   f"win (database location, route paths, what each view reads, the app's own commands):\n"
+                   f"{facts}\n\n") if facts else ""
+    prompt = PROMPT.format(feedback=feedback, facts=facts_block, install_hint=install_hint(repo),
+                           versions=versions_note(repo),
                            hints=gather_hints(repo),
                            index=api_index(repo),
                            code=gather_code(repo))
@@ -1184,6 +1190,25 @@ def try_files(repo: Path, files: dict, backend: str = "nebius", run_twin=None, c
 TRACE_DIR = ".doppel-trace"
 
 
+def probe_brief(repo: Path, backend: str, prober=None, log=lambda m: None) -> str:
+    """Install and import the app once, before any draft, and return the facts for the prompt. A probe
+    that cannot run at all leaves init where it was before: drafting from the code alone."""
+    from doppel import probe as probing
+    log("[init] probing the app: installing it and importing it the way its framework does")
+    try:
+        facts = (prober or probing.probe)(repo, backend=backend, install=derived_install(repo))
+    except Exception as e:  # noqa: BLE001 - the probe is a bonus, never a blocker
+        log(f"[init] the probe could not run ({type(e).__name__}: {str(e)[:160]}); drafting from the code alone")
+        return ""
+    fw = facts.get("framework") or "unknown"
+    db = facts.get("database") or {}
+    log(f"[init] probe: {fw}, {len(facts.get('routes') or [])} routes, {len(facts.get('models') or [])} models"
+        + (f", database {json.dumps(db, default=str)[:120]}" if db else "")
+        + (f", {len(facts['errors'])} import problem(s)" if facts.get("errors") else "")
+        + (f"; {facts['python_mismatch']}" if facts.get("python_mismatch") else ""))
+    return probing.facts_text(facts)
+
+
 class Tracer:
     """`doppel init --trace`: every step of every attempt as a file you can open and read.
 
@@ -1209,6 +1234,11 @@ class Tracer:
         self.attempt = attempt
         if self.root:
             (self.root / f"attempt-{attempt}").mkdir(exist_ok=True)
+
+    def write_root(self, name: str, text: str) -> None:
+        if self.root:
+            self.root.mkdir(parents=True, exist_ok=True)
+            (self.root / name).write_text(text, encoding="utf-8")
 
     def write(self, name: str, text: str) -> None:
         if self.root:
@@ -1291,7 +1321,8 @@ def check(repo: str | Path, backend: str = "nebius", calibrate: bool = False, ru
 
 def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotron_chat, run_twin=None,
          personas: int = 6, log=lambda msg: print(msg, file=sys.stderr),
-         min_coverage: float = MIN_COVERAGE, resume: bool = True, trace: Path | None = None) -> dict:
+         min_coverage: float = MIN_COVERAGE, resume: bool = True, trace: Path | None = None,
+         prober=None) -> dict:
     """Draft, verify, repair, calibrate. Returns the last attempt with "attempts" and "notes" added;
     "files" holds the calibrated files when "ok" is true. Only writes its progress file (STATE_FILE).
 
@@ -1303,6 +1334,8 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
     state = load_state(repo) if resume else {}
     best = state.get("best") or {"stage": 0, "files": None, "error": ""}
     history: list[str] = list(state.get("history") or [])
+    brief = probe_brief(repo, backend, prober, log)
+    tracer.write_root("0-probe.txt", brief or "(the probe learned nothing; drafting from the code alone)\n")
     error, previous = best["error"], best["files"]
     if previous:
         log(f"[init] resuming from the last run: got past {', '.join(STAGES[:best['stage']]) or 'nothing'} "
@@ -1323,11 +1356,11 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
             repeated = next((i + 1 for i, e in enumerate(ends) if error and same_error(e, headline(error))), 0)
             try:
                 drafted = draft(repo, error, previous, chat=chat, history=history[:-1], repeated=repeated,
-                                best_stage=best["stage"], on_exchange=exchange)
+                                best_stage=best["stage"], on_exchange=exchange, facts=brief)
             except ValueError as cut_off:  # a reply cut off or without the files: ask once more, no boot spent
                 log(f"[init] the reply could not be used ({str(cut_off)[:80]}...); asking again")
                 drafted = draft(repo, error, previous, chat=chat, history=history[:-1], repeated=repeated,
-                                best_stage=best["stage"], on_exchange=exchange)
+                                best_stage=best["stage"], on_exchange=exchange, facts=brief)
         except Exception as e:  # noqa: BLE001
             error, result = f"the reply could not be used: {e}", {"ok": False, "error": str(e), "attempts": attempt}
             log(f"[init] {error}")

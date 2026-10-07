@@ -317,6 +317,13 @@ def main(argv=None) -> int:
     st = sub.add_parser("site", help="build the static replay site from recorded runs (for GitHub Pages)")
     st.add_argument("--gallery", default="site/gallery.json", help="which runs to publish (default: site/gallery.json)")
     st.add_argument("--out", default="_site", help="output folder (default: _site)")
+    pb = sub.add_parser("probe", help="install and import an app, print what is true about it (routes, database, "
+                                      "login, models, import errors)")
+    pb.add_argument("app", nargs="?", default=".")
+    pb.add_argument("--backend", choices=["local", "nebius"], default="nebius",
+                    help="where to install and import it (local uses your current Python environment)")
+    pb.add_argument("--install", default=None, help="install command (default: derived from the app's requirements)")
+    pb.add_argument("--json", action="store_true", help="print the raw facts")
     c = sub.add_parser("comment", help="post or update the report as a PR comment (in GitHub Actions)")
     c.add_argument("--report", required=True)
     c.add_argument("--pr-number", type=int, help="default: from the GitHub event")
@@ -333,6 +340,11 @@ def main(argv=None) -> int:
             return cmd_view(a)
         if a.cmd == "site":
             return cmd_site(a)
+        if a.cmd == "probe":
+            from doppel.probe import main as probe_main
+            args = [a.app, "--backend", a.backend] + (["--install", a.install] if a.install is not None else []) \
+                + (["--json"] if a.json else [])
+            return probe_main(args)
         return cmd_run(a)
     except Exception as e:  # noqa: BLE001 - exit 2 = Doppel itself failed (1 means regressions found)
         print(f"doppel: error: {type(e).__name__}: {e}", file=sys.stderr)

@@ -93,6 +93,7 @@ class _Page(html.parser.HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.title, self.lines, self.forms, self.links = "", [], [], []
+        self.hidden: list[tuple[str, dict]] = []  # (action, raw hidden fields): what a browser submits back
         self._buf, self._skip, self._in_title = [], 0, False
 
     def _flush(self):
@@ -112,8 +113,11 @@ class _Page(html.parser.HTMLParser):
         elif tag == "form":
             self.forms.append({"action": a.get("action", ""), "method": a.get("method", "get").lower(),
                                "fields": {}})
+            self.hidden.append((a.get("action", ""), {}))
         elif tag in ("input", "select", "textarea") and self.forms and a.get("name"):
             name = a["name"]
+            if tag == "input" and a.get("type", "").lower() == "hidden":
+                self.hidden[-1][1][name] = a.get("value", "")
             value = "(token)" if TOKEN_FIELD.search(name) else a.get("value", "")
             if a.get("type") in ("checkbox", "radio"):
                 value = f"{value} checked" if "checked" in a else value
@@ -140,8 +144,7 @@ class _Page(html.parser.HTMLParser):
         self._buf.append(data)
 
 
-def page_view(text: str) -> dict:
-    """An HTML page as {"html": {"title", "text": [lines], "forms": [...], "links": [...]}}."""
+def _parse(text: str) -> _Page:
     page = _Page()
     try:
         page.feed(text)
@@ -149,7 +152,30 @@ def page_view(text: str) -> dict:
     except Exception:  # broken markup: keep what was parsed
         pass
     page._flush()
+    return page
+
+
+def page_view(text: str) -> dict:
+    """An HTML page as {"html": {"title", "text": [lines], "forms": [...], "links": [...]}}."""
+    page = _parse(text)
     return {"html": {"title": page.title, "text": page.lines, "forms": page.forms, "links": page.links}}
+
+
+def remember_hidden(forms_seen: dict, url: str, text: str) -> None:
+    """Hidden fields of every form on a page, by the path each form posts to (a form with no action
+    posts back to the page itself). Flask-WTF, Django and Rails keep their CSRF token there."""
+    for action, fields in _parse(text).hidden:
+        if fields:
+            target = urllib.parse.urlsplit(urllib.parse.urljoin(url, action or url)).path
+            forms_seen[target] = fields
+
+
+def with_hidden(forms_seen: dict | None, path: str, form: dict) -> dict:
+    """The form as a browser submits it: the page's hidden fields, then the persona's own values. A
+    value the persona copied from a recording ("(token)") is replaced by the real one."""
+    hidden = (forms_seen or {}).get(urllib.parse.urlsplit(path).path) or {}
+    merged = {**hidden, **form}
+    return {k: hidden[k] if v == "(token)" and k in hidden else v for k, v in merged.items()}
 
 
 def is_html(content_type: str, text: str) -> bool:
@@ -172,8 +198,9 @@ def csrf_headers(jar: http.cookiejar.CookieJar | None, method: str, headers: dic
 
 
 def call(base_url: str, method: str, path: str, body, timeout: float, headers: dict | None = None,
-         form=None, opener=None, jar=None):
+         form=None, opener=None, jar=None, forms_seen: dict | None = None):
     if form is not None:
+        form = with_hidden(forms_seen, path, form)
         data = urllib.parse.urlencode(form, doseq=True).encode()
         kind = {"Content-Type": "application/x-www-form-urlencoded"}
     elif body is not None:
@@ -200,6 +227,8 @@ def call(base_url: str, method: str, path: str, body, timeout: float, headers: d
     except ValueError:
         text = raw.decode("utf-8", "replace")
         payload = page_view(text) if is_html(ctype, text) else text[:MAX_TEXT]
+        if forms_seen is not None and isinstance(payload, dict):
+            remember_hidden(forms_seen, url, text)
     return status, payload, round(ms, 1)
 
 
@@ -250,6 +279,7 @@ def replay(base_url: str, personas: list[dict], timeout: float = 10.0) -> list[d
     for persona in personas:
         variables = dict(persona.get("vars") or {})
         opener, jar = browser()
+        forms_seen: dict = {}  # this persona's browser: the hidden fields of the forms it was shown
         wanted = placeholders({k: persona.get(k) for k in ("headers", "steps")})
         saved = {v for step in persona.get("steps") or [] for v in (step.get("save") or {})}
         steps = []
@@ -259,7 +289,8 @@ def replay(base_url: str, personas: list[dict], timeout: float = 10.0) -> list[d
             body = render(step["json"], variables) if "json" in step else None
             form = render(step["form"], variables) if isinstance(step.get("form"), dict) else None
             status, payload, ms = call(base_url, method, path, body, timeout,
-                                       build_headers(persona, step, variables), form=form, opener=opener, jar=jar)
+                                       build_headers(persona, step, variables), form=form, opener=opener, jar=jar,
+                                       forms_seen=forms_seen)
             for var, dotted in (step.get("save") or {}).items():
                 value = extract(payload, dotted)
                 if value is not None:
