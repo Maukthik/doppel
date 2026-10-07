@@ -161,7 +161,11 @@ def _load_entry(entry: dict, root: Path) -> tuple[dict, dict]:
     """(raw run dict, comparison {tests, review} or {})."""
     src = json.loads((root / entry["source"]).read_text("utf-8"))
     if "worlds" in src:
-        return src, {}
+        compare = {}
+        if entry.get("compare"):  # a re-recorded benchmark PR keeps the benchmark's tests and review results
+            bench = json.loads((root / entry["compare"]).read_text("utf-8"))
+            compare = {k: bench[k] for k in ("tests", "review") if isinstance(bench.get(k), dict)}
+        return src, compare
     prs = {}
     index = root / entry.get("pr_index", "bench/microblog/prs/index.json")
     if index.is_file():

@@ -102,3 +102,11 @@ def test_build_writes_the_gallery_and_hides_hashes(tmp_path):
         text = page.read_text()
         for line in text.split("scrypt:")[1:]:
             assert line.split("$", 1)[1].startswith("[hidden on the site]")
+
+
+def test_a_rerecorded_run_keeps_the_benchmark_comparison(tmp_path):
+    run = json.loads((ROOT / "site" / "runs" / "shop-local.json").read_text())
+    (tmp_path / "run.json").write_text(json.dumps(run))
+    entry = {"source": str(tmp_path / "run.json"), "compare": "bench/results/r17-hash-leak.json"}
+    raw, compare = site._load_entry(entry, ROOT)
+    assert "worlds" in raw and compare["tests"]["caught"] is False and compare["review"]["verdict"] == "safe"
