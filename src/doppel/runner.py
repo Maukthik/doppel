@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import html.parser
 import http.cookiejar
 import json
 import re
@@ -76,6 +77,84 @@ def build_headers(persona: dict, step: dict, variables: dict) -> dict:
 
 
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
+TOKEN_FIELD = re.compile(r"csrf|xsrf|authenticity_token|nonce|__requestverificationtoken", re.I)
+MAX_LINES, MAX_LINKS, MAX_TEXT = 400, 200, 10_000
+
+
+class _Page(html.parser.HTMLParser):
+    """What a person sees and can do on an HTML page: title, visible text lines, forms, links.
+    Attributes, scripts and styles are dropped; CSRF tokens and nonces are masked, so two loads of
+    the same page compare equal and a change in the content shows up as the line that changed."""
+    SKIP = {"script", "style", "noscript", "template", "svg"}
+    BLOCK = {"p", "div", "li", "tr", "br", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article",
+             "header", "footer", "nav", "main", "table", "ul", "ol", "dt", "dd", "form", "label", "option",
+             "button", "td", "th", "pre", "blockquote", "title"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.title, self.lines, self.forms, self.links = "", [], [], []
+        self._buf, self._skip, self._in_title = [], 0, False
+
+    def _flush(self):
+        line = " ".join("".join(self._buf).split())
+        if line and len(self.lines) < MAX_LINES:
+            self.lines.append(line[:300])
+        self._buf = []
+
+    def handle_starttag(self, tag, attrs):
+        a = {k: (v or "") for k, v in attrs}
+        if tag in self.SKIP:
+            self._skip += 1
+        if tag in self.BLOCK:
+            self._flush()
+        if tag == "title":
+            self._in_title = True
+        elif tag == "form":
+            self.forms.append({"action": a.get("action", ""), "method": a.get("method", "get").lower(),
+                               "fields": {}})
+        elif tag in ("input", "select", "textarea") and self.forms and a.get("name"):
+            name = a["name"]
+            value = "(token)" if TOKEN_FIELD.search(name) else a.get("value", "")
+            if a.get("type") in ("checkbox", "radio"):
+                value = f"{value} checked" if "checked" in a else value
+            self.forms[-1]["fields"][name] = value
+        elif tag == "meta" and TOKEN_FIELD.search(a.get("name", "")):
+            pass  # <meta name="csrf-token" content="..."> is noise, never content
+        elif tag == "a" and a.get("href") and len(self.links) < MAX_LINKS:
+            self.links.append(a["href"])
+
+    def handle_endtag(self, tag):
+        if tag in self.SKIP and self._skip:
+            self._skip -= 1
+        if tag == "title":
+            self._in_title = False
+        if tag in self.BLOCK:
+            self._flush()
+
+    def handle_data(self, data):
+        if self._skip:
+            return
+        if self._in_title:
+            self.title += data.strip()
+            return
+        self._buf.append(data)
+
+
+def page_view(text: str) -> dict:
+    """An HTML page as {"html": {"title", "text": [lines], "forms": [...], "links": [...]}}."""
+    page = _Page()
+    try:
+        page.feed(text)
+        page.close()
+    except Exception:  # broken markup: keep what was parsed
+        pass
+    page._flush()
+    return {"html": {"title": page.title, "text": page.lines, "forms": page.forms, "links": page.links}}
+
+
+def is_html(content_type: str, text: str) -> bool:
+    head = text.lstrip()[:100].lower()
+    return "html" in (content_type or "").lower() or head.startswith(("<!doctype html", "<html"))
 
 
 def browser() -> tuple[urllib.request.OpenerDirector, http.cookiejar.CookieJar]:
@@ -110,16 +189,17 @@ def call(base_url: str, method: str, path: str, body, timeout: float, headers: d
     t0 = time.perf_counter()
     try:
         with (opener.open if opener else urllib.request.urlopen)(req, timeout=timeout) as resp:
-            status, raw = resp.status, resp.read()
+            status, raw, ctype = resp.status, resp.read(), resp.headers.get("Content-Type", "")
     except urllib.error.HTTPError as e:
-        status, raw = e.code, e.read()
+        status, raw, ctype = e.code, e.read(), (e.headers.get("Content-Type", "") if e.headers else "")
     except Exception as e:  # connection refused, timeout, reset: the app is broken
-        status, raw = 0, f"{type(e).__name__}: {e}".encode()
+        status, raw, ctype = 0, f"{type(e).__name__}: {e}".encode(), ""
     ms = (time.perf_counter() - t0) * 1000
     try:
         payload = json.loads(raw) if raw else None
     except ValueError:
-        payload = raw.decode("utf-8", "replace")[:2000]
+        text = raw.decode("utf-8", "replace")
+        payload = page_view(text) if is_html(ctype, text) else text[:MAX_TEXT]
     return status, payload, round(ms, 1)
 
 

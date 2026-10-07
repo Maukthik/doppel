@@ -45,6 +45,9 @@ def changed_paths(a, b, prefix: str = "", limit: int = 10) -> list[str]:
                     out.append(f"{p} (removed)")
                 else:
                     walk(x[k], y[k], p)
+        elif _lines(x) and _lines(y) and len(x) != len(y):
+            gone, new = line_changes(x, y)
+            out.append(f"{path or '(whole body)'} (-{len(gone)} +{len(new)} lines)")
         elif isinstance(x, list) and isinstance(y, list) and len(x) == len(y):
             for i, (xi, yi) in enumerate(zip(x, y, strict=True)):
                 walk(xi, yi, f"{path}.{i}" if path else str(i))
@@ -53,6 +56,21 @@ def changed_paths(a, b, prefix: str = "", limit: int = 10) -> list[str]:
 
     walk(a, b, prefix)
     return out
+
+
+def _lines(v) -> bool:
+    return isinstance(v, list) and all(isinstance(i, str) for i in v)
+
+
+def line_changes(a: list[str], b: list[str]) -> tuple[list[str], list[str]]:
+    """The lines only in a and the lines only in b, aligned the way a text diff aligns them."""
+    import difflib
+    gone, new = [], []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+        if op != "equal":
+            gone += a[i1:i2]
+            new += b[j1:j2]
+    return gone, new
 
 
 def _at(body, path: str):
@@ -103,6 +121,9 @@ def compare(base: list[dict], head: list[dict], ignore=(), slow_ratio: float = 2
                 shown = [p.split(" (")[0] for p in paths[:2]]  # show values at the first changed paths
                 if shown and shown[0] != "(whole body)":
                     vb, vh = {p: _at(bb, p) for p in shown}, {p: _at(hb, p) for p in shown}
+                    for p in shown:  # for text lines, show only the lines that changed
+                        if _lines(vb[p]) and _lines(vh[p]) and len(vb[p]) != len(vh[p]):
+                            vb[p], vh[p] = line_changes(vb[p], vh[p])
                 else:
                     vb, vh = bb, hb
                 findings.append(Finding("body", who, i, req, "changed: " + summarize_paths(paths), vb, vh))
