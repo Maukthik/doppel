@@ -160,10 +160,14 @@ def _serve_and_replay(world: Path, spec: TwinSpec, personas: list[dict], watch: 
     return recordings
 
 
-def build_world(code_dir: Path, seeded: Path, spec: TwinSpec, work: Path) -> Path:
+def build_world(code_dir: Path, seeded: Path, spec: TwinSpec, work: Path, base_dir: Path | None = None) -> Path:
     world = work / "world"
     shutil.copytree(seeded, world, ignore=SKIP)
     _overlay(code_dir, world)
+    if base_dir is not None and Path(base_dir).resolve() != Path(code_dir).resolve():
+        from doppel.backends.nebius import removed_files
+        for rel in removed_files(base_dir, code_dir):   # files the PR deletes must not stay in its world
+            (world / rel).unlink(missing_ok=True)
     _run(spec.migrate, world, "migrate", spec.env)
     return world
 
@@ -236,7 +240,7 @@ def run_twin(base_dir: str | Path, head_dir: str | Path, spec: TwinSpec, persona
         for label, code in (("base", base_dir), ("head", head_dir)):
             (work / label).mkdir()
             with tl.span("build", f"{label} world", kind="fork"):
-                worlds[label] = build_world(code, seeded, spec, work / label)
+                worlds[label] = build_world(code, seeded, spec, work / label, base_dir)
         rehearsal = None
         if refine is not None:
             rehearsal = [r for r in replay_world(worlds["base"], spec, personas, work / "base", "r",

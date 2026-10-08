@@ -123,3 +123,29 @@ def test_spec_requires_a_start_command(tmp_path):
     p.write_text("[app]\nready = '/'\n")
     with pytest.raises(ValueError):
         TwinSpec.load(p)
+
+
+def test_a_file_the_pr_deletes_is_gone_from_the_head_world(tmp_path):
+    import shutil
+
+    from doppel.backends.local import run_twin
+    from doppel.spec import TwinSpec
+    base, head = tmp_path / "base", tmp_path / "head"
+    shutil.copytree(SHOP / "base", base)
+    shutil.copytree(SHOP / "base", head)
+    (base / "legacy.py").write_text("x = 1\n", encoding="utf-8")       # only base has it: the PR deletes it
+    probe = {"name": "p", "steps": [{"method": "GET", "path": "/health"}]}
+    from doppel.backends import local
+    seen = {}
+    original = local.build_world
+
+    def spy(code_dir, seeded, spec_, work, base_dir=None):
+        world = original(code_dir, seeded, spec_, work, base_dir)
+        seen[work.name] = (world / "legacy.py").exists()
+        return world
+    local.build_world = spy
+    try:
+        run_twin(base, head, TwinSpec.load(base / "doppel.toml"), [probe])
+    finally:
+        local.build_world = original
+    assert seen == {"base": True, "head": False}

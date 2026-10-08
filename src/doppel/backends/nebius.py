@@ -35,6 +35,13 @@ OUTPUT_LIMIT = 8 * 1024 * 1024  # default is 64 KB, too small for a persona's re
 RETRIES = 3
 
 
+def removed_files(base_dir: str | Path, head_dir: str | Path) -> list[str]:
+    """App-relative paths of code files the base has and the head does not (seeded data is not code)."""
+    base = {k.split("/", 1)[1] for k in code_files(base_dir)}
+    head = {k.split("/", 1)[1] for k in code_files(head_dir)}
+    return sorted(base - head)
+
+
 def code_files(root: str | Path) -> dict[str, Path]:
     """{"app/relative/path": local path} for every file outside caches, venvs and .git."""
     root = Path(root).resolve()
@@ -144,6 +151,10 @@ class NebiusTwin:
         with self.tl.span("build", "fork head world (PR files on top)", kind="fork"):
             head = await seeded.apply_files(code_files(head_dir))
         self._count(head)
+        gone = removed_files(base_dir, head_dir)
+        if gone:  # files the PR deletes: laying head's files on top would leave them in place
+            head = await self._step(head, "rm -f -- " + " ".join(shlex.quote(r) for r in gone),
+                                    f"remove {len(gone)} file(s) the PR deletes")
         if s.install:
             head = await self._step(head, s.exports() + s.install, "install (head)")
         if s.migrate:
