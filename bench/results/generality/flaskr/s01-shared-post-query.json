@@ -1,0 +1,833 @@
+{
+ "pr": {
+  "id": "s01-shared-post-query",
+  "kind": "safe",
+  "title": "Share the post SELECT between index and get_post",
+  "body": "Both views selected the same columns with the same join; move it into one `POST_QUERY` constant. No behavior change.",
+  "expect": "",
+  "bug": ""
+ },
+ "tests": {
+  "caught": false,
+  "summary": "24 passed in 3.29s",
+  "failed": [],
+  "seconds": 7.5
+ },
+ "doppel": {
+  "detected": false,
+  "caught": false,
+  "any_regression": false,
+  "needs_human": 0,
+  "findings": [],
+  "summary": "",
+  "personas": [
+   {
+    "name": "alice_reader",
+    "goal": "View the blog feed as alice",
+    "vars": {
+     "name": "alice"
+    },
+    "steps": [
+     {
+      "method": "GET",
+      "path": "/auth/login",
+      "form": {
+       "username": "alice",
+       "password": "doppel-pass"
+      },
+      "save": {
+       "token": "access_token"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "bob_poster",
+    "goal": "Create a new post as bob",
+    "vars": {
+     "name": "bob"
+    },
+    "steps": [
+     {
+      "method": "GET",
+      "path": "/auth/login",
+      "form": {
+       "username": "bob",
+       "password": "doppel-pass"
+      },
+      "save": {
+       "token": "access_token"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/create",
+      "form": {
+       "title": "Bob's New Post",
+       "body": "Content from bob"
+      },
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "charlie_updater",
+    "goal": "Update post 1 as charlie (will fail 403)",
+    "vars": {
+     "name": "charlie"
+    },
+    "steps": [
+     {
+      "method": "GET",
+      "path": "/auth/login",
+      "form": {
+       "username": "charlie",
+       "password": "doppel-pass"
+      },
+      "save": {
+       "token": "access_token"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/1/update",
+      "form": {
+       "title": "Updated by charlie",
+       "body": "New body"
+      },
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "alice_deleter",
+    "goal": "Delete post 7 as alice",
+    "vars": {
+     "name": "alice"
+    },
+    "steps": [
+     {
+      "method": "GET",
+      "path": "/auth/login",
+      "form": {
+       "username": "alice",
+       "password": "doppel-pass"
+      },
+      "save": {
+       "token": "access_token"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/7/delete",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "bob_reader",
+    "goal": "View feed after creating post",
+    "vars": {
+     "name": "bob"
+    },
+    "steps": [
+     {
+      "method": "GET",
+      "path": "/auth/login",
+      "form": {
+       "username": "bob",
+       "password": "doppel-pass"
+      },
+      "save": {
+       "token": "access_token"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "careless_registrant",
+    "goal": "Register a new user with empty fields",
+    "vars": {
+     "name": "careless_user"
+    },
+    "steps": [
+     {
+      "method": "GET",
+      "path": "/auth/register"
+     },
+     {
+      "method": "POST",
+      "path": "/auth/register",
+      "form": {
+       "username": "",
+       "password": ""
+      }
+     }
+    ]
+   },
+   {
+    "name": "power_user_alice",
+    "goal": "Create then update then delete own post",
+    "vars": {
+     "name": "alice"
+    },
+    "steps": [
+     {
+      "method": "GET",
+      "path": "/auth/login",
+      "form": {
+       "username": "alice",
+       "password": "doppel-pass"
+      },
+      "save": {
+       "token": "access_token"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/create",
+      "form": {
+       "title": "Power Post",
+       "body": "Power body"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/1/update",
+      "form": {
+       "title": "Updated Power Post",
+       "body": "Updated body"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/1/delete",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "charlie_bad_input",
+    "goal": "Create post with empty title (validation)",
+    "vars": {
+     "name": "charlie"
+    },
+    "steps": [
+     {
+      "method": "GET",
+      "path": "/auth/login",
+      "form": {
+       "username": "charlie",
+       "password": "doppel-pass"
+      },
+      "save": {
+       "token": "access_token"
+      }
+     },
+     {
+      "method": "POST",
+      "path": "/create",
+      "form": {
+       "title": "",
+       "body": "Body without title"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "alice_view_all",
+    "goal": "View all posts as alice",
+    "vars": {
+     "name": "alice"
+    },
+    "steps": [
+     {
+      "method": "GET",
+      "path": "/auth/login",
+      "form": {
+       "username": "alice",
+       "password": "doppel-pass"
+      },
+      "save": {
+       "token": "access_token"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/1/update",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   },
+   {
+    "name": "bob_logout_login",
+    "goal": "Logout then login as bob",
+    "vars": {
+     "name": "bob"
+    },
+    "steps": [
+     {
+      "method": "GET",
+      "path": "/auth/login",
+      "form": {
+       "username": "bob",
+       "password": "doppel-pass"
+      },
+      "save": {
+       "token": "access_token"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/auth/logout"
+     },
+     {
+      "method": "GET",
+      "path": "/auth/login",
+      "form": {
+       "username": "bob",
+       "password": "doppel-pass"
+      },
+      "save": {
+       "token": "access_token"
+      }
+     },
+     {
+      "method": "GET",
+      "path": "/",
+      "headers": {
+       "Authorization": "Bearer {token}"
+      }
+     }
+    ],
+    "headers": {
+     "Authorization": "Bearer {token}"
+    }
+   }
+  ],
+  "persona_count": 10,
+  "failed_personas": [],
+  "coverage": {
+   "requests": 29,
+   "served": 29,
+   "blocked": 0,
+   "stuck_personas": [],
+   "personas": 10
+  },
+  "coverage_before_rehearsal": {
+   "requests": 29,
+   "served": 29,
+   "blocked": 0,
+   "stuck_personas": [],
+   "personas": 10
+  },
+  "repaired": [],
+  "recordings": {
+   "base": [
+    {
+     "persona": "alice_reader",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      }
+     ]
+    },
+    {
+     "persona": "bob_poster",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /create",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      }
+     ]
+    },
+    {
+     "persona": "charlie_updater",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /1/update",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      }
+     ]
+    },
+    {
+     "persona": "alice_deleter",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /7/delete",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      }
+     ]
+    },
+    {
+     "persona": "bob_reader",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      }
+     ]
+    },
+    {
+     "persona": "careless_registrant",
+     "steps": [
+      {
+       "request": "GET /auth/register",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Register - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Register\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /auth/register",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Register - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Register\", \"Username is required.\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      }
+     ]
+    },
+    {
+     "persona": "power_user_alice",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /create",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /1/update",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /1/delete",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      }
+     ]
+    },
+    {
+     "persona": "charlie_bad_input",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /create",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      }
+     ]
+    },
+    {
+     "persona": "alice_view_all",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      },
+      {
+       "request": "GET /1/update",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      }
+     ]
+    },
+    {
+     "persona": "bob_logout_login",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /auth/logout",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      },
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      }
+     ]
+    }
+   ],
+   "head": [
+    {
+     "persona": "alice_reader",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      }
+     ]
+    },
+    {
+     "persona": "bob_poster",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /create",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      }
+     ]
+    },
+    {
+     "persona": "charlie_updater",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /1/update",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      }
+     ]
+    },
+    {
+     "persona": "alice_deleter",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /7/delete",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      }
+     ]
+    },
+    {
+     "persona": "bob_reader",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      }
+     ]
+    },
+    {
+     "persona": "careless_registrant",
+     "steps": [
+      {
+       "request": "GET /auth/register",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Register - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Register\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /auth/register",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Register - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Register\", \"Username is required.\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      }
+     ]
+    },
+    {
+     "persona": "power_user_alice",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /create",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /1/update",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /1/delete",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      }
+     ]
+    },
+    {
+     "persona": "charlie_bad_input",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "POST /create",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      }
+     ]
+    },
+    {
+     "persona": "alice_view_all",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      },
+      {
+       "request": "GET /1/update",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      }
+     ]
+    },
+    {
+     "persona": "bob_logout_login",
+     "steps": [
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /auth/logout",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      },
+      {
+       "request": "GET /auth/login",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Log In - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Log In\", \"Username\", \"Password\"], \"forms\": [{\"action\": \"\", \"method\": \"post\", \"fields\": {\"username\": \"\", \"password\": \"\"}}], \"links\": [\"/\", \"/auth/register\", \"/auth/login\"]}}"
+      },
+      {
+       "request": "GET /",
+       "status": 200,
+       "body": "{\"html\": {\"title\": \"Posts - Flaskr\", \"text\": [\"Flaskr\", \"Register\", \"Log In\", \"Posts\", \"First Post\", \"by alice on 2026-10-08\", \"This is the first post.\", \"Second Post\", \"by bob on 2026-10-08\", \"Content of the second post.\", \"Third Post\", \"by charlie on 2026-10-08\", \"Another post here.\", \"Fourth Post\", \"by alice on 2026-10-08\", \"More content.\", \"Fifth Post\", \"by bob on 2026-10-08\", \"Yet another post.\", \"Sixth Post\", \"by charlie on 2026-10-08\", \"Post number six.\", \"Seventh Post\", \"by alice on 2026-10-08\", \"Lucky seven.\", \"Eighth Post\", \"by bob on 2026-10-08\", \"Eight is great.\", \"Ninth Post\", \"by"
+      }
+     ]
+    }
+   ]
+  },
+  "steps": 29,
+  "suspicions": [],
+  "probes": 0,
+  "rounds": 1,
+  "generation": {
+   "model": "nvidia/Nemotron-3_5-Lightning",
+   "probe_model": null
+  },
+  "usd": {
+   "suspect": 0.005774,
+   "check": 0.0,
+   "personas": 0.00070548,
+   "rehearsal": 0.0,
+   "judge": 0.0,
+   "sandbox_reported": 0.05401469000000003
+  },
+  "seconds": {
+   "personas": 7.6,
+   "twin": 29.2,
+   "judge": 0.0
+  }
+ },
+ "review": {
+  "caught": false,
+  "verdict": "safe",
+  "why": "The PR only extracts a duplicated SQL query into a constant `POST_QUERY` and uses it in both `index` and `get_post`; the generated SQL strings are identical to the originals, so no behavior changes.",
+  "usd": 0.005821,
+  "seconds": 2.2
+ }
+}
