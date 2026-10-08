@@ -43,7 +43,7 @@ sys.path.insert(0, str(HERE.parent / "src"))
 APPS = HERE / "apps"
 CACHE = HERE / ".cache" / "generality"
 RESULTS = HERE / "results" / "generality"
-TWIN_FILES = ("doppel.toml", "doppel_seed.py")
+TWIN_FILES = ("doppel.toml", "doppel_seed.py", "doppel_seed.json")  # init writes the ones it uses
 
 
 def sh(args, cwd=None, check=True, **kw):
@@ -93,7 +93,8 @@ def with_setup(app: dict, setup: Path, tag: str) -> Path:
         shutil.rmtree(base)
     shutil.copytree(pristine(app), base)
     for f in TWIN_FILES:
-        shutil.copy(setup / f, base / f)
+        if (setup / f).exists():
+            shutil.copy(setup / f, base / f)
     return base
 
 
@@ -157,6 +158,8 @@ def step_init(app: dict, force: bool) -> dict:
               "coverage": r.get("coverage"), "noise": r.get("noise", []), "flaky": r.get("flaky", []),
               "error": (r.get("error") or "")[-1500:], "infra": bool(r.get("infra")),
               "notes": r.get("notes", ""), "seconds": round(time.perf_counter() - t0, 1),
+              "agent": bool(r.get("agent")), "agent_steps": r.get("agent_steps"), "agent_tries": r.get("agent_tries"),
+              "agent_gave_up": r.get("agent_gave_up", ""),
               "date": str(date.today())}
     if result["ok"]:
         gen = APPS / app["name"] / "generated"
@@ -166,7 +169,8 @@ def step_init(app: dict, force: bool) -> dict:
         result["files"] = sorted(r["files"])
     save(out, result)
     cov = f"{result['coverage']:.0%}" if isinstance(result["coverage"], (int, float)) else "-"
-    print(f"[{app['name']}] init: {'OK' if result['ok'] else 'FAILED'} after {result['attempts']} attempt(s), "
+    how = f" + the setup agent ({result['agent_steps']} steps)" if result["agent"] else ""
+    print(f"[{app['name']}] init: {'OK' if result['ok'] else 'FAILED'} after {result['attempts']} draft(s){how}, "
           f"served {cov}, {result['seconds']} s" + ("" if result["ok"] else f"\n{result['error']}"))
     return result
 
@@ -174,7 +178,7 @@ def step_init(app: dict, force: bool) -> dict:
 def generated_setup(app: dict) -> Path:
     gen = APPS / app["name"] / "generated"
     init = load(RESULTS / app["name"] / "init.json")
-    if not init or not init.get("ok") or not all((gen / f).exists() for f in TWIN_FILES):
+    if not init or not init.get("ok") or not (gen / "doppel.toml").exists():
         sys.exit(f"[{app['name']}] no working setup from doppel init yet: run `init` first. "
                  "The benchmark never substitutes a hand-written setup.")
     return gen
@@ -266,8 +270,14 @@ def summary() -> Path:
         def score(arm, kind, results=results):
             got = [r for r in results if arm in r and r["pr"]["kind"] == kind and not r[arm].get("unavailable")]
             return f"{sum(r[arm]['caught'] for r in got)}/{len(got)}" if got else "-"
-        setup = "-" if not init else (f"✅ {init['attempts']} try" + ("" if init["attempts"] == 1 else "s")
-                                      if init["ok"] else "❌ failed")
+        if not init:
+            setup = "-"
+        elif init["ok"] and init.get("agent"):
+            setup = f"✅ agent, {init.get('agent_steps')} steps"
+        elif init["ok"]:
+            setup = f"✅ {init['attempts']} draft" + ("" if init["attempts"] == 1 else "s")
+        else:
+            setup = "❌ failed"
         rows.append([app["name"], app["framework"], app["login"], app["database"], setup,
                      served(aa["coverage"]).split(" (")[-1].rstrip(")") if aa else "-",
                      str(aa["false_differences"]) if aa else "-",

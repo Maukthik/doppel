@@ -9,6 +9,8 @@ Read from doppel.toml in the app's folder:
     start = "python app.py"   # must listen on the port given in $PORT
     ready = "/health"         # polled until it answers (< 500)
     seed = "python seed.py"   # run ONCE on the base code; both worlds start from that data
+    seed_requests = ""        # optional JSON file of HTTP steps run ONCE against the started app after `seed`:
+                              # create starting data through the app's own routes (sign up, log in, post)
     migrate = ""              # run in EACH world after its code is in place
 
     [personas]
@@ -48,6 +50,8 @@ class TwinSpec:
     persona_guide: str = ""
     login: dict | None = None
     env: dict = field(default_factory=dict)  # [app] env: set for install, seed, migrate and start alike
+    seed_requests: str = ""                 # file name, relative to the app's root
+    seed_steps: list = field(default_factory=list)  # its steps, loaded with the spec
 
     def exports(self) -> str:
         """`export K='V'; ` for each [app] env entry, for commands run through a POSIX shell."""
@@ -67,4 +71,27 @@ class TwinSpec:
                    slow_min_ms=float(diff.get("slow_min_ms", 50.0)),
                    persona_guide=str(personas.get("guide", "")).strip(),
                    login=personas.get("login") if isinstance(personas.get("login"), dict) else None,
-                   env={str(k): str(v) for k, v in (app.get("env") or {}).items()})
+                   env={str(k): str(v) for k, v in (app.get("env") or {}).items()},
+                   seed_requests=str(app.get("seed_requests", "") or ""),
+                   seed_steps=load_seed_steps(Path(path).parent, app.get("seed_requests")))
+
+
+def load_seed_steps(root: Path, name) -> list:
+    """The seed_requests file: a JSON list of steps (or {"steps": [...]}) in the persona step format."""
+    if not name:
+        return []
+    f = root / str(name)
+    if not f.exists():
+        raise ValueError(f"[app] seed_requests = {name!r}, but there is no such file next to doppel.toml")
+    import json
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except ValueError as e:
+        raise ValueError(f"{name} is not valid JSON: {e}") from None
+    steps = data.get("steps") if isinstance(data, dict) else data
+    valid = isinstance(steps, list) and steps and \
+        all(isinstance(s, dict) and str(s.get("path", "")).startswith("/") for s in steps)
+    if not valid:
+        raise ValueError(f"{name} must be a list of steps like "
+                         '{"method": "POST", "path": "/signup", "form": {...}} (every path starting with /)')
+    return steps

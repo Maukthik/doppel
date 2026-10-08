@@ -213,7 +213,7 @@ def test_the_brief_names_what_a_setup_needs():
              "models": [{"class": "notes.Note", "table": "notes_note",
                          "fields": [{"name": "owner", "required": True, "fk": "auth.User"}]}]}
     text = facts_text(facts)
-    assert "<repo>/instance/blog.sqlite" in text and "flask --app blog init-db" in text
+    assert "instance/blog.sqlite" in text and "<repo>" not in text and "flask --app blog init-db" in text
     assert "GET POST /auth/login  [reads form, THIS IS A LOGIN VIEW]" in text
     assert "required owner->auth.User" in text
 
@@ -226,7 +226,8 @@ def test_init_puts_the_probe_facts_in_the_prompt(tmp_path):
     result = bootstrap.init(app, backend="local", tries=1, chat=model, log=lambda m: None,
                             prober=lambda repo, backend, install: facts)
     assert result["ok"]
-    assert "FACTS FROM THE RUNNING APP" in model.prompts[0] and "<repo>/instance/x.sqlite" in model.prompts[0]
+    assert "FACTS FROM THE RUNNING APP" in model.prompts[0] and "instance/x.sqlite" in model.prompts[0]
+    assert "<repo>" not in model.prompts[0]
 
 
 def test_a_probe_that_cannot_run_does_not_stop_init(tmp_path):
@@ -321,3 +322,31 @@ def test_paths_read_the_same_on_windows_linux_and_in_the_sandbox():
     assert out["database"] == {"configured": "<repo>/instance/b.db", "uri": "sqlite:///<repo>/app.db"}
     assert out["errors"][0]["traceback"] == 'File "<repo>/a.py", line 3'
     assert probe_app.scrub("/app/instance/x.sqlite", ["/app"]) == "<repo>/instance/x.sqlite"
+
+
+def test_the_brief_gives_relative_paths_never_the_repo_placeholder():
+    from doppel.probe import relative_paths
+    django = {"framework": "django", "python": "3.12", "errors": [],
+              "database": {"default": {"engine": "django.db.backends.sqlite3", "name": "<repo>/db.sqlite3"}}}
+    text = facts_text(django)
+    assert '"name": "db.sqlite3"' in text and "<repo>" not in text
+    assert relative_paths("sqlite:///<repo>/app.db") == "sqlite:///app.db"          # relative for SQLAlchemy
+    assert relative_paths('{"root": "<repo>"}') == '{"root": "."}'
+
+
+def test_a_repo_placeholder_in_the_files_is_caught_before_booting(tmp_path):
+    spec = '[app]\nstart = "x"\nseed = "mkdir -p $(dirname <repo>/db.sqlite3) && python doppel_seed.py"\n'
+    assert any("'<repo>'" in p for p in bootstrap.check_spec(tmp_path, spec))
+    assert any("'<repo>'" in p for p in bootstrap.check_seed(tmp_path, 'open("<repo>/db.sqlite3")\n'))
+
+
+def test_a_leftover_placeholder_is_caught_before_booting(tmp_path):
+    spec = '[app]\nstart = "x"\nready = "/"\nseed = "mkdir -p $(dirname <repo>/db.sqlite3) && python s.py"\n'
+    assert any("placeholder" in p for p in bootstrap.check_spec(tmp_path, spec))
+    assert any("placeholder" in p for p in bootstrap.check_seed(tmp_path, 'open("<repo>/db.sqlite3")\n'))
+
+
+def test_relative_paths_in_the_brief():
+    from doppel.probe import relative_paths
+    assert relative_paths('{"name": "<repo>/db.sqlite3"} sqlite:///<repo>/app.db root <repo>') == \
+        '{"name": "db.sqlite3"} sqlite:///app.db root .'

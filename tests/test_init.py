@@ -27,10 +27,15 @@ def reply(spec_text: str, seed: str | None = None, notes: str = "") -> str:
 class ScriptedModel:
     """Answers setup prompts from a script, persona prompts with fixed users; records every prompt."""
 
-    def __init__(self, setups: list[str], personas=SHOP_PERSONAS[:3]):
+    def __init__(self, setups: list[str], personas=SHOP_PERSONAS[:3], agent: list[dict] | None = None):
         self.setups, self.personas, self.prompts = list(setups), personas, []
+        self.agent, self.agent_prompts = list(agent or []), []
 
     def __call__(self, model, prompt, temperature=0.7):
+        if prompt.startswith("You are setting up a Python web app"):   # the setup agent: scripted actions,
+            self.agent_prompts.append(prompt)                           # then it gives up
+            action = self.agent.pop(0) if self.agent else {"tool": "give_up", "reason": "script ended"}
+            return json.dumps(action), 100, 100
         self.prompts.append(prompt)
         if prompt.startswith("You set up a web API"):
             return self.setups.pop(0), 100, 100

@@ -52,6 +52,9 @@ Seed once, a fresh world per persona, replay, diff, Markdown report, offline tes
 - [ ] 3-minute video, Devpost text, feedback on Token Factory and Nemotron.
 - [x] Doppel Viewer: `doppel view` for runs and init traces, with the twin's timeline.
 - [x] Replay site: `doppel site` + GitHub Pages workflow (hash-leak hero, gallery, benchmark).
+- [x] Setup that generalizes: the probe (facts from the running app), the front-door seed
+  (`doppel_seed.json`), and the setup agent (Nemotron in a live sandbox) when drafts fail;
+  the generality benchmark (`bench/generality.py`, `bench/apps/`).
 - [x] A pass means something: a persona that fails only on head is an error finding (a head that no
   longer starts used to pass as "no behavior changes"), a run with nothing replayed exits 2, `[diff]` and
   personas come from base, and PRs that edit Doppel's setup are flagged (`tests/test_trust.py`).

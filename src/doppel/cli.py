@@ -193,6 +193,7 @@ def cmd_init(a) -> int:
         return cmd_check(a)
     trace = Path(a.app) / TRACE_DIR if a.trace else None
     result = init(a.app, backend=a.backend, tries=a.tries, personas=a.n, min_coverage=a.min_coverage,
+                  agent=not a.no_agent,
                   resume=not a.fresh, trace=trace)
     if trace:
         print(f"trace of every attempt: {trace}", file=sys.stderr)
@@ -296,7 +297,10 @@ def main(argv=None) -> int:
     i.add_argument("app", nargs="?", default=".", help="the app's folder (default: current folder)")
     i.add_argument("--backend", choices=["local", "nebius"], default="nebius",
                    help="where to try the setup (local uses your current Python environment)")
-    i.add_argument("--tries", type=int, default=3, help="drafts to try before giving up")
+    i.add_argument("--tries", type=int, default=2,
+                   help="drafts to try before the setup agent takes over (default 2)")
+    i.add_argument("--no-agent", action="store_true",
+                   help="stop after the drafts instead of handing over to the setup agent")
     i.add_argument("-n", type=int, default=6, help="invented users for the noise calibration")
     i.add_argument("--min-coverage", type=float, default=0.4,
                    help="share of the invented users' requests that must be served (default 0.4)")

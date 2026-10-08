@@ -83,6 +83,36 @@ class NebiusTwin:
             raise RuntimeError(f"{what} failed ({shown or shell}):\n" + failure_text(out.stdout, out.stderr))
         return out
 
+    async def _front_door_seed(self, image):
+        """Start the app on the seeded image, replay seed_requests, keep what they wrote as the new checkpoint."""
+        from doppel import frontdoor
+        from doppel.dbscan import one_liner
+        files = {"doppel/runner.py": RUNNER.read_bytes(),
+                 "doppel/persona.json": json.dumps([frontdoor.seed_persona(self.spec)]).encode()}
+        with self.tl.span("build", "seed through the app (seed_requests)", kind="checkpoint"):
+            out = await image.run(shell=persona_command(self.spec), files=files, disposable=False,
+                                  timeout=PERSONA_TIMEOUT, truncate_output_at=OUTPUT_LIMIT)
+        self._count(out)
+        text = (out.stdout or "").strip()
+        try:
+            recording = json.loads(text.splitlines()[-1])[0] if text else None
+        except (ValueError, IndexError, KeyError):
+            recording = None
+        if out.exit_code != 0 or not isinstance(recording, dict):
+            raise RuntimeError("seed_requests failed: the app did not start for them:\n"
+                               + failure_text(out.stdout, out.stderr))
+        parts = (out.stderr or "").split(APP_LOG_MARKER)
+        recording = attach_app_log(recording, parts[1] if len(parts) >= 3 else "")
+        problem = frontdoor.seed_problem(recording)
+        if problem:
+            raise RuntimeError(problem)
+        scan = await out.run(shell=f"cd {APP} && {one_liner()} || true", disposable=True, timeout=120)
+        self._count(scan)
+        self.seed_log = (self.seed_log + "\n" + frontdoor.summary(recording) + "\n"
+                         + (scan.stdout or "") + (scan.stderr or ""))[-4000:]
+        self.log(f"[twin] {frontdoor.summary(recording)}")
+        return out
+
     def _count(self, image) -> None:
         self.runs += 1
         try:
@@ -105,6 +135,8 @@ class NebiusTwin:
             img = await self._step(img, f"{s.exports()}{s.seed}; rc=$?; {one_liner()} || true; exit $rc", "seed",
                                    shown=s.seed)
             self.seed_log = ((img.stdout or "") + (img.stderr or ""))[-4000:]
+        if s.seed_steps:
+            img = await self._front_door_seed(img)
         seeded = img
         self.log(f"[twin] seeded checkpoint {seeded.uuid}")
 

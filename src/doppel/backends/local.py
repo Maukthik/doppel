@@ -183,7 +183,20 @@ def run_twin(base_dir: str | Path, head_dir: str | Path, spec: TwinSpec, persona
             shutil.copytree(base_dir, seeded, ignore=SKIP)
         with tl.span("build", "seed data (once)", kind="checkpoint"):
             seed_log = _run(spec.seed, seeded, "seed", spec.env)
-        if spec.seed:
+        if spec.seed_steps:
+            from doppel import frontdoor
+            with tl.span("build", "seed through the app (seed_requests)", kind="checkpoint"):
+                try:
+                    recording = _serve_and_replay(seeded, spec, [frontdoor.seed_persona(spec)])[0]
+                except RuntimeError as e:
+                    raise RuntimeError(f"seed_requests failed: the app did not start for them:\n{e}") from None
+                finally:
+                    (seeded / ".doppel-app.log").unlink(missing_ok=True)
+            problem = frontdoor.seed_problem(recording)
+            if problem:
+                raise RuntimeError(problem)
+            seed_log += "\n" + frontdoor.summary(recording) + "\n"
+        if spec.seed or spec.seed_steps:
             from doppel.dbscan import scan
             here = os.getcwd()
             try:

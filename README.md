@@ -154,14 +154,27 @@ Let Doppel write it (needs `NEBIUS_API_KEY` and `NEBIUS_PROJECT_ID`):
 
 ```bash
 cd your-app
-doppel init            # drafts doppel.toml + doppel_seed.py, boots them in a sandbox, fixes what breaks
+doppel init            # writes doppel.toml (+ doppel_seed.json / doppel_seed.py), proven in a sandbox
+doppel probe           # just print what Doppel learns about the app: routes, database, login, models
 ```
 
-`doppel init` reads how the repo says it runs (manifests, CI workflows, Dockerfile, README), asks
-Nemotron 3 Ultra for a twin spec and a seed script, and boots them in the twin with a smoke user.
-A failure goes back to the model (up to `--tries 3`). It then replays invented users against the
-**same** code twice: any JSON key that differs between two identical runs is noise and is added to
-`[diff] ignore`. Review both files before committing. Use `--backend local` to try it on your machine.
+`doppel init` sets an app up in three layers, each catching what the one before missed:
+
+1. **Ask the app, don't guess.** It installs the app in a sandbox and imports it the way its framework does
+   (Flask, Django, FastAPI): the real routes and what each view reads, where the database lives, which view
+   is the login, the models' required fields, the app's own commands, and any import error.
+2. **Seed through the front door.** The preferred starting data is `doppel_seed.json`: ordinary HTTP steps
+   (sign up, log in, create records) sent once to the running app before the checkpoint, so the app itself
+   hashes passwords, fills required fields and picks its database. A seed script remains for data no route
+   can create.
+3. **An agent when the drafts fail.** Nemotron 3 Ultra drafts the files from those facts (`--tries 2`); if
+   they fail, a setup agent takes over in a live sandbox with `shell`, `read`, `serve` (start the app and
+   send it requests) and `try` (the full twin check), up to 20 steps, like a developer setting up an
+   unfamiliar repo. `--no-agent` stops after the drafts.
+
+Finally it replays invented users against the **same** code twice: any JSON key that differs between two
+identical runs is noise and is added to `[diff] ignore`. Review the files before committing. Use
+`--backend local` to try it on your machine.
 
 - `doppel init --trace` saves every attempt to `.doppel-trace/`: the prompt, the reply, each check, what the
   twin did, the database scan, and why init kept or dropped the attempt.

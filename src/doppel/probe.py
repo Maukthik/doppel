@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -99,7 +100,7 @@ def facts_text(facts: dict) -> str:
     """The facts as a compact brief for the setup model. Empty when the probe learned nothing useful."""
     if not facts or (facts.get("framework") in (None, "unknown") and not facts.get("errors")):
         return ""
-    out = ["(<repo> = the repo root: the folder every command in doppel.toml runs in)",
+    out = ["(paths are relative to the repo root: the folder every command in doppel.toml runs in)",
            f"Framework: {facts.get('framework')} {facts.get('version', '')}".rstrip()
            + (f", app {facts['app']}" if facts.get("app") else "")
            + f" (probed on Python {facts.get('python', '?')})"]
@@ -145,7 +146,15 @@ def facts_text(facts: dict) -> str:
         out.append(f"Could not {e['where']}: {e['error']}\n{e.get('traceback', '')[-1200:]}")
     if facts.get("install_log"):
         out.append("The install command failed:\n" + facts["install_log"])
-    return "\n".join(out)
+    return relative_paths("\n".join(out))
+
+
+def relative_paths(text: str) -> str:
+    """<repo>/db.sqlite3 -> db.sqlite3. The probe marks the repo root as <repo>; a model copies what it is
+    shown into shell commands, where `<repo` means "read from a file named repo". Relative paths are what
+    the commands need anyway: they all run in the repo root."""
+    text = text.replace("<repo>/", "")
+    return re.sub(r"<repo>(?=[\s\"',)}\]]|$)", ".", text)
 
 
 def main(argv=None) -> int:

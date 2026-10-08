@@ -30,7 +30,8 @@ from doppel.personas import nemotron_chat, parse_json
 from doppel.spec import TwinSpec
 
 SPEC_FILE, SEED_FILE = "doppel.toml", "doppel_seed.py"
-ALLOWED_FILES = {SPEC_FILE, SEED_FILE}
+SEED_REQUESTS_FILE = "doppel_seed.json"
+ALLOWED_FILES = {SPEC_FILE, SEED_FILE, SEED_REQUESTS_FILE}
 HINT_NAMES = ("pyproject.toml", "setup.py", "setup.cfg", "Pipfile", "Procfile", "Dockerfile", "Makefile",
               "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml", "manage.py",
               ".env.example", ".env.sample", "app.json", "package.json")
@@ -52,7 +53,10 @@ image = "python:3.12-slim"   # Docker Hub image to start from; pick the Python v
 install = "..."              # install dependencies, run once in the repo root (shell is available)
 start = "..."                # start the server in the FOREGROUND, listening on 0.0.0.0 and the port in $PORT
 ready = "/..."               # a GET path that answers < 500 once the app is up (a health route, docs, or a list)
-seed = "..."                 # run once: create the database schema, then `python doppel_seed.py`
+seed = "..."                 # run once: create the database schema (the app's own command when it has one),
+                             # then `python doppel_seed.py` if you write a seed script
+seed_requests = "doppel_seed.json"  # PREFERRED when the app has routes that create users and records: run once
+                             # against the started app, after `seed`. Omit the line if you only use the script
 migrate = "..."              # run in each copy after the code changes: apply schema migrations ("" if none)
 env = {{ NAME = "value" }}     # env vars for EVERY command above (install, seed, migrate, start), set once
 [personas]
@@ -70,7 +74,24 @@ ignore = [...]               # JSON keys that change on every run: timestamps, f
 slow_ratio = 3.0
 slow_min_ms = 400
 
-2) doppel_seed.py: a standalone Python script, run from the repo root after the schema exists. It
+2) Starting data, in one of two ways (or both):
+
+2a) doppel_seed.json, PREFERRED whenever the app has routes that create what is needed (a sign-up or
+register route for users, routes that create the domain records): a JSON list of HTTP steps that Doppel
+sends once to the running app, in order, keeping cookies between them like one browser:
+[{{"method": "POST", "path": "/auth/register", "form": {{"username": "alice", "password": "doppel-pass"}}}},
+ {{"method": "POST", "path": "/auth/login", "form": {{"username": "alice", "password": "doppel-pass"}}}},
+ {{"method": "POST", "path": "/posts", "json": {{"title": "Hello", "body": "..."}}}}]
+Each step takes "form" (an HTML form; hidden fields such as CSRF tokens are filled in automatically from
+the page, so GET the form's page first) or "json" (a JSON body), "headers", "auth" ([user, password] for
+HTTP Basic) and "save" ({{"token": "access_token"}} keeps a value from the reply for later steps as {{token}}).
+Every step must succeed (an answer below 400). The app then hashes the passwords, fills its own required
+fields and writes to its own database, so none of that can go wrong. Use the facts' routes and what each
+view reads. Create 2-3 users (password "doppel-pass") and 5-15 records, logging in as each user before
+creating their records.
+
+2b) doppel_seed.py, only for data no route can create (accounts when sign-up is closed, an admin user,
+stored API keys): a standalone Python script, run from the repo root after the schema exists. It
 creates realistic starting data using the app's own models or functions: 2-3 users with known
 usernames and passwords (use the password "doppel-pass"), and 5-15 domain records (posts, orders,
 bookmarks...). If the API authenticates with stored API tokens, create one per user with a FIXED
@@ -112,8 +133,9 @@ Hard rules:
   before anything opens them; they are usually git-ignored, so the checkout does not have them.
 - Read settings files carefully: use real setting names and module paths from the code below.
 
-Return ONLY JSON:
-{{"files": [{{"path": "doppel.toml", "content": "..."}}, {{"path": "doppel_seed.py", "content": "..."}}],
+Return ONLY JSON (include doppel_seed.json and/or doppel_seed.py, whichever you use):
+{{"files": [{{"path": "doppel.toml", "content": "..."}}, {{"path": "doppel_seed.json", "content": "[...]"}},
+            {{"path": "doppel_seed.py", "content": "..."}}],
   "notes": "one or two sentences: what you assumed"}}
 {feedback}
 {facts}{install_hint}{versions}Repository setup hints:
@@ -461,8 +483,25 @@ def seed_passwords(seed: str) -> set[str]:
     return {p for p in found if p}
 
 
-def check_login_matches_seed(toml_text: str, seed: str) -> list[str]:
-    """The password the login sends must be one the seed set."""
+def front_door_passwords(seed_json: str) -> set[str]:
+    """Passwords the front-door seed sends when it signs users up (fields named like "password")."""
+    try:
+        data = json.loads(seed_json or "[]")
+    except ValueError:
+        return set()
+    steps = data.get("steps", []) if isinstance(data, dict) else data
+    out = set()
+    for step in steps if isinstance(steps, list) else []:
+        body = (step.get("form") or step.get("json")) if isinstance(step, dict) else None
+        if isinstance(body, dict):
+            out |= {str(v) for k, v in body.items() if "pass" in str(k).lower() and "confirm" not in str(k).lower()}
+        if isinstance(step, dict) and isinstance(step.get("auth"), list) and len(step["auth"]) == 2:
+            out.add(str(step["auth"][1]))
+    return out
+
+
+def check_login_matches_seed(toml_text: str, seed: str, seed_json: str = "") -> list[str]:
+    """The password the login sends must be one the seed set (by script or through the front door)."""
     try:
         login = tomllib.loads(toml_text).get("personas", {}).get("login") or {}
     except tomllib.TOMLDecodeError:
@@ -470,7 +509,7 @@ def check_login_matches_seed(toml_text: str, seed: str) -> list[str]:
     body = login.get("json") if isinstance(login.get("json"), dict) else login.get("form") or {}
     sent = login["auth"][1] if isinstance(login.get("auth"), list) and len(login["auth"]) == 2 else \
         next((v for k, v in body.items() if "pass" in k.lower()), None) if isinstance(body, dict) else None
-    set_by_seed = seed_passwords(seed)
+    set_by_seed = seed_passwords(seed) | front_door_passwords(seed_json)
     if sent and set_by_seed and sent not in set_by_seed:
         return [f"the login sends password {sent!r}, but the seed sets {sorted(set_by_seed)}; use the same one"]
     return []
@@ -560,6 +599,11 @@ def check_spec(repo: str | Path, toml_text: str) -> list[str]:
     for key in ("ready",):
         if app.get(key) and not str(app[key]).startswith("/"):
             problems.append(f"[app] {key} must be a path starting with /, got {app[key]!r}")
+    if app.get("seed_requests") and str(app["seed_requests"]) != SEED_REQUESTS_FILE:
+        problems.append(f"[app] seed_requests must be \"{SEED_REQUESTS_FILE}\" (the file you return)")
+    if "<repo>" in toml_text:
+        problems.append("doppel.toml contains '<repo>': that is a placeholder, not a path. Every command runs in the "
+                        "repo root, so write paths relative to it (db.sqlite3, instance/app.sqlite)")
     login = data.get("personas", {}).get("login") or {}
     creds = [str(x) for x in (login.get("auth") or [])] + [str(v) for v in (login.get("json") or {}).values()] \
         + [str(v) for v in (login.get("form") or {}).values()]
@@ -1203,7 +1247,7 @@ def probe_brief(repo: Path, backend: str, prober=None, log=lambda m: None) -> st
     fw = facts.get("framework") or "unknown"
     db = facts.get("database") or {}
     log(f"[init] probe: {fw}, {len(facts.get('routes') or [])} routes, {len(facts.get('models') or [])} models"
-        + (f", database {json.dumps(db, default=str)[:120]}" if db else "")
+        + (f", database {probing.relative_paths(json.dumps(db, default=str))[:120]}" if db else "")
         + (f", {len(facts['errors'])} import problem(s)" if facts.get("errors") else "")
         + (f"; {facts['python_mismatch']}" if facts.get("python_mismatch") else ""))
     return probing.facts_text(facts)
@@ -1250,12 +1294,44 @@ class Tracer:
                 f.write(line + "\n")
 
 
+def check_seed_requests(spec_text: str, files: dict) -> list[str]:
+    """doppel_seed.json: present when doppel.toml names it, valid JSON, steps the runner can send."""
+    try:
+        wants = bool(tomllib.loads(spec_text).get("app", {}).get("seed_requests"))
+    except tomllib.TOMLDecodeError:
+        return []
+    text = files.get(SEED_REQUESTS_FILE)
+    if wants and text is None:
+        return [f"doppel.toml sets seed_requests but no {SEED_REQUESTS_FILE} was returned"]
+    if text is None:
+        return []
+    from doppel.spec import load_seed_steps
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / SEED_REQUESTS_FILE).write_text(text, encoding="utf-8")
+        try:
+            steps = load_seed_steps(Path(tmp), SEED_REQUESTS_FILE)
+        except ValueError as e:
+            return [str(e)]
+    problems = []
+    for i, step in enumerate(steps, 1):
+        if str(step.get("method", "GET")).upper() not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+            problems.append(f"{SEED_REQUESTS_FILE} step {i}: unknown method {step.get('method')!r}")
+        if "form" in step and not isinstance(step["form"], dict):
+            problems.append(f"{SEED_REQUESTS_FILE} step {i}: \"form\" must be an object of field -> value")
+    if not wants:
+        problems.append(f"{SEED_REQUESTS_FILE} was returned but doppel.toml has no seed_requests line, so it "
+                        f"would never run: add seed_requests = \"{SEED_REQUESTS_FILE}\" under [app]")
+    return problems
+
+
 def run_checks(repo: Path, files: dict) -> list[tuple[str, list[str]]]:
     """Every pre-boot check by name, with what each found (an empty list means it passed)."""
     spec, seed = files.get(SPEC_FILE, ""), files.get(SEED_FILE, "")
     return [("check_spec: install, paths, login shape", check_spec(repo, spec)),
+            ("check_seed_requests: the front-door seed", check_seed_requests(spec, files)),
             ("check_env: seed and server share settings", check_env(repo, spec, seed)),
-            ("check_login_matches_seed: same password", check_login_matches_seed(spec, seed)),
+            ("check_login_matches_seed: same password",
+             check_login_matches_seed(spec, seed, files.get(SEED_REQUESTS_FILE, ""))),
             ("check_seed: names, fields, commits, hashes", check_seed(repo, seed) if seed else [])]
 
 
@@ -1319,10 +1395,10 @@ def check(repo: str | Path, backend: str = "nebius", calibrate: bool = False, ru
     return {**result, "checks": checked}
 
 
-def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotron_chat, run_twin=None,
+def init(repo: str | Path, backend: str = "nebius", tries: int = 2, chat=nemotron_chat, run_twin=None,
          personas: int = 6, log=lambda msg: print(msg, file=sys.stderr),
          min_coverage: float = MIN_COVERAGE, resume: bool = True, trace: Path | None = None,
-         prober=None) -> dict:
+         prober=None, agent: bool = True, workspace=None) -> dict:
     """Draft, verify, repair, calibrate. Returns the last attempt with "attempts" and "notes" added;
     "files" holds the calibrated files when "ok" is true. Only writes its progress file (STATE_FILE).
 
@@ -1439,7 +1515,43 @@ def init(repo: str | Path, backend: str = "nebius", tries: int = 3, chat=nemotro
                 f"which got past {', '.join(STAGES[:best['stage']])}")
             error, previous = best["error"], best["files"]
         save_state(repo, best, history)
+    if agent and not result.get("ok") and not result.get("infra"):
+        result = hand_to_agent(repo, backend, brief, history, best, result, attempt, chat, run_twin, personas,
+                               min_coverage, log, tracer, workspace)
     return result
+
+
+def hand_to_agent(repo, backend, brief, history, best, result, attempt, chat, run_twin, personas, min_coverage,
+                  log, tracer, workspace) -> dict:
+    """The drafts failed: let the setup agent (doppel.agent) work it out in a live sandbox."""
+    from doppel import agent as setup_agent
+    log("[init] the drafts did not work: handing over to the setup agent, which works in a live sandbox")
+
+    def try_setup(files: dict) -> dict:
+        problems = [p for _, found in run_checks(repo, files) for p in found]
+        if problems:
+            return {"ok": False, "error": "checked before booting (no sandbox used):\n- " + "\n- ".join(problems)}
+        r = try_files(repo, files, backend=backend, run_twin=run_twin, chat=chat, personas=personas,
+                      min_coverage=min_coverage)
+        r.setdefault("files", files)
+        return r
+    try:
+        handed = setup_agent.fix(repo, backend, brief, history, best.get("files"), best.get("error") or
+                                 result.get("error", ""), try_setup, chat, log=log, tracer=tracer, workspace=workspace)
+    except Exception as e:  # noqa: BLE001 - the agent is a second chance; its failure leaves the drafts' result
+        log(f"[init] the setup agent could not run: {type(e).__name__}: {str(e)[:200]}")
+        return {**result, "agent_error": f"{type(e).__name__}: {e}"}
+    handed.update(attempts=attempt, agent=True)
+    handed.setdefault("notes", result.get("notes", ""))
+    if handed.get("ok"):
+        (repo / STATE_FILE).unlink(missing_ok=True)
+        tracer.write_root("6-calibration.txt", calibration_report(handed))
+        tracer.note(f"agent: WORKS after {handed.get('agent_steps')} step(s), {handed['coverage']:.0%} served")
+        log(f"[init] works: {handed['personas']} users replayed, {handed['coverage']:.0%} of requests served, "
+            f"ignoring {len(handed['noise'])} noisy key(s)")
+        return handed
+    tracer.note(f"agent: did not get it working in {handed.get('agent_steps')} step(s)")
+    return {**result, **{k: v for k, v in handed.items() if k != "ok"}, "ok": False}
 
 
 def write(repo: str | Path, files: dict, force: bool = False) -> list[Path]:
@@ -1642,6 +1754,12 @@ def check_seed(repo: str | Path, seed: str) -> list[str]:
     except SyntaxError as e:
         return [f"{SEED_FILE} line {e.lineno}: syntax error: {e.msg}"]
     problems: list[str] = removed_api_uses(repo, tree)
+    if "<repo>" in seed:
+        problems.append(f"{SEED_FILE} contains '<repo>': a placeholder, not a path. The seed runs in the repo root, "
+                        "so use paths relative to it")
+    if "<repo>" in seed:
+        problems.append(f"{SEED_FILE} contains '<repo>': that is a placeholder, not a path. The seed runs in the "
+                        "repo root, so use paths relative to it")
     if re.search(r"\.add(_all)?\(", seed) and re.search(r"session", seed, re.I) \
             and not re.search(r"\.commit\(|\.begin\(|atomic", seed):
         problems.append(f"{SEED_FILE} adds rows to a session but never commits, so nothing is saved and every "
