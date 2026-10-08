@@ -30,6 +30,11 @@ from pathlib import Path
 
 MAX_STEPS, MAX_TRIES = 20, 4
 OUT_CHARS, OLD_OUT_CHARS, KEEP_FULL = 4000, 500, 4
+READ_STREAK_NUDGE = 4      # this many reads in a row: remind it to test something
+ALIASES = {"run": "shell", "bash": "shell", "sh": "shell", "exec": "shell", "command": "shell", "execute": "shell",
+           "cat": "read", "open": "read", "view": "read", "read_file": "read",
+           "request": "serve", "http": "serve", "start": "serve",
+           "test": "try", "check": "try", "verify": "try", "submit": "try"}
 MODEL_ENV = "AGENT_MODEL"
 
 
@@ -188,6 +193,11 @@ Answer every turn with exactly ONE JSON object, nothing else:
 {{"tool": "give_up", "reason": "..."}}
     Only if the app cannot run here at all (it needs a service that cannot be replaced).
 
+How to work: start from the error below. Reproduce it (create the data with shell, then serve the failing
+step) before changing anything, read only the files the evidence points at, and never read the same file
+twice: everything you read stays in front of you. Prefer one experiment over more reading. You have
+{steps} steps in total; make a `try` well before they run out.
+
 The two files follow these rules (written for the first drafts; they hold here too):
 ----------------------------------------------------------------
 {rules}
@@ -218,16 +228,29 @@ def _rules() -> str:
     return text.replace("{{", "{").replace("}}", "}")
 
 
-def _transcript(turns: list[dict]) -> str:
-    if not turns:
-        return ""
-    out = ["\nWhat you did so far in the sandbox (newest last):"]
-    for k, t in enumerate(turns):
-        full = k >= len(turns) - KEEP_FULL
-        result = t["result"] if full else _tail(t["result"], OLD_OUT_CHARS)
-        out.append(f"--- step {k + 1}: {json.dumps(t['action'])[:1500]}\n{result}")
-    out.append("\nYour next action (one JSON object):")
-    return "\n".join(out)
+def _transcript(turns: list[dict], max_steps: int = MAX_STEPS, tries_left: int = MAX_TRIES) -> str:
+    out = []
+    if turns:
+        out.append("\nWhat you did so far in the sandbox (newest last):")
+        for k, t in enumerate(turns):
+            # files read stay in full (forgetting them made the agent read the same file again and again);
+            # command and server output keeps only its end once it is old
+            full = t.get("tool") == "read" or k >= len(turns) - KEEP_FULL
+            result = t["result"] if full else _tail(t["result"], OLD_OUT_CHARS)
+            out.append(f"--- step {k + 1}: {json.dumps(t['action'])[:1500]}\n{result}")
+    left = max_steps - len(turns)
+    status = f"\nStep {len(turns) + 1} of {max_steps}; try calls left: {tries_left}."
+    streak = 0
+    for t in reversed(turns):
+        if t.get("tool") != "read":
+            break
+        streak += 1
+    if streak >= READ_STREAK_NUDGE:
+        status += (f" You have read {streak} files in a row: stop reading and test a hypothesis with shell or "
+                   "serve, or make a try.")
+    if left <= 3 and tries_left > 0:
+        status += " You are almost out of steps: make a try NOW with your best files."
+    return "\n".join(out) + status + "\nYour next action (one JSON object):"
 
 
 def _show_recording(rec: dict) -> str:
@@ -262,7 +285,7 @@ def fix(repo: Path, backend: str, brief: str, history: list[str], files: dict | 
     log("[agent] opening a live sandbox for the setup agent" + (f" (install: {install[:80]})" if install else ""))
     ws = workspace or open_workspace(repo, backend, install)
     base = PROMPT.format(
-        tries=max_tries, rules=_rules(),
+        tries=max_tries, steps=max_steps, rules=_rules(),
         facts=("Facts from the running app (Doppel imported it the way its framework does; these are true):\n"
                + brief + "\n\n") if brief else "",
         install=getattr(ws, "install_log", install or "(your current environment)"),
@@ -273,15 +296,24 @@ def fix(repo: Path, backend: str, brief: str, history: list[str], files: dict | 
     tries = 0
     result = {"ok": False, "error": error or "the agent made no try"}
     try:
+        read_before: dict[str, int] = {}
         for step in range(1, max_steps + 1):
-            text, _, _ = chat(model, base + _transcript(turns), temperature=0.3)
+            text, _, _ = chat(model, base + _transcript(turns, max_steps, max_tries - tries), temperature=0.3)
             action = parse_json(text) or {}
-            tool = str(action.get("tool", ""))
+            tool = str(action.get("tool", "")).strip().lower()
+            tool = ALIASES.get(tool, tool)
+            if tool == "shell" and not action.get("command"):
+                action["command"] = action.get("cmd") or action.get("args") or ""
             try:
-                if tool == "shell":
+                if tool == "read" and str(action.get("path", ".")).strip("./") in read_before:
+                    first = read_before[str(action.get("path", ".")).strip("./")]
+                    out = (f"You already read {action.get('path')} at step {first}; it is unchanged and still shown "
+                           "above. Use what it says: test with shell or serve, or make a try.")
+                elif tool == "shell":
                     out = ws.shell(str(action.get("command", "")))
                 elif tool == "read":
                     out = _read(repo, str(action.get("path", ".")))
+                    read_before[str(action.get("path", ".")).strip("./")] = step
                 elif tool == "serve":
                     steps = action.get("steps") if isinstance(action.get("steps"), list) else []
                     out = _show_recording(ws.serve(str(action.get("start", "")), str(action.get("ready", "/")),
@@ -302,13 +334,13 @@ def fix(repo: Path, backend: str, brief: str, history: list[str], files: dict | 
                             return result
                         out = "FAILED:\n" + _tail(result.get("error", ""), 6000)
                         if tries >= max_tries:
-                            turns.append({"action": action, "result": out})
+                            turns.append({"action": action, "result": out, "tool": tool})
                             log("[agent] out of tries")
                             break
                 elif tool == "give_up":
                     log(f"[agent] gave up: {str(action.get('reason', ''))[:200]}")
                     result = {**result, "ok": False, "agent_gave_up": str(action.get("reason", ""))}
-                    turns.append({"action": action, "result": "(stopped)"})
+                    turns.append({"action": action, "result": "(stopped)", "tool": tool})
                     break
                 else:
                     out = ('Reply with exactly one JSON object with a "tool" of shell, read, serve, try or give_up. '
@@ -317,7 +349,7 @@ def fix(repo: Path, backend: str, brief: str, history: list[str], files: dict | 
                 out = f"the tool failed: {type(e).__name__}: {_tail(str(e), 3000)}"
             if tool != "try":
                 log(f"[agent] step {step}: {tool or '?'} {_describe(action)}")
-            turns.append({"action": action, "result": out})
+            turns.append({"action": action, "result": out, "tool": tool})
         result.update(agent_steps=len(turns), agent_tries=tries)
         return result
     finally:

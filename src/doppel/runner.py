@@ -220,7 +220,8 @@ def csrf_headers(jar: http.cookiejar.CookieJar | None, method: str, headers: dic
 
 
 def call(base_url: str, method: str, path: str, body, timeout: float, headers: dict | None = None,
-         form=None, opener=None, jar=None, forms_seen: dict | None = None):
+         form=None, opener=None, jar=None, forms_seen: dict | None = None, info: dict | None = None):
+    """One request. `info`, when given, receives "url": where the answer finally came from (after redirects)."""
     if form is not None:
         form = with_hidden(forms_seen, path, form)
         data = urllib.parse.urlencode(form, doseq=True).encode()
@@ -239,10 +240,14 @@ def call(base_url: str, method: str, path: str, body, timeout: float, headers: d
     try:
         with (opener.open if opener else urllib.request.urlopen)(req, timeout=timeout) as resp:
             status, raw, ctype = resp.status, resp.read(), resp.headers.get("Content-Type", "")
+            final = resp.geturl()
     except urllib.error.HTTPError as e:
         status, raw, ctype = e.code, e.read(), (e.headers.get("Content-Type", "") if e.headers else "")
+        final = e.geturl() or url
     except Exception as e:  # connection refused, timeout, reset: the app is broken
-        status, raw, ctype = 0, f"{type(e).__name__}: {e}".encode(), ""
+        status, raw, ctype, final = 0, f"{type(e).__name__}: {e}".encode(), "", url
+    if info is not None:
+        info["url"] = final
     ms = (time.perf_counter() - t0) * 1000
     try:
         payload = json.loads(raw) if raw else None
@@ -311,19 +316,33 @@ def replay(base_url: str, personas: list[dict], timeout: float = 10.0) -> list[d
             path = str(render(step.get("path", "/"), variables))
             body = render(step["json"], variables) if "json" in step else None
             form = render(step["form"], variables) if isinstance(step.get("form"), dict) else None
+            info: dict = {}
             status, payload, ms = call(base_url, method, path, body, timeout,
                                        build_headers(persona, step, variables), form=form, opener=opener, jar=jar,
-                                       forms_seen=forms_seen)
+                                       forms_seen=forms_seen, info=info)
             for var, dotted in (step.get("save") or {}).items():
                 value = extract(payload, dotted)
                 if value is not None:
                     variables[var] = value
             if 200 <= status < 300:
                 auto_capture(payload, wanted - saved, variables, path)
-            steps.append({"i": i, "request": f"{method} {path}", "sent": body if form is None else form,
-                          "status": status, "body": payload, "ms": ms})
+            step_out = {"i": i, "request": f"{method} {path}", "sent": body if form is None else form,
+                        "status": status, "body": payload, "ms": ms}
+            landed = landed_on(info.get("url", ""), path)
+            if landed:
+                step_out["redirected_to"] = landed
+            steps.append(step_out)
         recordings.append({"persona": persona.get("name", "?"), "steps": steps})
     return recordings
+
+
+def landed_on(final_url: str, path: str) -> str:
+    """The path a redirect ended on ("/accounts/profile/"), or "" when the answer came from `path` itself."""
+    if not final_url:
+        return ""
+    end = urllib.parse.urlsplit(final_url)
+    landed = end.path + (f"?{end.query}" if end.query else "")
+    return "" if end.path == urllib.parse.urlsplit(path).path else landed
 
 
 def wait_ready(base_url: str, path: str = "/", timeout: float = 30.0) -> bool:

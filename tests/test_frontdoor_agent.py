@@ -277,3 +277,35 @@ def test_no_app_outlives_its_run_even_behind_a_launcher_or_shell(tmp_path):
         time.sleep(0.2)
     assert not _alive(pid), "the app kept running after its run"
     (app / ".doppel-app.log").unlink()   # nothing holds the log any more
+
+
+def test_the_agent_keeps_what_it_read_refuses_rereads_and_is_pushed_to_act(tmp_path):
+    app = shop_without_spec(tmp_path)
+    broken = SHOP_SPEC.replace('start = "python app.py"', 'start = "python server.py"')
+    reads = [{"tool": "read", "path": p} for p in ("app.py", "seed.py", "app.py", "PR.md", "app.py")]
+    actions = reads + [{"tool": "run", "cmd": f'{PY} -c "print(42)"'},       # "run" and "cmd": understood
+                       {"tool": "try", "files": {"doppel.toml": SHOP_SPEC}}]
+    model = ScriptedModel([reply(broken)], agent=actions)
+    result = bootstrap.init(app, backend="local", tries=1, chat=model, log=lambda m: None)
+    assert result["ok"] and result["agent_steps"] == 7
+    p = model.agent_prompts
+    assert "Step 1 of 20; try calls left: 4." in p[0]
+    assert "You already read app.py at step 1" in p[3]                    # no second copy of the file
+    assert p[6].count("def ") >= p[1].count("def ")                         # app.py is still there, in full
+    assert "stop reading and test" in p[5]                                  # 4 reads in a row: a nudge
+    assert "exit 0" in p[6] and "42" in p[6]                                # the aliased shell ran
+
+
+def test_near_the_end_the_agent_is_told_to_try():
+    text = agent._transcript([{"action": {"tool": "read", "path": "a"}, "result": "x", "tool": "read"}] * 18,
+                             max_steps=20, tries_left=4)
+    assert "make a try NOW" in text
+
+
+def test_a_post_that_was_accepted_and_redirected_counts_as_served():
+    from doppel.rehearsal import coverage
+    rec = {"persona": "p", "steps": [
+        {"request": "POST /api-auth/login/", "status": 404, "redirected_to": "/accounts/profile/"},   # logged in
+        {"request": "GET /missing/", "status": 404, "redirected_to": "/elsewhere/"},                 # a real miss
+        {"request": "POST /snippets/", "status": 201}]}
+    assert coverage([rec])["served"] == 2

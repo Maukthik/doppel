@@ -54,16 +54,28 @@ def coverage(recordings: list[dict]) -> dict:
     """How much of the app the personas actually reached in one world."""
     steps = [s for r in recordings for s in r["steps"]]
     stuck = [r["persona"] for r in recordings if is_stuck(r)]
-    return {"requests": len(steps), "served": sum(_ok(s["status"]) for s in steps),
-            "blocked": sum(s["status"] in BLOCKED for s in steps), "stuck_personas": stuck,
+    return {"requests": len(steps), "served": sum(served(s) for s in steps),
+            "blocked": sum(s["status"] in BLOCKED and not accepted_then_redirected(s) for s in steps),
+            "stuck_personas": stuck,
             "personas": len(recordings)}
+
+
+def accepted_then_redirected(step: dict) -> bool:
+    """A form post the app accepted and redirected (POST-redirect-GET), even if the page it redirected to
+    is missing: Django's default LOGIN_REDIRECT_URL /accounts/profile/ is a 404 in most apps."""
+    return str(step.get("request", "")).startswith(("POST ", "PUT ", "PATCH ", "DELETE ")) \
+        and bool(step.get("redirected_to")) and step.get("status", 0) not in (0,) and step.get("status", 0) < 500
+
+
+def served(step: dict) -> bool:
+    return _ok(step["status"]) or accepted_then_redirected(step)
 
 
 def is_stuck(recording: dict) -> bool:
     """Most of its requests were refused or not found: the persona can't be testing anything."""
     steps = recording["steps"]
-    blocked = sum(s["status"] in BLOCKED for s in steps)
-    return bool(steps) and blocked * 2 > len(steps) and not any(_ok(s["status"]) for s in steps[1:])
+    blocked = sum(s["status"] in BLOCKED and not accepted_then_redirected(s) for s in steps)
+    return bool(steps) and blocked * 2 > len(steps) and not any(served(s) for s in steps[1:])
 
 
 def unfilled(persona: dict) -> list[str]:

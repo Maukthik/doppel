@@ -1055,7 +1055,11 @@ def smoke_problem(recording: dict, spec: TwinSpec, repo: Path | None = None) -> 
     n = login_step_count(spec.login) if spec.login else 0
     if spec.login and len(steps) >= n:
         s = steps[n - 1]
-        if s["status"] >= 400:
+        # a form login that redirected away from its form worked, whatever the landing page answers: Django
+        # sends a logged-in user to LOGIN_REDIRECT_URL (default /accounts/profile/), which many apps never define
+        moved_on = bool(spec.login.get("form")) and bool(s.get("redirected_to")) \
+            and not still_on_login_form(s.get("body"))
+        if s["status"] >= 400 and not moved_on:
             advice = login_advice(spec, repo, str(s.get("body"))) if s["status"] in (401, 403) else ""
             if s["status"] == 400 and not spec.login.get("form") and repo and \
                     route_reads_form(repo, str(spec.login.get("path", ""))):

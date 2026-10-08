@@ -183,3 +183,44 @@ def test_library_frames_in_a_traceback_are_not_mistaken_for_app_files(tmp_path):
     assert bootstrap._repo_file(tmp_path, "/usr/lib/python3.12/socketserver.py") is None
     assert bootstrap._repo_file(tmp_path, "/app/app.py") == tmp_path / "app.py"
     assert "app.py (around line 1)" in bootstrap.related_source(tmp_path, error)
+
+
+def test_a_form_login_that_redirects_to_a_missing_page_still_counts_as_logged_in(tmp_path):
+    # Django sends a logged-in user to LOGIN_REDIRECT_URL (default /accounts/profile/), which many apps never
+    # define: the login worked, the landing page is a 404. The DRF tutorial failed init exactly like this.
+    app = session_app(tmp_path)
+    (app / "app.py").write_text(APP.replace('("Location", "/")', '("Location", "/accounts/profile/")'),
+                                encoding="utf-8")
+    model = ScriptedModel([reply(FORM_LOGIN, SEED)], personas=USERS)
+    result = bootstrap.init(app, backend="local", tries=1, chat=model, log=lambda m: None, agent=False)
+    assert result["ok"] and result["attempts"] == 1
+
+
+def test_the_runner_records_where_a_redirect_landed(tmp_path):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from doppel import runner
+
+    class Moves(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if self.path == "/old":
+                self.send_response(302)
+                self.send_header("Location", "/new?x=1")
+                self.end_headers()
+                return
+            self.send_response(404 if self.path.startswith("/new") else 200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Moves)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        steps = runner.replay(f"http://127.0.0.1:{server.server_address[1]}",
+                              [{"name": "p", "steps": [{"path": "/old"}, {"path": "/here"}]}])[0]["steps"]
+    finally:
+        server.shutdown()
+    assert steps[0]["status"] == 404 and steps[0]["redirected_to"] == "/new?x=1"
+    assert "redirected_to" not in steps[1]
