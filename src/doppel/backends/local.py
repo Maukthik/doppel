@@ -14,10 +14,12 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from doppel import runner
@@ -47,6 +49,37 @@ def _popen_args(command: str) -> dict:
     chained = any(op in command for op in ("&&", "||", ";"))
     # a single command (e.g. "gunicorn -b :$PORT app:app") replaces the shell, so terminate() reaches it
     return {"args": command if os.name == "nt" or chained else f"exec {command}", "shell": True}
+
+
+def _stop(app: subprocess.Popen) -> None:
+    """Stop the app and everything it started. On Windows a venv's python.exe is a launcher that runs the
+    real interpreter as a child, and `cmd /c` runs commands as children too: terminate() would stop only
+    the parent and leave the app running, still holding its port and log file. taskkill /T stops the tree."""
+    if app.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(app.pid)], capture_output=True)
+    else:
+        try:  # the app runs in its own process group: a chained start command's children go too
+            os.killpg(app.pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            app.terminate()
+    try:
+        app.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        app.kill()
+        app.wait(timeout=5)
+
+
+def _remove_quietly(path: Path) -> None:
+    """Best effort: a leftover log in the seeded copy is harmless, so a file Windows still holds never fails
+    a run."""
+    for _ in range(10):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            time.sleep(0.2)
 
 
 def _free_port() -> int:
@@ -102,24 +135,19 @@ def _serve_and_replay(world: Path, spec: TwinSpec, personas: list[dict], watch: 
     env = {**os.environ, **spec.env, "PORT": str(port), "PYTHONDONTWRITEBYTECODE": "1", **_trace_env(world, watch)}
     log_path = world / ".doppel-app.log"
     log_file = open(log_path, "w", encoding="utf-8", errors="replace")  # noqa: SIM115 - closed below
+    group = {"start_new_session": True} if os.name != "nt" else {}   # so _stop reaches its children too
     app = subprocess.Popen(**_popen_args(spec.start), cwd=world, env=env,
-                           stdout=log_file, stderr=subprocess.STDOUT, text=True)
+                           stdout=log_file, stderr=subprocess.STDOUT, text=True, **group)
     base_url = f"http://127.0.0.1:{port}"
     try:
         if not _wait_ready(app, base_url, spec.ready, timeout=30):
-            app.kill()
-            app.wait(timeout=5)
+            _stop(app)
             log_file.flush()
             raise RuntimeError(f"{world}: app never became ready at {base_url}{spec.ready}\n"
                                f"{log_path.read_text('utf-8', errors='replace')[-3000:]}")
         recordings = runner.replay(base_url, personas)
     finally:
-        if app.poll() is None:
-            app.terminate()
-            try:
-                app.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                app.kill()
+        _stop(app)
         log_file.close()
     log_text = log_path.read_text("utf-8", errors="replace") if log_path.exists() else ""
     recordings = [runner.attach_app_log(r, log_text) for r in recordings]
@@ -191,7 +219,7 @@ def run_twin(base_dir: str | Path, head_dir: str | Path, spec: TwinSpec, persona
                 except RuntimeError as e:
                     raise RuntimeError(f"seed_requests failed: the app did not start for them:\n{e}") from None
                 finally:
-                    (seeded / ".doppel-app.log").unlink(missing_ok=True)
+                    _remove_quietly(seeded / ".doppel-app.log")
             problem = frontdoor.seed_problem(recording)
             if problem:
                 raise RuntimeError(problem)

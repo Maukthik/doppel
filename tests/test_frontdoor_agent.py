@@ -242,3 +242,38 @@ def test_a_try_that_fails_the_preboot_checks_costs_no_sandbox(tmp_path):
                                                   {"tool": "try", "files": {"doppel.toml": SHOP_SPEC}}])
     result = bootstrap.init(app, backend="local", tries=1, chat=model, log=lambda m: None)
     assert result["ok"] and "checked before booting" in model.agent_prompts[1]
+
+
+def _alive(pid: int) -> bool:
+    import os
+    import subprocess
+    if os.name == "nt":
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True).stdout
+        return str(pid) in out
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def test_no_app_outlives_its_run_even_behind_a_launcher_or_shell(tmp_path):
+    # the app is started by a parent (like a Windows venv's python.exe launcher, or `cmd /c` / `sh -c` for
+    # a chained command): stopping only the parent would leave the app running, holding its port and log
+    app = notes_app(tmp_path)
+    launcher = ('import subprocess, sys, os\n'
+                'child = subprocess.Popen([sys.executable, "app.py"])\n'
+                'open("app.pid", "w").write(str(child.pid))\n'
+                'child.wait()\n')
+    (app / "launcher.py").write_text(launcher, encoding="utf-8")
+    spec = TwinSpec(start="python launcher.py", ready="/health")
+    from doppel.backends.local import _serve_and_replay
+    recs = _serve_and_replay(app, spec, [{"name": "r", "steps": [{"method": "GET", "path": "/health"}]}])
+    assert recs[0]["steps"][0]["status"] == 200
+    pid = int((app / "app.pid").read_text())
+    for _ in range(25):
+        if not _alive(pid):
+            break
+        time.sleep(0.2)
+    assert not _alive(pid), "the app kept running after its run"
+    (app / ".doppel-app.log").unlink()   # nothing holds the log any more
