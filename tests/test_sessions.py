@@ -101,3 +101,16 @@ def test_validate_keeps_form_steps():
                                                  "form": {"username": "alice", "n": 3, "tags": ["a"]}}]}]}
     step = validate(raw)[0]["steps"][0]
     assert step == {"method": "POST", "path": "/login", "form": {"username": "alice", "n": 3, "tags": '["a"]'}}
+
+
+def test_the_apps_own_absolute_urls_are_recorded_as_paths():
+    from doppel.runner import own_origin_relative
+    body = {"url": "http://127.0.0.1:5123/snippets/1/", "next": "http://localhost:5123/snippets/?page=2",
+            "elsewhere": "https://example.com/x", "results": [{"owner": "http://127.0.0.1:5123/users/2/"}]}
+    assert own_origin_relative(body, "http://127.0.0.1:5123") == {
+        "url": "/snippets/1/", "next": "/snippets/?page=2", "elsewhere": "https://example.com/x",
+        "results": [{"owner": "/users/2/"}]}
+    # two worlds on different ports record the same body
+    a = own_origin_relative({"u": "http://127.0.0.1:1111/x/"}, "http://127.0.0.1:1111")
+    b = own_origin_relative({"u": "http://127.0.0.1:2222/x/"}, "http://127.0.0.1:2222")
+    assert a == b == {"u": "/x/"}

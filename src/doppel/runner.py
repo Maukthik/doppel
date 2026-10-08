@@ -155,6 +155,28 @@ def _parse(text: str) -> _Page:
     return page
 
 
+def own_origin_relative(value, base_url: str):
+    """The app's own absolute URLs as paths ("http://127.0.0.1:51234/snippets/1/" -> "/snippets/1/"):
+    hyperlinked APIs (DRF, HATEOAS, pagination links, Location) build them from the request's host and
+    port, which differ between worlds and runs, so they are noise, never behavior."""
+    parts = urllib.parse.urlsplit(base_url)
+    origins = {f"{parts.scheme}://{parts.netloc}"}
+    if parts.hostname in ("127.0.0.1", "localhost"):
+        origins |= {f"{parts.scheme}://{h}:{parts.port}" for h in ("127.0.0.1", "localhost") if parts.port}
+    return _replace_origins(value, sorted(origins, key=len, reverse=True))
+
+
+def _replace_origins(value, origins):
+    if isinstance(value, dict):
+        return {k: _replace_origins(v, origins) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_replace_origins(v, origins) for v in value]
+    if isinstance(value, str) and "://" in value:
+        for o in origins:
+            value = value.replace(o + "/", "/").replace(o, "/")
+    return value
+
+
 def page_view(text: str) -> dict:
     """An HTML page as {"html": {"title", "text": [lines], "forms": [...], "links": [...]}}."""
     page = _parse(text)
@@ -229,6 +251,7 @@ def call(base_url: str, method: str, path: str, body, timeout: float, headers: d
         payload = page_view(text) if is_html(ctype, text) else text[:MAX_TEXT]
         if forms_seen is not None and isinstance(payload, dict):
             remember_hidden(forms_seen, url, text)
+    payload = own_origin_relative(payload, base_url)
     return status, payload, round(ms, 1)
 
 
