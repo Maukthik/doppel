@@ -5,8 +5,9 @@ import json
 
 from doppel.diff import Finding
 
-ICON = {"error": "🔴", "status": "🟠", "body": "🟡", "slow": "🐢"}
-TITLE = {"error": "Errors", "status": "Status changes", "body": "Response changes", "slow": "Slower"}
+ICON = {"error": "🔴", "test": "🧪", "status": "🟠", "body": "🟡", "request": "🔀", "slow": "🐢"}
+TITLE = {"error": "Errors", "test": "Test outcomes changed", "status": "Status changes", "body": "Response changes",
+         "request": "Different requests", "slow": "Slower"}
 SECTION = {"regression": "🚨 Regressions: not mentioned in the PR",
            "needs_human": "❓ Needs a human",
            "intended": "✅ Intended: matches the PR description"}
@@ -18,12 +19,25 @@ def _short(value, n: int = 120) -> str:
     return text.replace("|", "\\|").replace("`", "'")  # keep the Markdown table intact
 
 
+WHO = {"persona": ("Persona", "personas replayed", "step"),
+       "test": ("Test", "of the app's own tests sent", "request")}
+_who = ["persona"]   # set by markdown(); the table helpers read it
+
+
 def _row(f: Finding, why: str | None = None) -> str:
-    cells = [ICON[f.kind], f"{f.persona} (step {f.step})", f"`{f.request}`", f.detail,
+    unit = WHO[_who[0]][2]
+    where = f"{_short_test(f.persona)} ({unit} {f.step})" if _who[0] == "test" else f"{f.persona} ({unit} {f.step})"
+    cells = [ICON[f.kind], where, f"`{f.request}`", f.detail,
              f"`{_short(f.base, 60)}`", f"`{_short(f.head, 60)}`"]
     if why is not None:
         cells.append(why.replace("|", "\\|"))
     return "| " + " | ".join(cells) + " |"
+
+
+def _short_test(test_id: str) -> str:
+    """tests/test_users.py::UserTests::test_get_users -> test_users.py::test_get_users"""
+    parts = test_id.split("::")
+    return f"{parts[0].rsplit('/', 1)[-1]}::{parts[-1]}" if len(parts) > 1 else test_id
 
 
 LOW_COVERAGE = 0.3
@@ -106,9 +120,19 @@ def suspicions_section(suspicions: list[dict] | None) -> str:
 
 
 def markdown(findings: list[Finding], personas: int, steps: int, judged: dict | None = None,
-             coverage: dict | None = None, suspicions: list[dict] | None = None) -> str:
-    extra = suspicions_section(suspicions)
-    body = _markdown(findings, personas, steps, judged, coverage)
+             coverage: dict | None = None, suspicions: list[dict] | None = None, who: str = "persona") -> str:
+    """`who` is "persona" (the HTTP twin's invented users) or "test" (test mode: the app's own tests)."""
+    _who[0] = who
+    try:
+        extra = suspicions_section(suspicions)
+        body = _markdown(findings, personas, steps, judged, coverage)
+    finally:
+        _who[0] = "persona"
+    if who == "test":
+        noun, verb, _ = WHO["test"]
+        body = (body.replace(f"{personas} personas replayed {steps} requests against base and head",
+                             f"{personas} {verb} {steps} requests through the app, on base and on head")
+                .replace("| | Persona |", f"| | {noun} |"))
     return body + ("\n" + extra if extra else "")
 
 

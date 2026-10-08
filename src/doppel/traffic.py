@@ -1,0 +1,642 @@
+"""Test mode: Doppel rides the app's own test suite instead of inventing a setup and users.
+
+The app's tests already know how to build the app, its database and its logged-in users. Doppel runs the
+same test command three times, each world with doppel/traffic_recorder.py loaded:
+
+    A   base code          the known-good behavior
+    A'  base code again    noise: whatever differs between A and A' is non-deterministic (Diffy's
+                           primary/secondary design; Keploy re-sends requests for the same reason)
+    B   head code          the change
+
+and compares every response A's tests received with what the same tests received in B, field by field.
+The tests' assertions catch what someone thought to check; this catches everything else in the same
+responses, plus every test whose outcome changed.
+
+Safeguards (each one a reason a result could otherwise be wrong):
+  S1  the base must run: no test ran, a collection error, or most tests failing on unchanged code stops
+      the check with the test runner's own output (a broken environment never produces a verdict);
+      tests that fail on base are excluded and listed
+  S2  A vs A': flaky tests are excluded, noisy fields ignored, tests whose requests vary are compared
+      on their outcome only
+  S3  fixed order and seeds in every world (PYTHONHASHSEED, no random test order, UTC)
+  S4  tests that ran but sent no request through a recognised test client: said plainly, with the
+      HTTP twin as the alternative
+
+    from doppel.traffic import check
+    result = check(base_dir, head_dir, backend="nebius")      # see check() for the result
+"""
+from __future__ import annotations
+
+import base64
+import configparser
+import difflib
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import tarfile
+import tempfile
+import threading
+import tomllib
+from pathlib import Path
+
+from doppel.diff import Finding, changed_paths, summarize_paths
+
+RECORDER = Path(__file__).with_name("traffic_recorder.py")
+PLUGIN = "doppel_traffic"
+WORLDS = ("A", "A2", "B")
+TEST_TIMEOUT = 1800
+MAX_FAILING_SHARE = 0.5
+SKIP = shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache", ".tox", ".venv", "venv", "node_modules",
+                              ".mypy_cache", ".ruff_cache", "*.pyc")
+IN_PROCESS_ORIGIN = re.compile(r"https?://(?:localhost|testserver|127\.0\.0\.1|example\.com)(?::\d+)?(?=[/?#\"']|$)")
+DEV_REQUIREMENTS = ("requirements-dev.txt", "requirements_dev.txt", "requirements-test.txt", "requirements_test.txt",
+                    "test-requirements.txt", "dev-requirements.txt", "requirements/dev.txt", "requirements/test.txt",
+                    "requirements/testing.txt")
+TEST_LINE = re.compile(r"(?:^|\s|&&|;)((?:python3?\s+-m\s+)?pytest\b[^\n&;|]*|python3?\s+manage\.py\s+test\b[^\n&;|]*|"
+                       r"python3?\s+-m\s+unittest\b[^\n&;|]*)")
+
+
+class NotComparable(RuntimeError):
+    """A safeguard stopped the check: the reason is the message (and never a verdict)."""
+
+
+# ---------------------------------------------------------------- 1. read the repo's own truth
+
+def _clean_test_command(cmd: str) -> str:
+    """The project's test command, minus what would make worlds differ or slow them for nothing:
+    coverage, parallel workers (their split order varies), reports written to files."""
+    parts = cmd.strip().split()
+    out, skip_next = [], False
+    for p in parts:
+        if skip_next:
+            skip_next = False
+            continue
+        if p.startswith(("--cov", "--junitxml", "--html", "--numprocesses", "--dist", "--durations")):
+            continue
+        if p in ("-n", "--maxprocesses"):
+            skip_next = True
+            continue
+        out.append(p)
+    text = " ".join(out)
+    return re.sub(r"^pytest\b", "python -m pytest", text)
+
+
+def _from_tox(repo: Path) -> tuple[str, list[str]]:
+    f = repo / "tox.ini"
+    if not f.exists():
+        return "", []
+    cfg = configparser.ConfigParser(interpolation=None)
+    try:
+        cfg.read(f, encoding="utf-8")
+    except configparser.Error:
+        return "", []
+    sec = "testenv" if cfg.has_section("testenv") else next((s for s in cfg.sections() if s.startswith("testenv")), "")
+    if not sec:
+        return "", []
+    commands = [c.strip() for c in cfg.get(sec, "commands", fallback="").splitlines() if c.strip()]
+    test = next((m.group(1) for c in commands if (m := TEST_LINE.search(" " + c))), "")
+    deps = [d.strip() for d in cfg.get(sec, "deps", fallback="").splitlines() if d.strip()]
+    return test, deps
+
+
+def _from_ci(repo: Path) -> tuple[str, list[str]]:
+    """The test command and pip installs in the repo's GitHub Actions workflows (read as text: no YAML
+    library needed in the sandbox, and multi-line `run: |` blocks are just lines)."""
+    test, installs = "", []
+    for f in sorted((repo / ".github" / "workflows").glob("*.y*ml")):
+        for line in f.read_text("utf-8", errors="replace").splitlines():
+            body = re.sub(r"^\s*(?:-\s*)?(?:run:\s*)?", "", line).strip()
+            if not test and (m := TEST_LINE.search(" " + body)):
+                test = m.group(1)
+            if re.match(r"(?:python3?\s+-m\s+)?pip3?\s+install\b", body) and "tox" not in body:
+                installs.append(body)
+    return test, installs
+
+
+def detect(repo: str | Path) -> dict:
+    """{"test": command, "install": command, "source": where each came from}. The repo's own files win:
+    an explicit [tests] table in doppel.toml, then tox.ini, then CI workflows, then the usual layout."""
+    repo = Path(repo)
+    spec = repo / "doppel.toml"
+    if spec.exists():
+        try:
+            table = tomllib.loads(spec.read_text("utf-8")).get("tests", {})
+        except tomllib.TOMLDecodeError:
+            table = {}
+        if table.get("command"):
+            return {"test": table["command"], "install": table.get("install", _default_install(repo)),
+                    "source": {"test": "doppel.toml [tests]", "install": "doppel.toml [tests]" if table.get("install")
+                               else "requirements files"}}
+    tox_test, tox_deps = _from_tox(repo)
+    ci_test, ci_installs = _from_ci(repo)
+    if tox_test:
+        test, source = tox_test, "tox.ini"
+    elif ci_test and "tox" not in ci_test:
+        test, source = ci_test, "CI workflow"
+    elif (repo / "manage.py").exists() and not _uses_pytest(repo):
+        test, source = "python manage.py test", "manage.py (Django's test runner)"
+    elif _has_tests(repo):
+        test, source = "python -m pytest", "tests found in the repo"
+    else:
+        test, source = "", ""
+    install, isource = _default_install(repo), "requirements files"
+    if tox_deps and source == "tox.ini":
+        install = "pip install --quiet " + " ".join(d if d.startswith("-r") or d.startswith("-e") else f"'{d}'"
+                                                   for d in tox_deps)
+        install = install.replace("-r ", "-r ").strip()
+        isource = "tox.ini deps"
+    elif ci_installs:
+        install, isource = " && ".join(dict.fromkeys(i.replace("pip install", "pip install --quiet", 1)
+                                                     for i in ci_installs)), "CI workflow"
+    if test and "pytest" in test and "pytest" not in install:
+        install = (install + " && " if install else "") + "pip install --quiet pytest"
+    return {"test": _clean_test_command(test) if test else "", "install": install,
+            "source": {"test": source, "install": isource}}
+
+
+def _uses_pytest(repo: Path) -> bool:
+    if (repo / "pytest.ini").exists() or (repo / "conftest.py").exists():
+        return True
+    for name in ("pyproject.toml", "setup.cfg", "tox.ini"):
+        f = repo / name
+        if f.exists() and re.search(r"\[(tool[.:])?pytest", f.read_text("utf-8", "replace")):
+            return True
+    return False
+
+
+def _has_tests(repo: Path) -> bool:
+    return any(p for p in repo.rglob("test*.py") if not {".venv", "venv", "node_modules", ".tox"} & set(p.parts))
+
+
+def _default_install(repo: Path) -> str:
+    parts = []
+    if (repo / "requirements.txt").exists():
+        parts.append("-r requirements.txt")
+    parts += [f"-r {name}" for name in DEV_REQUIREMENTS if (repo / name).exists()]
+    pyproject = repo / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            project = tomllib.loads(pyproject.read_text("utf-8")).get("project", {})
+        except tomllib.TOMLDecodeError:
+            project = {}
+        extras = [e for e in ("test", "tests", "testing", "dev") if e in (project.get("optional-dependencies") or {})]
+        if project and not parts:
+            parts.append(f"-e '.[{','.join(extras)}]'" if extras else "-e .")
+        elif extras:
+            parts.append(f"-e '.[{','.join(extras)}]'")
+    return f"pip install --quiet {' '.join(parts)}" if parts else ""
+
+
+# ---------------------------------------------------------------- 2. the recorder, as files for a world
+
+SITECUSTOMIZE = '''"""Generated by Doppel: load the traffic recorder, then the project's own sitecustomize."""
+import importlib.machinery, importlib.util, os, sys
+_here = os.path.dirname(os.path.abspath(__file__))
+try:
+    import doppel_traffic
+    doppel_traffic.install()
+except Exception:
+    pass
+_others = [p for p in sys.path if os.path.abspath(p or ".") != _here]
+_spec = importlib.machinery.PathFinder.find_spec("sitecustomize", _others)
+if _spec is not None and _spec.loader is not None and os.path.dirname(os.path.abspath(_spec.origin or "")) != _here:
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+'''
+
+
+def hook_files() -> dict[str, bytes]:
+    return {"sitecustomize.py": SITECUSTOMIZE.encode(), f"{PLUGIN}.py": RECORDER.read_bytes()}
+
+
+def world_env(hook_dir: str, out_dir: str, base_env: dict | None = None, sep: str = os.pathsep) -> dict:
+    """S3: the same deterministic environment in every world. `sep` is the PYTHONPATH separator of the
+    machine the tests run on (":" in a Linux sandbox, even when Doppel itself runs on Windows)."""
+    # nothing a parent test run set may leak in: PYTEST_CURRENT_TEST from an outer pytest made the recorder
+    # credit every request to the wrong test and skip unittest outcomes (Django's runner)
+    env = {k: v for k, v in (base_env or {}).items()
+           if not k.startswith(("PYTEST_", "DOPPEL_TRAFFIC", "COV_CORE_")) and k not in ("PYTHONHASHSEED",)}
+    env["PYTHONPATH"] = hook_dir + (sep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env["DOPPEL_TRAFFIC_OUT"] = out_dir
+    env["PYTEST_PLUGINS"] = PLUGIN
+    env["PYTEST_ADDOPTS"] = "-p no:randomly -p no:cacheprovider"
+    env["PYTHONHASHSEED"] = "0"
+    env["TZ"] = "UTC"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return env
+
+
+# ---------------------------------------------------------------- 3. running the worlds
+
+def _changed_files(base: Path, head: Path) -> tuple[list[str], list[str]]:
+    """(changed or added in head, removed in head), app-relative posix paths."""
+    def files(root: Path) -> dict[str, bytes]:
+        out = {}
+        for p in root.rglob("*"):
+            rel = p.relative_to(root)
+            if p.is_file() and not {".git", "__pycache__", ".tox", ".venv", "venv", "node_modules"} & set(rel.parts):
+                out[rel.as_posix()] = p.read_bytes()
+        return out
+    b, h = files(base), files(head)
+    return sorted(k for k in h if b.get(k) != h[k]), sorted(k for k in b if k not in h)
+
+
+TEST_FILE = re.compile(r"(^|/)(tests?|testing)/|(^|/)(test_[^/]*|[^/]*_test|conftest)\.py$")
+
+
+def is_test_file(rel: str) -> bool:
+    """Files that belong to the test suite rather than the app (tests/, test_*.py, *_test.py, conftest.py)."""
+    return bool(TEST_FILE.search(rel))
+
+
+def head_with_base_tests(base: Path, head: Path, dest: Path) -> None:
+    """The head world: the PR's app code with the BASE branch's tests. The same tests (the same users)
+    run against both versions, so a PR cannot hide a behavior change by editing the test that shows it."""
+    shutil.copytree(head, dest, ignore=SKIP)
+    for p in list(dest.rglob("*")):
+        rel = p.relative_to(dest).as_posix()
+        if p.is_file() and is_test_file(rel) and not (base / rel).exists():
+            p.unlink()                                  # a test the PR added: no baseline to compare against
+    for p in base.rglob("*"):
+        rel = p.relative_to(base).as_posix()
+        if p.is_file() and is_test_file(rel) and not {".git", "__pycache__"} & set(p.relative_to(base).parts):
+            target = dest / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, target)
+
+
+DEPENDENCY_FILES = re.compile(r"(^|/)(requirements[^/]*\.txt|pyproject\.toml|setup\.py|setup\.cfg|tox\.ini|Pipfile)$")
+
+
+def run_local(base: Path, head: Path, test: str, timeout: int = TEST_TIMEOUT, log=lambda m: None) -> dict:
+    """The three worlds as folders, run at the same time in your current Python environment."""
+    tmp = Path(tempfile.mkdtemp(prefix="doppel-tests-"))
+    try:
+        hook = tmp / "hook"
+        hook.mkdir()
+        for name, data in hook_files().items():
+            (hook / name).write_bytes(data)
+        jobs = {}
+        for world in WORLDS:
+            if world == "B":
+                head_with_base_tests(base, head, tmp / world)
+            else:
+                shutil.copytree(base, tmp / world, ignore=SKIP)
+            (tmp / f"out-{world}").mkdir()
+            jobs[world] = threading.Thread(target=_run_one, args=(tmp, world, hook, test, timeout))
+        log(f"[tests] running `{test}` in 3 worlds (base, base again, head)")
+        for t in jobs.values():
+            t.start()
+        for t in jobs.values():
+            t.join()
+        return {w: _collect(tmp / f"out-{w}") for w in WORLDS}
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _run_one(tmp: Path, world: str, hook: Path, test: str, timeout: int) -> None:
+    out = tmp / f"out-{world}"
+    env = world_env(str(hook), str(out), dict(os.environ))
+    kw = {"start_new_session": True} if os.name != "nt" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    with open(out / "output.txt", "w", encoding="utf-8", errors="replace") as f:
+        p = subprocess.Popen(test, shell=True, cwd=tmp / world, env=env, stdout=f, stderr=subprocess.STDOUT, **kw)
+        try:
+            rc = p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            rc = "timeout"
+        finally:
+            _kill_tree(p)
+    (out / "exit").write_text(str(rc), encoding="utf-8")
+
+
+def _kill_tree(p: subprocess.Popen) -> None:
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
+        else:
+            import signal
+            os.killpg(p.pid, signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        pass
+
+
+def _collect(out: Path) -> dict:
+    return {p.name: p.read_text("utf-8", errors="replace") for p in out.iterdir() if p.is_file()}
+
+
+def run_nebius(base: Path, head: Path, test: str, install: str, image: str = "", log=lambda m: None) -> dict:
+    """Install once into a Nebius checkpoint, fork base, base again and head, run them at the same time."""
+    import asyncio
+
+    from doppel.backends.nebius import APP, OUTPUT_LIMIT, code_files, make_client
+    from doppel.probe import image_for
+    changed, removed = _changed_files(base, head)
+    changed = [c for c in changed if not is_test_file(c)]   # head world: the PR's code, the base's tests
+    removed = [r for r in removed if not is_test_file(r)]
+    import shlex
+    sandbox_env = world_env("/doppel/hook", "/tmp/dt", {}, ":")
+    exports = "".join(f"export {k}={shlex.quote(v)}; " for k, v in sandbox_env.items())
+    script = (f"mkdir -p /tmp/dt && cd {APP} && ({exports}{test}) > /tmp/dt/output.txt 2>&1; echo $? > /tmp/dt/exit; "
+              "cd /tmp/dt && tar czf - . | base64 -w0")
+    files = {f"doppel/hook/{n}": d for n, d in hook_files().items()}
+
+    async def go():
+        client = make_client()
+        img = await client.images.use(image or image_for(base))
+        img = await img.apply_files(code_files(base))
+        if install:
+            log(f"[tests] installing once: {install[:120]}")
+            img = await img.run(shell=f"cd {APP} && {install}", disposable=False, timeout=TEST_TIMEOUT)
+            if img.exit_code != 0:
+                raise NotComparable("the install command failed:\n" + ((img.stdout or "") + (img.stderr or ""))[-3000:])
+        installed = img
+        head_files = {k: v for k, v in code_files(head).items() if k.split("/", 1)[-1] in set(changed)}
+        head_img = await installed.apply_files(head_files) if head_files else installed
+        if removed:
+            head_img = await head_img.run(shell=f"cd {APP} && rm -f " + " ".join(shlex.quote(r) for r in removed),
+                                          disposable=False, timeout=120)
+        if install and any(DEPENDENCY_FILES.search(c) for c in changed + removed):
+            log("[tests] the PR changes dependencies: installing them again for head")
+            head_img = await head_img.run(shell=f"cd {APP} && {install}", disposable=False, timeout=TEST_TIMEOUT)
+        log(f"[tests] running `{test}` in 3 sandboxes (base, base again, head)")
+        runs = [img_.run(shell=script, files=files, disposable=True, timeout=TEST_TIMEOUT,
+                         truncate_output_at=OUTPUT_LIMIT) for img_ in (installed, installed, head_img)]
+        outs = await asyncio.gather(*runs)
+        return {w: _untar(o.stdout or "", o.stderr or "") for w, o in zip(WORLDS, outs, strict=True)}
+    return asyncio.run(go())
+
+
+def _untar(stdout: str, stderr: str) -> dict:
+    try:
+        data = base64.b64decode(stdout.strip().splitlines()[-1] if stdout.strip() else "")
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+            return {Path(m.name).name: tar.extractfile(m).read().decode("utf-8", "replace")
+                    for m in tar.getmembers() if m.isfile()}
+    except Exception as e:  # noqa: BLE001
+        return {"output.txt": f"(could not read this world's results: {type(e).__name__}: {e})\n{stderr[-2000:]}",
+                "exit": "unreadable"}
+
+
+# ---------------------------------------------------------------- 4. reading a world
+
+def normalize_body(text: str, ctype: str):
+    from doppel.runner import is_html, page_view
+    value = text
+    if "json" in (ctype or "") or (text[:1] in "[{" and text.strip()[-1:] in "]}"):
+        try:
+            value = json.loads(text)
+        except ValueError:
+            value = text
+    elif is_html(ctype, text):
+        value = page_view(text)
+    return _strip_origin(value)
+
+
+def _strip_origin(value):
+    if isinstance(value, dict):
+        return {k: _strip_origin(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_strip_origin(v) for v in value]
+    if isinstance(value, str) and "://" in value:
+        return IN_PROCESS_ORIGIN.sub("", value)
+    return value
+
+
+def read_world(files: dict) -> dict:
+    """{"tests": {id: {"outcome", "requests": [...]}}, "exit", "output", "recorder_errors"}."""
+    tests: dict[str, dict] = {}
+    for name, text in sorted(files.items()):
+        if name.startswith("traffic-"):
+            for line in text.splitlines():
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                req = {"seq": e["seq"], "sig": f"{e['method']} {e['path']}" + (f"?{e['query']}" if e["query"] else ""),
+                       "status": e["status"], "body": normalize_body(e.get("body", ""), e.get("type", "")),
+                       "sent": e.get("sent", ""), "phase": e.get("phase", "")}
+                tests.setdefault(e["test"], {"outcome": "unknown", "requests": []})["requests"].append(req)
+    for name, text in sorted(files.items()):
+        if name.startswith("outcomes-"):
+            for line in text.splitlines():
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                t = tests.setdefault(e["test"], {"outcome": "unknown", "requests": []})
+                if e["outcome"] in ("failed", "error"):
+                    t["outcome"] = "failed"
+                elif e["outcome"] == "skipped" and t["outcome"] != "failed":
+                    t["outcome"] = "skipped"
+                elif e["outcome"] == "passed" and t["outcome"] == "unknown":
+                    t["outcome"] = "passed"
+    for t in tests.values():
+        t["requests"].sort(key=lambda r: r["seq"])
+    errors = "".join(text for name, text in files.items() if name.startswith("errors-"))
+    return {"tests": tests, "exit": files.get("exit", "?").strip(), "output": files.get("output.txt", ""),
+            "recorder_errors": errors}
+
+
+# ---------------------------------------------------------------- 5. comparing
+
+def _align(a: list[dict], b: list[dict]):
+    """Pairs (i, j) of requests with the same signature in order, plus the unmatched ones of each side."""
+    sm = difflib.SequenceMatcher(a=[r["sig"] for r in a], b=[r["sig"] for r in b], autojunk=False)
+    pairs, only_a, only_b = [], [], []
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == "equal":
+            pairs += list(zip(range(i1, i2), range(j1, j2), strict=True))
+        else:
+            only_a += list(range(i1, i2))
+            only_b += list(range(j1, j2))
+    return pairs, only_a, only_b
+
+
+def _leaf(path: str) -> str:
+    return re.sub(r"\s*\((added|removed)\)$", "", path).rsplit(".", 1)[-1]
+
+
+def _clean(path: str) -> str:
+    return re.sub(r"\s*\((added|removed)\)$", "", path)
+
+
+def noise(a: dict, a2: dict) -> dict:
+    """S2: what differs between two runs of the same code. {"flaky": tests whose outcome differed,
+    "unstable": tests whose requests differed, "paths": {(test, i): noisy paths}, "status": {(test, i)},
+    "keys": leaf names noisy anywhere}."""
+    out = {"flaky": set(), "unstable": set(), "paths": {}, "status": set(), "keys": set()}
+    for test, ta in a["tests"].items():
+        tb = a2["tests"].get(test)
+        if tb is None or ta["outcome"] != tb["outcome"]:
+            out["flaky"].add(test)
+            continue
+        if [r["sig"] for r in ta["requests"]] != [r["sig"] for r in tb["requests"]]:
+            out["unstable"].add(test)
+            continue
+        for i, (ra, rb) in enumerate(zip(ta["requests"], tb["requests"], strict=True)):
+            if ra["status"] != rb["status"]:
+                out["status"].add((test, i))
+            paths = changed_paths(ra["body"], rb["body"], limit=10_000)
+            if paths:
+                out["paths"][(test, i)] = {_clean(p) for p in paths}
+                out["keys"] |= {_leaf(p) for p in paths if _leaf(p) and not _leaf(p).isdigit()}
+    return out
+
+
+def _mask(value, paths: set[str], keys: set[str], prefix: str = ""):
+    if not prefix and "(whole body)" in paths:   # a plain-text body that differs between identical runs
+        return "(noise)"
+    if isinstance(value, dict):
+        return {k: "(noise)" if (prefix + k in paths or k in keys)
+                else _mask(v, paths, keys, f"{prefix}{k}.") for k, v in value.items()}
+    if isinstance(value, list):
+        return ["(noise)" if f"{prefix}{i}" in paths else _mask(v, paths, keys, f"{prefix}{i}.")
+                for i, v in enumerate(value)]
+    return "(noise)" if prefix.rstrip(".") in paths and prefix else value
+
+
+def compare_worlds(a: dict, b: dict, nz: dict, excluded: set[str]) -> tuple[list[Finding], dict]:
+    """Findings between base (a) and head (b), with noise and excluded tests left out."""
+    findings: list[Finding] = []
+    stats = {"tests": 0, "requests": 0, "new_tests": 0, "removed_tests": 0}
+    for test, ta in sorted(a["tests"].items()):
+        if test in excluded or test in nz["flaky"]:
+            continue
+        tb = b["tests"].get(test)
+        if tb is None:
+            stats["removed_tests"] += 1
+            findings.append(Finding("test", test, 0, "(test)", "this test no longer exists in head", ta["outcome"],
+                                    "(missing)"))
+            continue
+        stats["tests"] += 1
+        stats["requests"] += len(ta["requests"])
+        if ta["outcome"] == "passed" and tb["outcome"] == "failed":
+            findings.append(Finding("test", test, 0, "(test outcome)", "the test passed on base and fails on head",
+                                    "passed", "failed"))
+        if test in nz["unstable"]:
+            continue
+        pairs, only_a, only_b = _align(ta["requests"], tb["requests"])
+        for i, j in pairs:
+            ra, rb = ta["requests"][i], tb["requests"][j]
+            if ra["status"] != rb["status"] and (test, i) not in nz["status"]:
+                crashed = rb["status"] == 0 or rb["status"] >= 500
+                findings.append(Finding("error" if crashed and not (ra["status"] == 0 or ra["status"] >= 500)
+                                        else "status", test, i, ra["sig"], f"status {ra['status']} -> {rb['status']}",
+                                        ra["status"], rb["status"]))
+                continue
+            noisy = nz["paths"].get((test, i), set())
+            ba, bb = _mask(ra["body"], noisy, nz["keys"]), _mask(rb["body"], noisy, nz["keys"])
+            paths = changed_paths(ba, bb, limit=50)
+            if paths:
+                from doppel.diff import _at
+                shown = [_clean(p) for p in paths[:4]]
+                findings.append(Finding("body", test, i, ra["sig"], "changed: " + summarize_paths(paths),
+                                        {p: _at(ba, p) for p in shown}, {p: _at(bb, p) for p in shown}))
+        for j in only_b:
+            rb = tb["requests"][j]
+            findings.append(Finding("request", test, j, rb["sig"], "a request only the head run made",
+                                    "(not sent)", rb["status"]))
+        for i in only_a:
+            ra = ta["requests"][i]
+            findings.append(Finding("request", test, i, ra["sig"], "a request only the base run made",
+                                    ra["status"], "(not sent)"))
+    stats["new_tests"] = len(set(b["tests"]) - set(a["tests"]))
+    return findings, stats
+
+
+# ---------------------------------------------------------------- 6. the check, with its safeguards
+
+def _passed_or_failed(world: dict) -> tuple[int, int]:
+    outcomes = [t["outcome"] for t in world["tests"].values()]
+    return sum(o == "passed" for o in outcomes), sum(o == "failed" for o in outcomes)
+
+
+def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str | None = None,
+          install: str | None = None, log=lambda m: None, runner=None) -> dict:
+    """Run the app's tests in three worlds and compare. Raises NotComparable (with the reason) when a
+    safeguard says the comparison would be meaningless. Returns {"findings", "stats", "excluded",
+    "flaky", "unstable", "noise_keys", "detected", "worlds"}."""
+    base, head = Path(base).resolve(), Path(head).resolve()
+    found = detect(base)
+    test = test or found["test"]
+    install = found["install"] if install is None else install
+    if not test:
+        raise NotComparable("no test suite found (no tox.ini, CI test step, pytest configuration, manage.py or "
+                            "test files): test mode needs the app's own tests. Use the HTTP twin "
+                            "(`doppel run` with a doppel.toml) instead.")
+    log(f"[tests] test command: {test}   (from {found['source']['test'] if test == found['test'] else 'you'})")
+    if backend != "local" and install:
+        log(f"[tests] install: {install[:140]}   (from {found['source']['install']})")
+    if runner is not None:
+        raw = runner(base, head, test, install)
+    elif backend == "local":
+        raw = run_local(base, head, test, log=log)
+    else:
+        raw = run_nebius(base, head, test, install, log=log)
+    worlds = {w: read_world(raw[w]) for w in WORLDS}
+    a, a2, b = worlds["A"], worlds["A2"], worlds["B"]
+    # S1: the base has to have run
+    passed, failed = _passed_or_failed(a)
+    if passed + failed == 0:
+        raise NotComparable(f"the test command ran no test on the unchanged code (exit {a['exit']}). Its output:\n"
+                            + a["output"][-3000:])
+    if failed > MAX_FAILING_SHARE * (passed + failed):
+        raise NotComparable(f"{failed} of {passed + failed} tests fail on the unchanged code here, so this environment "
+                            "is not the one the tests expect (a missing service, env var or dependency). Output:\n"
+                            + a["output"][-3000:])
+    failing_on_base = {t for w in (a, a2) for t, v in w["tests"].items() if v["outcome"] == "failed"}
+    # S2: noise from two runs of the same code
+    nz = noise(a, a2)
+    # S4: something to compare
+    requests = sum(len(t["requests"]) for t in a["tests"].values())
+    if requests == 0:
+        raise NotComparable(f"the tests ran ({passed} passed) but sent no request through a test client Doppel "
+                            "records (Flask/Werkzeug, Django/DRF, Starlette/FastAPI), so there is no traffic to "
+                            "compare. "
+                            "The tests' own pass/fail still applies; for behavior checks use the HTTP twin.")
+    findings, stats = compare_worlds(a, b, nz, failing_on_base)
+    stats.update(passed=passed, failing_on_base=len(failing_on_base), flaky=len(nz["flaky"]),
+                 unstable=len(nz["unstable"]), noisy_keys=len(nz["keys"]), recorded_requests=requests)
+    if a["recorder_errors"] or b["recorder_errors"]:
+        log("[tests] note: the recorder reported problems (they never affect the tests):\n"
+            + (a["recorder_errors"] or b["recorder_errors"])[-1500:])
+    log(f"[tests] {passed} tests passed on base; {requests} requests recorded; {len(nz['flaky'])} flaky, "
+        f"{len(nz['unstable'])} with varying requests, {len(nz['keys'])} noisy field name(s); "
+        f"{len(findings)} difference(s)")
+    return {"findings": findings, "stats": stats, "excluded": sorted(failing_on_base), "flaky": sorted(nz["flaky"]),
+            "unstable": sorted(nz["unstable"]), "noise_keys": sorted(nz["keys"]), "detected": found,
+            "test": test, "worlds": {w: {"exit": v["exit"], "tests": len(v["tests"])} for w, v in worlds.items()}}
+
+
+# ---------------------------------------------------------------- 7. the report
+
+def report(result: dict, judged: dict | None = None) -> str:
+    from doppel.report import markdown
+    st = result["stats"]
+    body = markdown(result["findings"], st["tests"], st["requests"], judged, who="test")
+    left_out = []
+    if result["excluded"]:
+        left_out.append(f"{len(result['excluded'])} failing on unchanged code")
+    if result["flaky"]:
+        left_out.append(f"{len(result['flaky'])} flaky (passed once, failed once on unchanged code)")
+    if result["unstable"]:
+        left_out.append(f"{len(result['unstable'])} compared on outcome only (their requests vary between "
+                        "identical runs)")
+    lines = [body.rstrip(), "",
+             f"<sub>Test mode: `{result['test']}` (from {result['detected']['source']['test']}) ran on base twice and "
+             f"on head, with the base branch's tests in both. {st['passed']} tests passed on base. "
+             + (f"Left out: {'; '.join(left_out)}. " if left_out else "")
+             + (f"Ignored as noise (they differ between two runs of the same code): "
+                f"{', '.join(f'`{k}`' for k in result['noise_keys'][:12])}. " if result["noise_keys"] else "")
+             + (f"{st['new_tests']} test(s) the PR adds have no baseline and are not compared." if st["new_tests"]
+                else "") + "</sub>"]
+    return "\n".join(lines) + "\n"
+
+
+def not_comparable(reason: str) -> str:
+    return ("## Doppel: couldn't compare this PR (test mode)\n\n"
+            "A safeguard stopped the check before any verdict, because the comparison would not mean anything:\n\n"
+            + "\n".join(f"> {ln}" if ln.strip() else ">" for ln in reason.strip().splitlines()[:40]) + "\n")

@@ -251,6 +251,40 @@ def arm_review(base: Path, head: Path, pr: dict) -> dict:
 
 # ---------------------------------------------------------------- main
 
+def arm_testmode(base: Path, head: Path, pr: dict, backend: str, use_judge: bool = True) -> dict:
+    """Test mode (doppel tests): the app's own suite in base, base again and head; every response compared.
+    A finding is on target when its request matches the PR's expected route, or when a test's outcome
+    changed (the suite itself noticed). "caught_by_traffic" counts only response differences: the part the
+    tests' assertions did not see."""
+    from doppel.judge import Verdict, judge
+    from doppel.personas import code_diff
+    from doppel.traffic import check
+    t0 = time.perf_counter()
+    r = check(base, head, backend=backend)
+    findings = r["findings"]
+    t1 = time.perf_counter()
+    if findings and use_judge:
+        judged = judge(findings, pr_text(pr), code_diff(base, head))
+    else:
+        judged = {"verdicts": [Verdict("unjudged", "") for _ in findings], "summary": "", "usd": 0.0}
+    expect = re.compile(pr["expect"]) if pr.get("expect") else None
+    rows = [{"kind": f.kind, "test": f.persona, "request": f.request, "detail": f.detail,
+             "base": json.dumps(f.base, default=str)[:300], "head": json.dumps(f.head, default=str)[:300],
+             "label": v.label, "why": v.why,
+             "on_target": bool(f.kind == "test" or (expect and expect.search(f.request)))}
+            for f, v in zip(findings, judged["verdicts"], strict=True)]
+    regressions = [x for x in rows if x["label"] in ("regression", "unjudged")]
+    return {"detected": any(x["on_target"] for x in rows) if expect else bool(rows),
+            "caught": any(x["on_target"] for x in regressions) if expect else bool(regressions),
+            "caught_by_traffic": any(x["on_target"] and x["kind"] != "test" for x in regressions) if expect
+            else any(x["kind"] != "test" for x in regressions),
+            "any_regression": bool(regressions), "needs_human": sum(x["label"] == "needs_human" for x in rows),
+            "findings": rows[:80], "finding_count": len(rows), "summary": judged.get("summary", ""),
+            "stats": r["stats"], "noise_keys": r["noise_keys"], "flaky": r["flaky"], "unstable": r["unstable"],
+            "test_command": r["test"], "backend": backend, "usd": {"judge": judged.get("usd", 0.0)},
+            "seconds": {"suite": round(t1 - t0, 1), "judge": round(time.perf_counter() - t1, 1)}}
+
+
 def main(argv=None) -> int:
     load_dotenv()
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -299,6 +333,8 @@ def main(argv=None) -> int:
                 key += "_guided" if a.guided else ""
                 key += "_fixed" if a.personas else ""
                 key += "_nojudge" if a.no_judge else ""
+            if arm == "testmode" and a.no_judge:
+                key += "_nojudge"
             if key in result and not a.force:
                 continue
             try:
@@ -310,6 +346,8 @@ def main(argv=None) -> int:
                     result[key]["backend"] = a.backend
                 elif arm == "review":
                     result[key] = arm_review(base, head, pr)
+                elif arm == "testmode":
+                    result[key] = arm_testmode(base, head, pr, a.backend, not a.no_judge)
             except Exception as e:  # noqa: BLE001 - record and keep going; rerun picks it up
                 print(f"[bench] {pr['id']} {arm}: {type(e).__name__}: {e}", file=sys.stderr)
                 result.setdefault("errors", {})[key] = f"{type(e).__name__}: {str(e)[:1500]}"
@@ -320,7 +358,8 @@ def main(argv=None) -> int:
         cov = result.get("doppel_guided" if a.guided else "doppel", {}).get("coverage")
         served = f" served={cov['served']}/{cov['requests']}" if cov else ""
         marks = " ".join(f"{k}={'CAUGHT' if result[k]['caught'] else '-'}"
-                         for k in ("tests", "review", "doppel", "doppel_guided", "doppel_fixed", "doppel_fixed_nojudge")
+                         for k in ("tests", "review", "doppel", "doppel_guided", "doppel_fixed", "doppel_fixed_nojudge",
+                                   "testmode", "testmode_nojudge")
                          if k in result)
         print(f"[bench] {pr['kind']:10} {pr['id']:24} {marks}{served}")
     return 0

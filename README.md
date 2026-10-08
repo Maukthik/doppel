@@ -205,6 +205,26 @@ On a pull request, `[app]` is read from the PR (it may add a dependency or a mig
 the base branch, so a PR can't add the fields it changes to `ignore`. A PR that edits `doppel.toml`,
 `doppel_seed.py` or the personas file gets a warning in its comment.
 
+## Test mode: no setup at all
+
+```bash
+doppel tests --base main-checkout --head pr-checkout --pr PR.md --strict
+```
+
+Doppel runs the app's **own test suite** three times (base, base again, head), with a recorder inside the test
+process that captures every request the tests send through a framework test client (Flask/Werkzeug, Django/DRF,
+FastAPI/Starlette) and how each test ended. Then it compares every response field by field. The tests already
+know how to build the app, its database and its logged-in users, so there is nothing to set up: the test and
+install commands come from the repo's `tox.ini`, CI workflow or layout. The tests' assertions catch what someone
+thought to check; test mode catches everything else in the same responses, like a password hash that appears in
+`/api/users` while every test still passes.
+
+Safeguards: the base must run (no tests, a collection error or mostly failing tests stop the check with the test
+runner's own output, never a verdict); base vs base again finds noisy fields and flaky tests (Diffy's
+primary/secondary idea); every world gets the same clean, seeded environment; the head world runs the **base
+branch's tests**, so a PR can't hide a change by editing a test. Apps without tests, or whose tests never call
+what a PR changed, still have the HTTP twin. [bench/results/testmode](bench/results/testmode) has the first run.
+
 ## License
 
 [MIT](LICENSE)

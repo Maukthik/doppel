@@ -121,6 +121,41 @@ def cmd_run(a) -> int:
     return 0
 
 
+def cmd_tests(a) -> int:
+    """Test mode: compare what the app's own tests see on base and head (doppel.traffic)."""
+    from doppel import traffic
+    t0 = time.perf_counter()
+    try:
+        result = traffic.check(a.base, a.head, backend=a.backend, test=a.command, install=a.install,
+                               log=lambda m: print(m, file=sys.stderr))
+    except traffic.NotComparable as e:
+        md = traffic.not_comparable(str(e))
+        print(md)
+        if a.out:
+            Path(a.out).write_text(md, encoding="utf-8")
+        return 2
+    findings, judged = result["findings"], None
+    if a.pr and findings:
+        from doppel.judge import judge
+        from doppel.personas import code_diff
+        judged = judge(findings, Path(a.pr).read_text(encoding="utf-8"), code_diff(a.base, a.head))
+    md = traffic.report(result, judged)
+    print(md)
+    print(f"({time.perf_counter() - t0:.1f} s)", file=sys.stderr)
+    if a.out:
+        Path(a.out).write_text(md, encoding="utf-8")
+    if a.json:
+        verdicts = [v.__dict__ for v in judged["verdicts"]] if judged else None
+        Path(a.json).write_text(json.dumps({"mode": "tests", "findings": [f.to_dict() for f in findings],
+                                            "verdicts": verdicts, **{k: result[k] for k in (
+                                                "stats", "excluded", "flaky", "unstable", "noise_keys", "test",
+                                                "worlds")}}, indent=1, default=str), encoding="utf-8")
+    if a.strict:
+        regressions = [v for v in judged["verdicts"] if v.label == "regression"] if judged else findings
+        return 1 if regressions else 0
+    return 0
+
+
 SETUP_FILES = ("doppel.toml", "doppel_seed.py", "doppel-personas.json")
 
 
@@ -321,6 +356,17 @@ def main(argv=None) -> int:
     st = sub.add_parser("site", help="build the static replay site from recorded runs (for GitHub Pages)")
     st.add_argument("--gallery", default="site/gallery.json", help="which runs to publish (default: site/gallery.json)")
     st.add_argument("--out", default="_site", help="output folder (default: _site)")
+    t = sub.add_parser("tests", help="test mode: run the app's own tests on base and head and compare every "
+                                     "response they saw (no doppel.toml needed)")
+    t.add_argument("--base", required=True, help="the code before the change")
+    t.add_argument("--head", required=True, help="the code after the change")
+    t.add_argument("--backend", choices=["local", "nebius"], default="nebius")
+    t.add_argument("--command", default=None, help="test command (default: read from tox.ini / CI / the layout)")
+    t.add_argument("--install", default=None, help="install command (default: read from the repo)")
+    t.add_argument("--pr", help="PR title and description (Markdown) for the judge")
+    t.add_argument("--out", help="write the Markdown report here")
+    t.add_argument("--json", help="write the findings and verdicts here")
+    t.add_argument("--strict", action="store_true", help="exit 1 when there are regressions")
     pb = sub.add_parser("probe", help="install and import an app, print what is true about it (routes, database, "
                                       "login, models, import errors)")
     pb.add_argument("app", nargs="?", default=".")
@@ -344,6 +390,8 @@ def main(argv=None) -> int:
             return cmd_view(a)
         if a.cmd == "site":
             return cmd_site(a)
+        if a.cmd == "tests":
+            return cmd_tests(a)
         if a.cmd == "probe":
             from doppel.probe import main as probe_main
             args = [a.app, "--backend", a.backend] + (["--install", a.install] if a.install is not None else []) \
