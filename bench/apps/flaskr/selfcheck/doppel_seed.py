@@ -2,10 +2,9 @@
 import sqlite3
 from pathlib import Path
 
-from werkzeug.security import generate_password_hash
-
 from flaskr import create_app
 from flaskr.db import init_db
+from werkzeug.security import generate_password_hash
 
 app = create_app()
 with app.app_context():

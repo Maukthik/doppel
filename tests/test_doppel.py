@@ -87,8 +87,11 @@ def test_shop_twin_catches_the_hidden_regressions(shop_run):
     assert ("careless clicker", "POST /orders", "status") in found
     # the intended change shows up too (stage 2 will label it "intended" from PR.md)
     assert ("window shopper", "GET /products", "body") in found
-    # untouched flows stay quiet
-    assert not any(f["persona"] in ("plain buyer", "last-copy hunter") for f in data["findings"])
+    # untouched flows behave the same. Timing is left out: one sample per request on a busy machine
+    # (antivirus scanning a fresh world on Windows) can add ~200 ms to every head request; slowness has
+    # its own tests in the diff tests, and a slow finding never fails a check (the judge sends it to a human)
+    assert not any(f["persona"] in ("plain buyer", "last-copy hunter") and f["kind"] != "slow"
+                   for f in data["findings"])
     assert "Doppel:" in md
 
 

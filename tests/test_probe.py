@@ -312,10 +312,11 @@ def test_paths_read_the_same_on_windows_linux_and_in_the_sandbox():
     spec = importlib.util.spec_from_file_location("probe_app", Path(__file__).parent.parent / "src/doppel/probe_app.py")
     probe_app = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(probe_app)
-    win = ["C:\\Users\\maukt\\AppData\\Local\\Temp\\doppel-probe-x\\app"]
-    facts = {"database": {"configured": "c:\\users\\maukt\\appdata\\local\\temp\\doppel-probe-x\\app\\instance\\b.db",
-                          "uri": "sqlite:///C:/Users/maukt/AppData/Local/Temp/doppel-probe-x/app/app.db"},
-             "errors": [{"traceback": 'File "C:\\Users\\maukt\\AppData\\Local\\Temp\\doppel-probe-x\\app\\a.py", line 3'}]}
+    root = "C:\\Users\\maukt\\AppData\\Local\\Temp\\doppel-probe-x\\app"
+    win = [root]
+    facts = {"database": {"configured": root.lower() + "\\instance\\b.db",       # Windows ignores case
+                          "uri": "sqlite:///" + root.replace("\\", "/") + "/app.db"},
+             "errors": [{"traceback": f'File "{root}\\a.py", line 3'}]}
     out = probe_app.scrub(facts, win)
     assert out["database"] == {"configured": "<repo>/instance/b.db", "uri": "sqlite:///<repo>/app.db"}
     assert out["errors"][0]["traceback"] == 'File "<repo>/a.py", line 3'
