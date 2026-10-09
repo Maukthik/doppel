@@ -27,6 +27,7 @@ import importlib.abc
 import importlib.util
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -90,7 +91,22 @@ def _text(data) -> str:
         return str(data)[:MAX_BODY]
 
 
+CONTROL_FLOW = {"_Upgrade", "WebSocketUpgrade", "StopIteration", "StopAsyncIteration", "GeneratorExit"}
+ADDRESS = re.compile(r"0x[0-9a-fA-F]{6,}")
+
+
+def crash_text(exc: BaseException):
+    """What a crash looks like in a recording: the exception type and message, with memory addresses removed
+    (they differ on every run). None for exceptions a test client uses as control flow, not app errors:
+    Starlette's old client opens a websocket by raising _Upgrade(<session at 0x...>)."""
+    if type(exc).__name__ in CONTROL_FLOW:
+        return None
+    return ADDRESS.sub("0x…", f"{type(exc).__name__}: {exc}")[:2000]
+
+
 def record(method: str, path: str, query: str, sent, status: int, ctype: str, body, ms: float) -> None:
+    if status == 0 and body is None:   # a control-flow exception (crash_text said so): not a request result
+        return
     try:
         test, phase = current_test()
         with _lock:
@@ -140,7 +156,7 @@ def _hook_werkzeug(module) -> None:
                     first = args[0] if args else kwargs.get("path", "")
                     path = first if isinstance(first, str) else getattr(first, "path", "")
                     record(kwargs.get("method", getattr(first, "method", "GET")), str(path).split("?")[0], "",
-                           kwargs.get("json", kwargs.get("data")), 0, "text/plain", f"{type(e).__name__}: {e}"[:2000],
+                           kwargs.get("json", kwargs.get("data")), 0, "text/plain", crash_text(e),
                            (time.perf_counter() - t0) * 1000)
                 raise
             if outermost:
@@ -182,7 +198,7 @@ def _hook_django(module) -> None:
                 if outermost:  # the app raised through the test client: a crash, record it as one
                     record(environ.get("REQUEST_METHOD", "GET"), environ.get("PATH_INFO", ""),
                            environ.get("QUERY_STRING", ""), sent, 0, "text/plain",
-                           f"{type(e).__name__}: {e}", (time.perf_counter() - t0) * 1000)
+                           crash_text(e), (time.perf_counter() - t0) * 1000)
                 raise
             if outermost:
                 try:
@@ -215,7 +231,7 @@ def _hook_starlette(module) -> None:
                     except Exception as e:   # raise_server_exceptions (the default): record the crash
                         if outermost:
                             record(request.method, request.url.path, request.url.query, None, 0, "text/plain",
-                                   f"{type(e).__name__}: {e}"[:2000], (time.perf_counter() - t0) * 1000)
+                                   crash_text(e), (time.perf_counter() - t0) * 1000)
                         raise
                     if outermost:
                         try:
@@ -274,7 +290,7 @@ def _hook_httpx(module) -> None:
                     if outermost and (not local_only or _is_local(request.url.host)):
                         q = request.url.query
                         record(request.method, request.url.path, q.decode("latin-1") if isinstance(q, bytes) else q,
-                               None, 0, "text/plain", f"{type(e).__name__}: {e}"[:2000],
+                               None, 0, "text/plain", crash_text(e),
                                (time.perf_counter() - t0) * 1000)
                     raise
                 if outermost and (not local_only or _is_local(request.url.host)):
@@ -302,7 +318,7 @@ def _hook_httpx(module) -> None:
                     if outermost and (not local_only or _is_local(request.url.host)):
                         q = request.url.query
                         record(request.method, request.url.path, q.decode("latin-1") if isinstance(q, bytes) else q,
-                               None, 0, "text/plain", f"{type(e).__name__}: {e}"[:2000],
+                               None, 0, "text/plain", crash_text(e),
                                (time.perf_counter() - t0) * 1000)
                     raise
                 if outermost and (not local_only or _is_local(request.url.host)):
@@ -384,7 +400,7 @@ def _hook_django_async(module) -> None:
             except Exception as e:
                 if outermost:
                     record(scope.get("method", "GET"), scope.get("path", ""), _qs(scope.get("query_string", "")),
-                           None, 0, "text/plain", f"{type(e).__name__}: {e}", (time.perf_counter() - t0) * 1000)
+                           None, 0, "text/plain", crash_text(e), (time.perf_counter() - t0) * 1000)
                 raise
             if outermost:
                 try:
@@ -423,7 +439,7 @@ def _wrap(cls, name: str, read, is_async: bool = False, prefetch=None, request_o
             return
         try:
             method, path, query, sent = request_of(self, args, kwargs)
-            record(method, path, query, sent, 0, "text/plain", f"{type(exc).__name__}: {exc}"[:2000],
+            record(method, path, query, sent, 0, "text/plain", crash_text(exc),
                    (time.perf_counter() - t0) * 1000)
         except Exception:  # noqa: BLE001
             _error(f"{cls.__name__}.{name} crash")
@@ -522,10 +538,12 @@ def _hook_tornado(module) -> None:
                         exc = fut.exception()
                         response = getattr(exc, "response", None) if exc else fut.result()
                         if response is None:
-                            status, ctype, body = 0, "text/plain", f"{type(exc).__name__}: {exc}"
+                            status, ctype, body = 0, "text/plain", crash_text(exc)
                         else:
                             status, ctype = response.code, response.headers.get("Content-Type", "")
                             body = response.body or b""
+                        if body is None:
+                            return
                         _record_for(test, method, path, query, sent, status, ctype, body,
                                     (time.perf_counter() - t0) * 1000)
                     except Exception:  # noqa: BLE001

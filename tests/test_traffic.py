@@ -655,3 +655,15 @@ def test_nebius_never_asks_for_another_image_and_installs_the_python_in_the_sand
     assert "uv python install 3.8" in install and "uv venv --quiet --seed -p 3.8" in install
     assert install.index("uv venv") < install.index("pip install -r requirements.txt")
     assert "export PATH=/opt/doppel-python/bin:$PATH" in job and job.index("doppel-python") < job.index("pytest")
+
+
+def test_crashes_are_recorded_without_run_specific_text_and_control_flow_is_not_a_crash():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("rec2", Path(traffic.RECORDER))
+    rec = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rec)
+
+    class _Upgrade(Exception):       # what Starlette's old TestClient raises to open a websocket
+        pass
+    assert rec.crash_text(_Upgrade("<starlette.testclient.WebSocketTestSession object at 0x7f3a2b1c9d40>")) is None
+    assert rec.crash_text(ValueError("bad item at 0x7f3a2b1c9d40")) == "ValueError: bad item at 0x…"
