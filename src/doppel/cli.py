@@ -127,7 +127,7 @@ def cmd_tests(a) -> int:
     t0 = time.perf_counter()
     try:
         result = traffic.check(a.base, a.head, backend=a.backend, test=a.command, install=a.install,
-                               log=lambda m: print(m, file=sys.stderr))
+                               log=lambda m: print(m, file=sys.stderr), python=a.python)
     except traffic.NotComparable as e:
         md = traffic.not_comparable(str(e))
         print(md)
@@ -367,6 +367,8 @@ def main(argv=None) -> int:
     t.add_argument("--out", help="write the Markdown report here")
     t.add_argument("--json", help="write the findings and verdicts here")
     t.add_argument("--strict", action="store_true", help="exit 1 when there are regressions")
+    t.add_argument("--python", default="", help="Python for the tests: a version (3.8) picks the sandbox image; "
+                                                  "with --backend local, a path to an interpreter (its venv)")
     pb = sub.add_parser("probe", help="install and import an app, print what is true about it (routes, database, "
                                       "login, models, import errors)")
     pb.add_argument("app", nargs="?", default=".")

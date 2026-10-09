@@ -133,7 +133,16 @@ def _hook_werkzeug(module) -> None:
     def open(self, *args, **kwargs):  # noqa: A001 - same name as the method it wraps
         with _Outermost() as outermost:
             t0 = time.perf_counter()
-            response = original(self, *args, **kwargs)
+            try:
+                response = original(self, *args, **kwargs)
+            except Exception as e:   # Flask propagates app errors in testing mode: record the crash
+                if outermost:
+                    first = args[0] if args else kwargs.get("path", "")
+                    path = first if isinstance(first, str) else getattr(first, "path", "")
+                    record(kwargs.get("method", getattr(first, "method", "GET")), str(path).split("?")[0], "",
+                           kwargs.get("json", kwargs.get("data")), 0, "text/plain", f"{type(e).__name__}: {e}"[:2000],
+                           (time.perf_counter() - t0) * 1000)
+                raise
             if outermost:
                 try:
                     req = getattr(response, "request", None)
@@ -201,7 +210,13 @@ def _hook_starlette(module) -> None:
             def handle_request(self, request):
                 with _Outermost() as outermost:
                     t0 = time.perf_counter()
-                    response = original(self, request)
+                    try:
+                        response = original(self, request)
+                    except Exception as e:   # raise_server_exceptions (the default): record the crash
+                        if outermost:
+                            record(request.method, request.url.path, request.url.query, None, 0, "text/plain",
+                                   f"{type(e).__name__}: {e}"[:2000], (time.perf_counter() - t0) * 1000)
+                        raise
                     if outermost:
                         try:
                             try:
@@ -220,7 +235,8 @@ def _hook_starlette(module) -> None:
         cls.handle_request = make(handle)
 
 
-LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "testserver"}
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "testserver", "test"}  # "test": the
+# conventional base_url of in-process ASGI tests (http://test)
 
 
 def _is_local(host) -> bool:
@@ -252,7 +268,15 @@ def _hook_httpx(module) -> None:
         def handle_request(self, request):
             with _Outermost() as outermost:
                 t0 = time.perf_counter()
-                response = original(self, request)
+                try:
+                    response = original(self, request)
+                except Exception as e:   # the ASGI/WSGI app raised (raise_app_exceptions)
+                    if outermost and (not local_only or _is_local(request.url.host)):
+                        q = request.url.query
+                        record(request.method, request.url.path, q.decode("latin-1") if isinstance(q, bytes) else q,
+                               None, 0, "text/plain", f"{type(e).__name__}: {e}"[:2000],
+                               (time.perf_counter() - t0) * 1000)
+                    raise
                 if outermost and (not local_only or _is_local(request.url.host)):
                     try:
                         response.read()
@@ -272,7 +296,15 @@ def _hook_httpx(module) -> None:
         async def handle_async_request(self, request):
             with _Outermost() as outermost:
                 t0 = time.perf_counter()
-                response = await original(self, request)
+                try:
+                    response = await original(self, request)
+                except Exception as e:   # the ASGI/WSGI app raised (raise_app_exceptions)
+                    if outermost and (not local_only or _is_local(request.url.host)):
+                        q = request.url.query
+                        record(request.method, request.url.path, q.decode("latin-1") if isinstance(q, bytes) else q,
+                               None, 0, "text/plain", f"{type(e).__name__}: {e}"[:2000],
+                               (time.perf_counter() - t0) * 1000)
+                    raise
                 if outermost and (not local_only or _is_local(request.url.host)):
                     try:
                         await response.aread()
@@ -289,6 +321,27 @@ def _hook_httpx(module) -> None:
         cls = getattr(module, name, None)
         if isinstance(cls, type):
             (wrap_async if kind == "async" else wrap_sync)(cls, local_only)
+    if not hasattr(module, "HTTPTransport"):
+        # httpx before 0.18 (2021) has no transport classes: hook the clients' send() instead, local only
+        # (Sanic's test client of that time talks to a real local server through it)
+        def read(self, args, kwargs, response):
+            request = args[0] if args else kwargs.get("request")
+            if not _is_local(request.url.host):
+                return None
+            try:
+                sent = request.content if hasattr(request, "content") else None
+            except Exception:  # noqa: BLE001
+                sent = None
+            query = request.url.query
+            return (request.method, request.url.path, query.decode("latin-1") if isinstance(query, bytes) else query,
+                    sent, response.status_code, response.headers.get("content-type", ""), response.content)
+
+        async def aread(response):
+            await response.aread()
+        for name, is_async in (("Client", False), ("AsyncClient", True)):
+            cls = getattr(module, name, None)
+            if isinstance(cls, type):
+                _wrap(cls, "send", read, is_async=is_async, prefetch=aread if is_async else None)
 
 
 def _hook_requests(module) -> None:
@@ -350,13 +403,225 @@ def _qs(value) -> str:
     return value.decode("latin-1") if isinstance(value, bytes) else str(value or "")
 
 
+# ---------------------------------------------------------------- more clients, through one wrapper
+#
+# Each client below is just "where is the call, and how to read request and response from it". _wrap does
+# the rest the same way for all of them: outermost call only, never raise, record after the call returns.
+
+def _wrap(cls, name: str, read, is_async: bool = False, prefetch=None, request_of=None) -> None:
+    """Patch cls.name so every outermost call is recorded via read(self, args, kwargs, result) -> (method,
+    path, query, sent, status, content_type, body) or None. prefetch(result), for async clients, is awaited
+    first (reading the body so it can be recorded and still read by the test)."""
+    original = getattr(cls, name, None)
+    if original is None or getattr(original, "_doppel", False):
+        return
+
+    def crashed(self, args, kwargs, exc, t0):
+        """The app raised through the client (Starlette re-raises server errors by default): no response comes
+        back, so record the request as a crash. request_of(self, args, kwargs) -> (method, path, query, sent)."""
+        if request_of is None:
+            return
+        try:
+            method, path, query, sent = request_of(self, args, kwargs)
+            record(method, path, query, sent, 0, "text/plain", f"{type(exc).__name__}: {exc}"[:2000],
+                   (time.perf_counter() - t0) * 1000)
+        except Exception:  # noqa: BLE001
+            _error(f"{cls.__name__}.{name} crash")
+
+    def emit(self, args, kwargs, result, t0):
+        try:
+            got = read(self, args, kwargs, result)
+            if got:
+                record(*got, (time.perf_counter() - t0) * 1000)
+        except Exception:  # noqa: BLE001
+            _error(f"{cls.__name__}.{name}")
+
+    if is_async:
+        async def wrapper(self, *args, **kwargs):
+            with _Outermost() as outermost:
+                t0 = time.perf_counter()
+                try:
+                    result = await original(self, *args, **kwargs)
+                except Exception as exc:
+                    if outermost:
+                        crashed(self, args, kwargs, exc, t0)
+                    raise
+                if outermost:
+                    if prefetch is not None:
+                        try:
+                            await prefetch(result)
+                        except Exception:  # noqa: BLE001
+                            _error(f"{cls.__name__}.{name} prefetch")
+                    emit(self, args, kwargs, result, t0)
+                return result
+    else:
+        def wrapper(self, *args, **kwargs):
+            with _Outermost() as outermost:
+                t0 = time.perf_counter()
+                try:
+                    result = original(self, *args, **kwargs)
+                except Exception as exc:
+                    if outermost:
+                        crashed(self, args, kwargs, exc, t0)
+                    raise
+                if outermost:
+                    emit(self, args, kwargs, result, t0)
+                return result
+    wrapper._doppel = True
+    wrapper.__name__ = getattr(original, "__name__", name)
+    setattr(cls, name, wrapper)
+
+
+def _split(url: str) -> tuple[str, str, str]:
+    from urllib.parse import urlsplit
+    u = urlsplit(str(url))
+    return u.hostname or "", u.path or "/", u.query
+
+
+def _hook_starlette_legacy(module) -> None:
+    """Starlette before 0.21 (FastAPI before 2022): TestClient is a requests.Session whose private adapter
+    (_ASGIAdapter) overrides send(), so the requests hook never sees it."""
+    for name in dir(module):
+        cls = getattr(module, name, None)
+        if isinstance(cls, type) and "Adapter" in name and callable(getattr(cls, "send", None)):
+            def read(self, args, kwargs, response):
+                request = args[0] if args else kwargs.get("request")
+                _, path, query = _split(request.url)
+                return (request.method, path, query, request.body, response.status_code,
+                        response.headers.get("Content-Type", ""), response.content)
+
+            def request_of(self, args, kwargs):
+                request = args[0] if args else kwargs.get("request")
+                _, path, query = _split(request.url)
+                return request.method, path, query, request.body
+            _wrap(cls, "send", read, request_of=request_of)
+
+
+def _hook_tornado(module) -> None:
+    """tornado.httpclient: AsyncHTTPTestCase.fetch() and every AsyncHTTPClient talk to the app over a real
+    local socket. fetch() returns a Future: record when it resolves, whether with a response or an HTTPError
+    (which carries the response)."""
+    cls = getattr(module, "AsyncHTTPClient", None)
+    if cls is None or getattr(cls.fetch, "_doppel", False):
+        return
+    original = cls.fetch
+
+    def fetch(self, request, *args, **kwargs):
+        t0 = time.perf_counter()
+        future = original(self, request, *args, **kwargs)
+        try:
+            url = request.url if hasattr(request, "url") else str(request)
+            method = getattr(request, "method", kwargs.get("method", "GET"))
+            sent = getattr(request, "body", kwargs.get("body"))
+            host, path, query = _split(url)
+            if _is_local(host):
+                test = current_test()       # captured now: the callback may run outside the test's frame
+
+                def done(fut):
+                    try:
+                        exc = fut.exception()
+                        response = getattr(exc, "response", None) if exc else fut.result()
+                        if response is None:
+                            status, ctype, body = 0, "text/plain", f"{type(exc).__name__}: {exc}"
+                        else:
+                            status, ctype = response.code, response.headers.get("Content-Type", "")
+                            body = response.body or b""
+                        _record_for(test, method, path, query, sent, status, ctype, body,
+                                    (time.perf_counter() - t0) * 1000)
+                    except Exception:  # noqa: BLE001
+                        _error("tornado callback")
+                future.add_done_callback(done)
+        except Exception:  # noqa: BLE001
+            _error("tornado")
+        return future
+    fetch._doppel = True
+    cls.fetch = fetch
+
+
+def _hook_aiohttp(module) -> None:
+    """aiohttp.test_utils.TestClient: every request goes through _request(method, path, **kwargs)."""
+    cls = getattr(module, "TestClient", None)
+    if cls is None:
+        return
+
+    def read(self, args, kwargs, response):
+        method, path = (list(args) + ["GET", "/"])[:2]
+        _, p, query = _split(str(response.url))
+        return (method, p, query, kwargs.get("json", kwargs.get("data")), response.status,
+                response.headers.get("Content-Type", ""), getattr(response, "_body", b"") or b"")
+    _wrap(cls, "_request", read, is_async=True, prefetch=lambda r: r.read(),
+          request_of=lambda self, args, kwargs: ((list(args) + ["GET", "/"])[0], (list(args) + ["GET", "/"])[1], "",
+                                                 kwargs.get("json", kwargs.get("data"))))
+
+
+def _hook_webtest(module) -> None:
+    """webtest.TestApp (Pyramid, Bottle, any WSGI app): every request goes through do_request(req, ...)."""
+    cls = getattr(module, "TestApp", None)
+    if cls is None:
+        return
+
+    def read(self, args, kwargs, response):
+        req = args[0] if args else kwargs.get("req")
+        return (req.method, req.path, req.query_string, getattr(req, "body", b""), response.status_int,
+                response.headers.get("Content-Type", ""), response.body)
+
+    def request_of(self, args, kwargs):
+        req = args[0] if args else kwargs.get("req")
+        return req.method, req.path, req.query_string, getattr(req, "body", b"")
+    _wrap(cls, "do_request", read, request_of=request_of)
+
+
+def _hook_falcon(module) -> None:
+    """falcon.testing: TestClient and the simulate_* helpers all end in simulate_request(app, method, path)."""
+    original = getattr(module, "simulate_request", None)
+    if original is None or getattr(original, "_doppel", False):
+        return
+
+    def simulate_request(app, method="GET", path="/", *args, **kwargs):
+        with _Outermost() as outermost:
+            t0 = time.perf_counter()
+            result = original(app, method, path, *args, **kwargs)
+            if outermost:
+                try:
+                    record(method, path, kwargs.get("query_string") or "", kwargs.get("json", kwargs.get("body")),
+                           result.status_code, result.headers.get("Content-Type", ""), result.content,
+                           (time.perf_counter() - t0) * 1000)
+                except Exception:  # noqa: BLE001
+                    _error("falcon")
+            return result
+    simulate_request._doppel = True
+    module.simulate_request = simulate_request
+
+
+def _record_for(test: tuple[str, str], method, path, query, sent, status, ctype, body, ms) -> None:
+    """record(), for a request whose test was captured earlier (Tornado's callbacks)."""
+    try:
+        name, phase = test
+        with _lock:
+            seq = _seq.get(name, 0)
+            _seq[name] = seq + 1
+        _write("traffic", {"test": name, "phase": phase, "seq": seq, "method": str(method).upper(),
+                           "path": str(path), "query": str(query or ""), "sent": _text(sent)[:4000],
+                           "status": int(status), "type": str(ctype or ""), "body": _text(body), "ms": round(ms, 2)})
+    except Exception:  # noqa: BLE001
+        _error("record_for")
+
+
+def _hook_starlette_all(module) -> None:
+    _hook_starlette(module)
+    _hook_starlette_legacy(module)
+
+
 def _hook_django_all(module) -> None:
     _hook_django(module)
     _hook_django_async(module)
 
 
+# The registry: module -> hook. Adding a client = an extractor above and one line here.
 HOOKS = {"werkzeug.test": _hook_werkzeug, "django.test.client": _hook_django_all,
-         "starlette.testclient": _hook_starlette, "httpx": _hook_httpx, "requests.adapters": _hook_requests}
+         "starlette.testclient": _hook_starlette_all, "httpx": _hook_httpx, "requests.adapters": _hook_requests,
+         "tornado.httpclient": _hook_tornado, "aiohttp.test_utils": _hook_aiohttp, "webtest.app": _hook_webtest,
+         "falcon.testing.client": _hook_falcon}
 
 
 class _PostImport(importlib.abc.MetaPathFinder):
@@ -412,6 +677,31 @@ def _hook_unittest() -> None:
         setattr(ur.TestResult, method, make(original, outcome))
 
 
+def sweep() -> None:
+    """Hook every supported client that is imported but not patched yet. Import hooks are not enough on their
+    own: another import hook ahead of ours can load a module itself (pytest's assertion rewriter takes any file
+    named like a test, aiohttp/test_utils.py included), and then ours never sees it. Every hook is idempotent,
+    so sweeping again is free."""
+    for name, hook in HOOKS.items():
+        module = sys.modules.get(name)
+        if module is not None:
+            try:
+                hook(module)
+            except Exception:  # noqa: BLE001
+                _error(f"sweep {name}")
+
+
+def to_front() -> None:
+    """Put our post-import hook back first (pytest inserts its own in front of it)."""
+    try:
+        ours = [f for f in sys.meta_path if isinstance(f, _PostImport)]
+        for f in ours:
+            sys.meta_path.remove(f)
+        sys.meta_path.insert(0, ours[0] if ours else _PostImport())
+    except Exception:  # noqa: BLE001
+        _error("to_front")
+
+
 def install() -> None:
     """Called once from the generated sitecustomize."""
     if not OUT or getattr(sys, "_doppel_traffic", False):
@@ -429,6 +719,17 @@ def install() -> None:
 
 
 # ---------------------------------------------------------------- pytest plugin (loaded via PYTEST_PLUGINS)
+
+def pytest_configure(config) -> None:
+    if OUT:
+        to_front()
+        sweep()
+
+
+def pytest_runtest_setup(item) -> None:
+    if OUT:
+        sweep()   # test modules are imported at collection, maybe through pytest's own import hook
+
 
 def pytest_runtest_logreport(report) -> None:
     try:

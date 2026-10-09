@@ -474,3 +474,146 @@ def test_an_app_that_turns_warnings_into_errors_still_runs(tmp_path):
         (root / "pytest.ini").write_text("[pytest]\nfilterwarnings =\n    error\n", encoding="utf-8")
     r = check(base, head, backend="local")
     assert r["stats"]["passed"] == 4 and r["findings"] == []
+
+
+# ---- more clients through the registry, crashes, scripts, settings ------------------------------
+
+def _clients(tmp_path, app_base: str, app_head: str, test: str):
+    return _two(tmp_path, {"app.py": app_base, "test_app.py": test}, {"app.py": app_head, "test_app.py": test})
+
+
+TORNADO_APP = '''
+import tornado.web
+LIMIT = {limit}
+
+class Items(tornado.web.RequestHandler):
+    def get(self):
+        self.write({{"items": list(range(LIMIT))}})
+
+def make_app():
+    return tornado.web.Application([(r"/items", Items)])
+'''
+TORNADO_TEST = '''
+from tornado.testing import AsyncHTTPTestCase
+from app import make_app
+
+class ItemsTest(AsyncHTTPTestCase):
+    def get_app(self):
+        return make_app()
+
+    def test_items(self):
+        assert self.fetch("/items").code == 200
+'''
+
+
+def test_tornado_fetch_is_recorded(tmp_path):
+    pytest.importorskip("tornado")
+    base, head = _clients(tmp_path, TORNADO_APP.format(limit=3), TORNADO_APP.format(limit=2), TORNADO_TEST)
+    r = check(base, head, backend="local")
+    assert [(f.request, f.detail) for f in r["findings"]] == [("GET /items", "changed: items")]
+
+
+AIOHTTP_APP = '''
+from aiohttp import web
+
+async def items(request):
+    return web.json_response({{"items": list(range({limit}))}})
+
+def make_app():
+    app = web.Application()
+    app.router.add_get("/items", items)
+    return app
+'''
+AIOHTTP_TEST = '''
+import asyncio
+from aiohttp.test_utils import TestClient, TestServer
+from app import make_app
+
+def test_items():
+    async def go():
+        async with TestClient(TestServer(make_app())) as client:
+            response = await client.get("/items")
+            return response.status, await response.json()
+    status, body = asyncio.run(go())
+    assert status == 200 and "items" in body      # the body is still readable after recording
+'''
+
+
+def test_aiohttp_test_client_is_recorded(tmp_path):
+    pytest.importorskip("aiohttp")
+    base, head = _clients(tmp_path, AIOHTTP_APP.format(limit=3), AIOHTTP_APP.format(limit=1), AIOHTTP_TEST)
+    r = check(base, head, backend="local")
+    assert [f.request for f in r["findings"]] == ["GET /items"] and r["stats"]["passed"] == 1
+
+
+WSGI_APP = '''
+import json
+
+def app(environ, start_response):
+    body = json.dumps({{"version": {version}}}).encode()
+    start_response("200 OK", [("Content-Type", "application/json")])
+    return [body]
+'''
+
+
+def test_webtest_is_recorded(tmp_path):
+    pytest.importorskip("webtest")
+    test = "from webtest import TestApp\nfrom app import app\n\ndef test_v():\n" \
+           "    assert TestApp(app).get('/v').status_int == 200\n"
+    base, head = _clients(tmp_path, WSGI_APP.format(version=1), WSGI_APP.format(version=2), test)
+    assert [(f.request, f.detail) for f in check(base, head, backend="local")["findings"]] == \
+        [("GET /v", "changed: version")]
+
+
+def test_falcon_testing_is_recorded(tmp_path):
+    pytest.importorskip("falcon")
+    app = ("import falcon\n\nclass V:\n    def on_get(self, req, resp):\n        resp.media = {{'version': {v}}}\n\n"
+           "app = falcon.App()\napp.add_route('/v', V())\n")
+    test = "from falcon import testing\nfrom app import app\n\ndef test_v():\n" \
+           "    assert testing.TestClient(app).simulate_get('/v').status_code == 200\n"
+    base, head = _clients(tmp_path, app.format(v=1), app.format(v=2), test)
+    assert [(f.request, f.detail) for f in check(base, head, backend="local")["findings"]] == \
+        [("GET /v", "changed: version")]
+
+
+def test_a_request_that_crashes_inside_the_test_client_is_recorded_as_a_crash(tmp_path):
+    crashing = FLASK_APP.replace('    return jsonify(qty=qty, total=qty * 10), 201',
+                                 '    raise RuntimeError("total service down")')
+    base = flask_repo(tmp_path / "b")
+    head = flask_repo(tmp_path / "h", crashing.replace("app = Flask(__name__)",
+                                                       "app = Flask(__name__)\napp.testing = True"))
+    found = [(f.kind, f.request, f.detail) for f in check(base, head, backend="local")["findings"]]
+    assert ("error", "POST /orders", "status 201 -> 0 (the base branch's test fails on this)") in found
+
+
+def test_test_scripts_and_their_settings(tmp_path):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "test.sh").write_text(
+        "#!/usr/bin/env bash\nset -e\nbash ./scripts/lint.sh\nexport PYTHONPATH=./docs_src\n"
+        "pytest --cov=app --cov-report=term-missing tests ${@}\n", encoding="utf-8")
+    found = detect(tmp_path)
+    assert found["test"] == "export PYTHONPATH=./docs_src; python -m pytest tests" and found["source"]["test"] == \
+        "test script"
+    assert traffic.split_env(found["test"]) == ({"PYTHONPATH": "./docs_src"}, "python -m pytest tests")
+    env = traffic.world_env("/hook", "/out", {"PYTHONPATH": "/mine"}, ":", {"PYTHONPATH": "./docs_src"})
+    assert env["PYTHONPATH"] == "/hook:./docs_src:/mine"            # joined, the recorder first: never replaced
+
+
+def test_a_projects_pythonpath_setting_keeps_the_recorder(tmp_path):
+    base, head = pair(tmp_path, FLASK_APP.replace("if qty <= 0:", "if qty < 0:"))
+    r = check(base, head, backend="local", test="export PYTHONPATH=./extra; python -m pytest -q")
+    assert r["stats"]["recorded_requests"] == 4 and len(r["findings"]) == 1
+
+
+def test_deselected_tests_are_hidden_in_every_world(tmp_path):
+    base, head = pair(tmp_path, FLASK_APP.replace("if qty <= 0:", "if qty < 0:"))
+    r = check(base, head, backend="local", deselect=["tests/test_app.py::test_bad_order"])
+    assert r["findings"] == [] and r["stats"]["passed"] == 3
+
+
+def test_why_nothing_was_recorded_names_what_the_tests_use(tmp_path):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_ws.py").write_text("import websockets\n\ndef test_ws():\n    pass\n")
+    assert "websockets" in traffic.why_nothing_recorded(tmp_path)
+    (tmp_path / "tests" / "test_ws.py").write_text("def test_math():\n    assert 1 + 1 == 2\n")
+    assert "test functions directly" in traffic.why_nothing_recorded(tmp_path)
