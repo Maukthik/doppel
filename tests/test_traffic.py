@@ -391,6 +391,8 @@ def test_live_server():
 
 
 def test_live_server_tests_are_recorded_through_requests_and_httpx(tmp_path):
+    pytest.importorskip("requests")
+    pytest.importorskip("httpx")
     leaky = FLASK_APP.replace('"name": u["name"],', '"name": u["name"], "secret": u["secret"],')
     base = flask_repo(tmp_path / "b", tests=LIVE_TEST)
     head = flask_repo(tmp_path / "h", leaky, LIVE_TEST)
@@ -463,3 +465,12 @@ def test_confirm_commands_select_single_tests(tmp_path):
     assert traffic.confirm_command(tmp_path, "python manage.py test blog", ["blog.tests.T.test_a"]) == \
         "python manage.py test blog.tests.T.test_a"
     assert traffic.confirm_command(tmp_path, "make test", ["x"]) == ""
+
+
+def test_an_app_that_turns_warnings_into_errors_still_runs(tmp_path):
+    # many projects set filterwarnings = error: nothing Doppel loads may emit a warning into their run
+    base, head = pair(tmp_path)
+    for root in (base, head):
+        (root / "pytest.ini").write_text("[pytest]\nfilterwarnings =\n    error\n", encoding="utf-8")
+    r = check(base, head, backend="local")
+    assert r["stats"]["passed"] == 4 and r["findings"] == []
