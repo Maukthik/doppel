@@ -116,6 +116,64 @@ def _from_ci(repo: Path) -> tuple[str, list[str]]:
     return test, installs
 
 
+def _from_makefile(repo: Path) -> str:
+    """The pytest/manage.py/unittest line in a Makefile's test target (`make` itself may not exist in a slim
+    image, so the recipe line is run directly)."""
+    f = next((repo / n for n in ("Makefile", "makefile", "GNUmakefile") if (repo / n).exists()), None)
+    if f is None:
+        return ""
+    target = None
+    for line in f.read_text("utf-8", errors="replace").splitlines():
+        m = re.match(r"^([A-Za-z0-9_.-]+)\s*:(?!=)", line)
+        if m:
+            target = m.group(1)
+            continue
+        if target in ("test", "tests", "check", "unittest", "pytest") and line.startswith(("\t", "    ")):
+            hit = TEST_LINE.search(" " + line.strip().lstrip("@-"))
+            if hit:
+                return hit.group(1)
+    return ""
+
+
+def _from_noxfile(repo: Path) -> str:
+    """session.run("pytest", "-q", ...) in a nox session named like tests."""
+    f = repo / "noxfile.py"
+    if not f.exists():
+        return ""
+    text = f.read_text("utf-8", errors="replace")
+    m = re.search(r"session\.run\(\s*['\"](pytest|python)['\"]((?:\s*,\s*['\"][^'\"]*['\"])*)", text)
+    if not m:
+        return ""
+    args = re.findall(r"['\"]([^'\"]*)['\"]", m.group(2))
+    cmd = " ".join([m.group(1), *args])
+    return cmd if TEST_LINE.search(" " + cmd) else ""
+
+
+def suites_below(repo: str | Path, depth: int = 2) -> list[str]:
+    """Subfolders (monorepo packages, an app in backend/ or src/) that have a test suite of their own,
+    named by their top folder only."""
+    repo = Path(repo)
+    skip = {"node_modules", "venv", ".venv", "docs", "site-packages", "tests", "test"}
+    found: list[str] = []
+    level = [p for p in sorted(repo.iterdir()) if p.is_dir()]
+    for _ in range(depth):
+        nxt = []
+        for folder in level:
+            if folder.name.startswith(".") or folder.name in skip:
+                continue
+            if _looks_testable(folder):
+                found.append(folder.relative_to(repo).as_posix())   # its own subfolders are part of it
+            else:
+                nxt += [c for c in sorted(folder.iterdir()) if c.is_dir()]
+        level = nxt
+    return found[:10]
+
+
+def _looks_testable(folder: Path) -> bool:
+    return any((folder / n).exists() for n in ("tox.ini", "pytest.ini", "conftest.py", "manage.py", "noxfile.py")) \
+        or ((folder / "pyproject.toml").exists() and (folder / "tests").is_dir())
+
+
 def detect(repo: str | Path) -> dict:
     """{"test": command, "install": command, "source": where each came from}. The repo's own files win:
     an explicit [tests] table in doppel.toml, then tox.ini, then CI workflows, then the usual layout."""
@@ -136,6 +194,10 @@ def detect(repo: str | Path) -> dict:
         test, source = tox_test, "tox.ini"
     elif ci_test and "tox" not in ci_test:
         test, source = ci_test, "CI workflow"
+    elif make_test := _from_makefile(repo):
+        test, source = make_test, "Makefile"
+    elif nox_test := _from_noxfile(repo):
+        test, source = nox_test, "noxfile.py"
     elif (repo / "manage.py").exists() and not _uses_pytest(repo):
         test, source = "python manage.py test", "manage.py (Django's test runner)"
     elif _has_tests(repo):
@@ -271,38 +333,51 @@ def head_with_base_tests(base: Path, head: Path, dest: Path) -> None:
 DEPENDENCY_FILES = re.compile(r"(^|/)(requirements[^/]*\.txt|pyproject\.toml|setup\.py|setup\.cfg|tox\.ini|Pipfile)$")
 
 
-def run_local(base: Path, head: Path, test: str, timeout: int = TEST_TIMEOUT, log=lambda m: None) -> dict:
-    """The three worlds as folders, run at the same time in your current Python environment."""
-    tmp = Path(tempfile.mkdtemp(prefix="doppel-tests-"))
-    try:
-        hook = tmp / "hook"
-        hook.mkdir()
+class LocalSession:
+    """The worlds as folders in your current Python environment. Every job runs in a fresh copy of its code
+    (tests may write files), all jobs of a batch at the same time."""
+
+    def __init__(self, base: Path, head: Path, install: str = "", log=lambda m: None):
+        self.tmp = Path(tempfile.mkdtemp(prefix="doppel-tests-"))
+        self.hook = self.tmp / "hook"
+        self.hook.mkdir()
         for name, data in hook_files().items():
-            (hook / name).write_bytes(data)
-        jobs = {}
-        for world in WORLDS:
-            if world == "B":
-                head_with_base_tests(base, head, tmp / world)
-            else:
-                shutil.copytree(base, tmp / world, ignore=SKIP)
-            (tmp / f"out-{world}").mkdir()
-            jobs[world] = threading.Thread(target=_run_one, args=(tmp, world, hook, test, timeout))
-        log(f"[tests] running `{test}` in 3 worlds (base, base again, head)")
-        for t in jobs.values():
+            (self.hook / name).write_bytes(data)
+        self.code = {"base": self.tmp / "code-base", "head": self.tmp / "code-head"}
+        shutil.copytree(base, self.code["base"], ignore=SKIP)
+        head_with_base_tests(base, head, self.code["head"])
+        self.n = 0
+
+    def run(self, jobs: list[tuple[str, str]], timeout: int = TEST_TIMEOUT) -> list[dict]:
+        """jobs: [(code "base"|"head", command)] -> one {file name: text} per job, same order."""
+        dirs = []
+        for code, _ in jobs:
+            self.n += 1
+            work, out = self.tmp / f"job{self.n}", self.tmp / f"out{self.n}"
+            shutil.copytree(self.code[code], work)
+            out.mkdir()
+            dirs.append((work, out))
+        threads = [threading.Thread(target=_run_one, args=(work, out, self.hook, cmd, timeout))
+                   for (work, out), (_, cmd) in zip(dirs, jobs, strict=True)]
+        for t in threads:
             t.start()
-        for t in jobs.values():
+        for t in threads:
             t.join()
-        return {w: _collect(tmp / f"out-{w}") for w in WORLDS}
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        results = [_collect(out) for _, out in dirs]
+        for work, out in dirs:
+            shutil.rmtree(work, ignore_errors=True)
+            shutil.rmtree(out, ignore_errors=True)
+        return results
+
+    def close(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
 
-def _run_one(tmp: Path, world: str, hook: Path, test: str, timeout: int) -> None:
-    out = tmp / f"out-{world}"
+def _run_one(work: Path, out: Path, hook: Path, test: str, timeout: int) -> None:
     env = world_env(str(hook), str(out), dict(os.environ))
     kw = {"start_new_session": True} if os.name != "nt" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
     with open(out / "output.txt", "w", encoding="utf-8", errors="replace") as f:
-        p = subprocess.Popen(test, shell=True, cwd=tmp / world, env=env, stdout=f, stderr=subprocess.STDOUT, **kw)
+        p = subprocess.Popen(test, shell=True, cwd=work, env=env, stdout=f, stderr=subprocess.STDOUT, **kw)
         try:
             rc = p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -327,57 +402,175 @@ def _collect(out: Path) -> dict:
     return {p.name: p.read_text("utf-8", errors="replace") for p in out.iterdir() if p.is_file()}
 
 
-def run_nebius(base: Path, head: Path, test: str, install: str, image: str = "", log=lambda m: None) -> dict:
-    """Install once into a Nebius checkpoint, fork base, base again and head, run them at the same time."""
-    import asyncio
+class NebiusSession:
+    """Install once into a Nebius checkpoint, derive the head checkpoint from it, then run any batch of jobs,
+    each a disposable fork, all at the same time."""
 
-    from doppel.backends.nebius import APP, OUTPUT_LIMIT, code_files, make_client
-    from doppel.probe import image_for
-    changed, removed = _changed_files(base, head)
-    changed = [c for c in changed if not is_test_file(c)]   # head world: the PR's code, the base's tests
-    removed = [r for r in removed if not is_test_file(r)]
-    import shlex
-    sandbox_env = world_env("/doppel/hook", "/tmp/dt", {}, ":")
-    exports = "".join(f"export {k}={shlex.quote(v)}; " for k, v in sandbox_env.items())
-    script = (f"mkdir -p /tmp/dt && cd {APP} && ({exports}{test}) > /tmp/dt/output.txt 2>&1; echo $? > /tmp/dt/exit; "
-              "cd /tmp/dt && tar czf - . | base64 -w0")
-    files = {f"doppel/hook/{n}": d for n, d in hook_files().items()}
+    def __init__(self, base: Path, head: Path, install: str = "", image: str = "", log=lambda m: None):
+        import asyncio
+        import shlex
 
-    async def go():
-        client = make_client()
-        img = await client.images.use(image or image_for(base))
-        img = await img.apply_files(code_files(base))
-        if install:
-            log(f"[tests] installing once: {install[:120]}")
-            img = await img.run(shell=f"cd {APP} && {install}", disposable=False, timeout=TEST_TIMEOUT)
-            if img.exit_code != 0:
-                raise NotComparable("the install command failed:\n" + ((img.stdout or "") + (img.stderr or ""))[-3000:])
-        installed = img
-        head_files = {k: v for k, v in code_files(head).items() if k.split("/", 1)[-1] in set(changed)}
-        head_img = await installed.apply_files(head_files) if head_files else installed
-        if removed:
-            head_img = await head_img.run(shell=f"cd {APP} && rm -f " + " ".join(shlex.quote(r) for r in removed),
-                                          disposable=False, timeout=120)
-        if install and any(DEPENDENCY_FILES.search(c) for c in changed + removed):
-            log("[tests] the PR changes dependencies: installing them again for head")
-            head_img = await head_img.run(shell=f"cd {APP} && {install}", disposable=False, timeout=TEST_TIMEOUT)
-        log(f"[tests] running `{test}` in 3 sandboxes (base, base again, head)")
-        runs = [img_.run(shell=script, files=files, disposable=True, timeout=TEST_TIMEOUT,
-                         truncate_output_at=OUTPUT_LIMIT) for img_ in (installed, installed, head_img)]
-        outs = await asyncio.gather(*runs)
-        return {w: _untar(o.stdout or "", o.stderr or "") for w, o in zip(WORLDS, outs, strict=True)}
-    return asyncio.run(go())
+        from doppel.backends.nebius import APP, code_files, make_client
+        from doppel.probe import image_for
+        self.loop = asyncio.new_event_loop()
+        self.log, self.app = log, APP
+        changed, removed = _changed_files(base, head)
+        changed = [c for c in changed if not is_test_file(c)]   # head world: the PR's code, the base's tests
+        removed = [r for r in removed if not is_test_file(r)]
+        sandbox_env = world_env("/doppel/hook", "/tmp/dt", {}, ":")
+        self.exports = "".join(f"export {k}={shlex.quote(v)}; " for k, v in sandbox_env.items())
+        self.files = {f"doppel/hook/{n}": d for n, d in hook_files().items()}
+
+        async def build():
+            client = make_client()
+            img = await client.images.use(image or image_for(base))
+            img = await img.apply_files(code_files(base))
+            if install:
+                log(f"[tests] installing once: {install[:120]}")
+                img = await img.run(shell=f"cd {APP} && {install}", disposable=False, timeout=TEST_TIMEOUT)
+                if img.exit_code != 0:
+                    raise NotComparable("the install command failed:\n"
+                                        + ((img.stdout or "") + (img.stderr or ""))[-3000:])
+            head_files = {k: v for k, v in code_files(head).items() if k.split("/", 1)[-1] in set(changed)}
+            head_img = await img.apply_files(head_files) if head_files else img
+            if removed:
+                rm = f"cd {APP} && rm -f -- " + " ".join(shlex.quote(r) for r in removed)
+                head_img = await head_img.run(shell=rm, disposable=False, timeout=120)
+            if install and any(DEPENDENCY_FILES.search(c) for c in changed + removed):
+                log("[tests] the PR changes dependencies: installing them again for head")
+                head_img = await head_img.run(shell=f"cd {APP} && {install}", disposable=False, timeout=TEST_TIMEOUT)
+            return {"base": img, "head": head_img}
+        self.images = self.loop.run_until_complete(build())
+
+    def run(self, jobs: list[tuple[str, str]], timeout: int = TEST_TIMEOUT) -> list[dict]:
+        import asyncio
+
+        from doppel.backends.nebius import OUTPUT_LIMIT
+
+        def script(cmd: str) -> str:
+            return (f"mkdir -p /tmp/dt && cd {self.app} && ({self.exports}{cmd}) > /tmp/dt/output.txt 2>&1; "
+                    "echo $? > /tmp/dt/exit; cd /tmp/dt && tar czf - . | base64 -w0")
+
+        async def go():
+            outs = await asyncio.gather(*[self.images[code].run(shell=script(cmd), files=self.files, disposable=True,
+                                                                timeout=timeout, truncate_output_at=OUTPUT_LIMIT)
+                                          for code, cmd in jobs])
+            return [_untar(o.stdout or "", o.stderr or "") for o in outs]
+        return self.loop.run_until_complete(go())
+
+    def close(self) -> None:
+        self.loop.close()
 
 
 def _untar(stdout: str, stderr: str) -> dict:
+    """A sandbox job's result folder, sent back as base64 of a tar.gz on its last stdout line."""
     try:
         data = base64.b64decode(stdout.strip().splitlines()[-1] if stdout.strip() else "")
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
             return {Path(m.name).name: tar.extractfile(m).read().decode("utf-8", "replace")
                     for m in tar.getmembers() if m.isfile()}
     except Exception as e:  # noqa: BLE001
-        return {"output.txt": f"(could not read this world's results: {type(e).__name__}: {e})\n{stderr[-2000:]}",
+        return {"output.txt": f"(could not read this job's results: {type(e).__name__}: {e})\n{stderr[-2000:]}",
                 "exit": "unreadable"}
+
+
+def open_session(backend: str, base: Path, head: Path, install: str, log=lambda m: None):
+    return LocalSession(base, head, install, log) if backend == "local" else NebiusSession(base, head, install, log=log)
+
+
+# ---------------------------------------------------------------- 3b. planning: shards and confirmation
+
+SHARD_FILES, FILES_PER_SHARD, MAX_SHARDS, MAX_CONFIRM = 30, 25, 8, 200
+
+
+def runner_kind(cmd: str) -> str:
+    if re.search(r"\bpytest\b", cmd):
+        return "pytest"
+    if re.search(r"manage\.py\s+test\b", cmd):
+        return "django"
+    if re.search(r"-m\s+unittest\b", cmd):
+        return "unittest"
+    return ""
+
+
+def test_files(repo: Path, cmd: str) -> list[str]:
+    """The test files a pytest command would run: under the paths it names, or anywhere in the repo."""
+    import shlex
+    try:
+        words = shlex.split(cmd)
+    except ValueError:
+        return []
+    after = words[words.index("pytest") + 1:] if "pytest" in words else []
+    roots = [w for w in after if not w.startswith("-") and (repo / w.split("::")[0]).exists()]
+    out = set()
+    for root in roots or ["."]:
+        start = repo / root
+        files = [start] if start.is_file() else [*start.rglob("test_*.py"), *start.rglob("*_test.py")]
+        for f in files:
+            rel = f.relative_to(repo)
+            if not {".venv", "venv", "node_modules", ".tox", "site-packages", ".git"} & set(rel.parts):
+                out.add(rel.as_posix())
+    return sorted(out)
+
+
+def shards(repo: Path, cmd: str) -> list[str]:
+    """Large pytest suites split by test file across sandboxes (whole files stay together, so tests that
+    share a module's setup still run together). Small suites, and other runners, run whole."""
+    import shlex
+    if runner_kind(cmd) != "pytest":
+        return [cmd]
+    files = test_files(repo, cmd)
+    if len(files) < SHARD_FILES:
+        return [cmd]
+    n = min(MAX_SHARDS, -(-len(files) // FILES_PER_SHARD))
+    keep = _without_targets(repo, shlex.split(cmd), "pytest")
+    return [" ".join(shlex.quote(w) for w in keep + files[k::n]) for k in range(n)]
+
+
+def _without_targets(repo: Path, words: list[str], after: str) -> list[str]:
+    """The command's words minus the test targets it names after `after` (paths, node ids, labels)."""
+    if after not in words:
+        return words
+    k = words.index(after) + 1
+    out, prev = words[:k], ""
+    for w in words[k:]:
+        takes_value = prev in ("-p", "-k", "-m", "-c", "-o", "--rootdir", "--settings", "--tb", "-W")
+        # Django's and unittest's positional words are all labels; pytest's are paths and node ids
+        target = not w.startswith("-") and not takes_value and (
+            after != "pytest" or "::" in w or w.endswith(".py") or (repo / w).exists())
+        if not target:
+            out.append(w)
+        prev = w
+    return out
+
+
+def confirm_command(repo: Path, cmd: str, tests: list[str]) -> str:
+    """The same command restricted to these tests (pytest node ids, unittest/Django dotted ids), or ""
+    when the runner can't select tests by id."""
+    import shlex
+    kind = runner_kind(cmd)
+    if not tests or len(tests) > MAX_CONFIRM or not kind:
+        return ""
+    try:
+        words = shlex.split(cmd)
+    except ValueError:
+        return ""
+    after = {"pytest": "pytest", "django": "test", "unittest": "unittest"}[kind]
+    return " ".join(shlex.quote(w) for w in _without_targets(repo, words, after) + tests)
+
+
+def merge(results: list[dict]) -> dict:
+    """One world from its shards: file names made unique (process ids repeat across sandboxes)."""
+    files: dict[str, str] = {}
+    exits, outputs = [], []
+    for k, r in enumerate(results):
+        for name, text in r.items():
+            if name.startswith(("traffic-", "outcomes-", "errors-")):
+                files[f"{name.split('-', 1)[0]}-s{k}-{name.split('-', 1)[1]}"] = text
+        exits.append(r.get("exit", "?").strip())
+        outputs.append(r.get("output.txt", ""))
+    worst = next((e for e in exits if e not in ("0",)), "0")
+    return {**files, "exit": worst, "output.txt": "\n".join(outputs)}
 
 
 # ---------------------------------------------------------------- 4. reading a world
@@ -566,15 +759,65 @@ def compare_worlds(a: dict, b: dict, nz: dict, excluded: set[str]) -> tuple[list
 
 # ---------------------------------------------------------------- 6. the check, with its safeguards
 
+RUN_SPECIFIC = re.compile(r"0x[0-9a-fA-F]{6,}|(?:[A-Za-z]:)?[\\/][^\s'\"]*?doppel-tests-[^\\/\s]+[\\/]job\d+[\\/]|"
+                          r"/app/(?=[^\s'\"]+\.py)")
+
+
+def scrub(text: str) -> str:
+    """Remove what is specific to one run from a message: job folders, the sandbox's /app/, memory addresses."""
+    return RUN_SPECIFIC.sub(lambda m: "0x…" if m.group(0).startswith("0x") else "", text)
+
+
 def _test_failed(test: str, tb: dict) -> Finding:
     """A base test that fails on head with no response difference to explain it: its own failure message is
     the evidence."""
-    message = (tb.get("message") or "").strip()
+    message = scrub(tb.get("message") or "").strip()
     errors = [ln[1:].strip() for ln in message.splitlines() if ln.startswith("E ")]   # pytest's "E   ..." lines
     last = ("; ".join(errors[:3]) if errors else (message.splitlines()[-1] if message else
                                                   "(no failure message recorded)"))[:300]
     return Finding("test", test, 0, "(test outcome)", f"the test passed on base and fails on head: {last}",
                    "passed", "failed")
+
+
+def _key(f: Finding) -> tuple:
+    """What has to happen again for a difference to be confirmed. A failing test is the same failure whatever
+    its message says (messages carry run-specific paths and addresses)."""
+    if f.kind == "test":
+        return f.kind, f.persona, f.request
+    return f.kind, f.persona, f.request, f.detail.replace(" (the base branch's test fails on this)", "")
+
+
+def confirm(session, base: Path, test: str, findings: list[Finding], a: dict, b: dict, nz: dict,
+            excluded: set[str], log=lambda m: None) -> tuple[list[Finding], dict]:
+    """S5: run only the tests that showed a difference again, on base and on head, and keep a difference only
+    if it shows up the same way again. A difference that came from rare nondeterminism the A/A run happened to
+    miss does not survive two independent runs."""
+    tests = sorted({f.persona for f in findings})
+    cmd = confirm_command(base, test, tests)
+    if not findings:
+        return findings, {"ran": False, "reason": "no differences"}
+    if not cmd:
+        why = (f"{len(tests)} tests differ (more than {MAX_CONFIRM})" if len(tests) > MAX_CONFIRM
+               else "the test runner can't select single tests")
+        log(f"[tests] differences not re-checked: {why}")
+        return findings, {"ran": False, "reason": why}
+    log(f"[tests] confirming {len(findings)} difference(s): rerunning {len(tests)} test(s) on base and head")
+    again_a, again_b = (read_world(r) for r in session.run([("base", cmd), ("head", cmd)]))
+    if not again_a["tests"]:
+        log("[tests] the confirmation run selected no tests; keeping the differences unconfirmed")
+        return findings, {"ran": False, "reason": "the confirmation run selected no tests"}
+    # base, base again and the confirmation base together say what varies; then compare the reruns
+    nz2 = noise(a, again_a)
+    merged = {"flaky": nz["flaky"] | nz2["flaky"], "unstable": nz["unstable"] | nz2["unstable"],
+              "status": nz["status"] | nz2["status"], "keys": nz["keys"] | nz2["keys"],
+              "paths": {k: nz["paths"].get(k, set()) | nz2["paths"].get(k, set())
+                        for k in set(nz["paths"]) | set(nz2["paths"])}}
+    seen_again = {_key(f) for f in compare_worlds(again_a, again_b, merged, excluded)[0]}
+    kept = [f for f in findings if _key(f) in seen_again and f.persona not in merged["flaky"]]
+    dropped = len(findings) - len(kept)
+    if dropped:
+        log(f"[tests] {dropped} difference(s) did not happen again and were dropped as noise")
+    return kept, {"ran": True, "tests": len(tests), "dropped": dropped}
 
 
 def _passed_or_failed(world: dict) -> tuple[int, int]:
@@ -584,6 +827,8 @@ def _passed_or_failed(world: dict) -> tuple[int, int]:
 
 def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str | None = None,
           install: str | None = None, log=lambda m: None, runner=None) -> dict:
+    """`runner(backend, base, head, install, log)` opens a session (tests inject one); default LocalSession or
+    NebiusSession."""
     """Run the app's tests in three worlds and compare. Raises NotComparable (with the reason) when a
     safeguard says the comparison would be meaningless. Returns {"findings", "stats", "excluded",
     "flaky", "unstable", "noise_keys", "detected", "worlds"}."""
@@ -592,40 +837,52 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
     test = test or found["test"]
     install = found["install"] if install is None else install
     if not test:
-        raise NotComparable("no test suite found (no tox.ini, CI test step, pytest configuration, manage.py or "
-                            "test files): test mode needs the app's own tests. Use the HTTP twin "
-                            "(`doppel run` with a doppel.toml) instead.")
+        below = suites_below(base)
+        if below:
+            raise NotComparable("no test suite in this folder, but these subfolders have one: "
+                                + ", ".join(below) + ". Point --base and --head at that folder (for a monorepo "
+                                "package), or give the command with --command.")
+        raise NotComparable("no test suite found (no tox.ini, CI test step, Makefile test target, noxfile, pytest "
+                            "configuration, manage.py or test files): test mode needs the app's own tests. Use "
+                            "the HTTP twin (`doppel run` with a doppel.toml) instead.")
     log(f"[tests] test command: {test}   (from {found['source']['test'] if test == found['test'] else 'you'})")
     if backend != "local" and install:
         log(f"[tests] install: {install[:140]}   (from {found['source']['install']})")
-    if runner is not None:
-        raw = runner(base, head, test, install)
-    elif backend == "local":
-        raw = run_local(base, head, test, log=log)
-    else:
-        raw = run_nebius(base, head, test, install, log=log)
-    worlds = {w: read_world(raw[w]) for w in WORLDS}
-    a, a2, b = worlds["A"], worlds["A2"], worlds["B"]
-    # S1: the base has to have run
-    passed, failed = _passed_or_failed(a)
-    if passed + failed == 0:
-        raise NotComparable(f"the test command ran no test on the unchanged code (exit {a['exit']}). Its output:\n"
-                            + a["output"][-3000:])
-    if failed > MAX_FAILING_SHARE * (passed + failed):
-        raise NotComparable(f"{failed} of {passed + failed} tests fail on the unchanged code here, so this environment "
-                            "is not the one the tests expect (a missing service, env var or dependency). Output:\n"
-                            + a["output"][-3000:])
-    failing_on_base = {t for w in (a, a2) for t, v in w["tests"].items() if v["outcome"] == "failed"}
-    # S2: noise from two runs of the same code
-    nz = noise(a, a2)
-    # S4: something to compare
-    requests = sum(len(t["requests"]) for t in a["tests"].values())
-    if requests == 0:
-        raise NotComparable(f"the tests ran ({passed} passed) but sent no request through a test client Doppel "
-                            "records (Flask/Werkzeug, Django/DRF, Starlette/FastAPI), so there is no traffic to "
-                            "compare. "
-                            "The tests' own pass/fail still applies; for behavior checks use the HTTP twin.")
-    findings, stats = compare_worlds(a, b, nz, failing_on_base)
+    session = (runner or open_session)(backend, base, head, install, log)
+    try:
+        plan = shards(base, test)
+        if len(plan) > 1:
+            log(f"[tests] {len(test_files(base, test))} test files: split across {len(plan)} sandboxes per world")
+        log(f"[tests] running `{test}` in 3 worlds (base, base again, head)")
+        runs = session.run([(code, cmd) for code in ("base", "base", "head") for cmd in plan])
+        k = len(plan)
+        worlds = {w: read_world(merge(runs[i * k:(i + 1) * k])) for i, w in enumerate(WORLDS)}
+        a, a2, b = worlds["A"], worlds["A2"], worlds["B"]
+        # S1: the base has to have run
+        passed, failed = _passed_or_failed(a)
+        if passed + failed == 0:
+            raise NotComparable(f"the test command ran no test on the unchanged code (exit {a['exit']}). "
+                                "Its output:\n" + a["output"][-3000:])
+        if failed > MAX_FAILING_SHARE * (passed + failed):
+            raise NotComparable(f"{failed} of {passed + failed} tests fail on the unchanged code here, so this "
+                                "environment is not the one the tests expect (a missing service, env var or "
+                                "dependency). Output:\n" + a["output"][-3000:])
+        failing_on_base = {t for w in (a, a2) for t, v in w["tests"].items() if v["outcome"] == "failed"}
+        # S2: noise from two runs of the same code
+        nz = noise(a, a2)
+        # S4: something to compare
+        requests = sum(len(t["requests"]) for t in a["tests"].values())
+        if requests == 0:
+            raise NotComparable(f"the tests ran ({passed} passed) but sent no request through a test client Doppel "
+                                "records (Flask/Werkzeug, Django/DRF, Starlette/FastAPI, httpx, requests to a "
+                                "local server), so there is no traffic to compare. The tests' own pass/fail still "
+                                "applies; for behavior checks use the HTTP twin.")
+        findings, stats = compare_worlds(a, b, nz, failing_on_base)
+        # S5: a difference counts only if it happens again
+        findings, confirmed = confirm(session, base, test, findings, a, b, nz, failing_on_base, log)
+        stats["confirmation"] = confirmed
+    finally:
+        session.close()
     stats.update(passed=passed, failing_on_base=len(failing_on_base), flaky=len(nz["flaky"]),
                  unstable=len(nz["unstable"]), noisy_keys=len(nz["keys"]), recorded_requests=requests)
     if a["recorder_errors"] or b["recorder_errors"]:
@@ -659,9 +916,18 @@ def report(result: dict, judged: dict | None = None) -> str:
              + (f"Left out: {'; '.join(left_out)}. " if left_out else "")
              + (f"Ignored as noise (they differ between two runs of the same code): "
                 f"{', '.join(f'`{k}`' for k in result['noise_keys'][:12])}. " if result["noise_keys"] else "")
-             + (f"{st['new_tests']} test(s) the PR adds have no baseline and are not compared." if st["new_tests"]
-                else "") + "</sub>"]
+             + (f"{st['new_tests']} test(s) the PR adds have no baseline and are not compared. " if st["new_tests"]
+                else "") + _confirmation_line(st.get("confirmation") or {}) + "</sub>"]
     return "\n".join(lines) + "\n"
+
+
+def _confirmation_line(c: dict) -> str:
+    if c.get("ran"):
+        return (f"Every difference was re-checked by rerunning its {c['tests']} test(s) on base and head"
+                + (f"; {c['dropped']} that did not happen again were dropped as noise." if c.get("dropped") else "."))
+    if c.get("reason") and c["reason"] != "no differences":
+        return f"Differences were not re-checked ({c['reason']})."
+    return ""
 
 
 def not_comparable(reason: str) -> str:

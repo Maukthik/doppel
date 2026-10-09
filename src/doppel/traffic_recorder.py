@@ -22,6 +22,7 @@ Output, under $DOPPEL_TRAFFIC_OUT:
 """
 from __future__ import annotations
 
+import contextvars
 import importlib.abc
 import importlib.util
 import json
@@ -103,16 +104,21 @@ def record(method: str, path: str, query: str, sent, status: int, ctype: str, bo
         _error("record")
 
 
+_depth = contextvars.ContextVar("doppel_depth", default=0)
+
+
 class _Outermost:
-    """Record only the outermost call on this thread (redirect following re-enters the client)."""
+    """Record only the outermost call (a client following redirects, or a test client built on httpx, calls
+    itself again). A context variable, not a thread-local: concurrent asyncio requests share one thread, and
+    each task has its own context."""
 
     def __enter__(self):
-        depth = getattr(_local, "depth", 0)
-        _local.depth = depth + 1
+        depth = _depth.get()
+        self._token = _depth.set(depth + 1)
         return depth == 0
 
     def __exit__(self, *exc):
-        _local.depth -= 1
+        _depth.reset(self._token)
         return False
 
 
@@ -214,7 +220,143 @@ def _hook_starlette(module) -> None:
         cls.handle_request = make(handle)
 
 
-HOOKS = {"werkzeug.test": _hook_werkzeug, "django.test.client": _hook_django, "starlette.testclient": _hook_starlette}
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "testserver"}
+
+
+def _is_local(host) -> bool:
+    """Live-server tests talk to the app on this machine; anything else is the app calling out (never recorded)."""
+    return str(host or "").lower().strip("[]") in {h.strip("[]") for h in LOCAL_HOSTS}
+
+
+def _httpx_record(request, response, t0) -> None:
+    try:
+        try:
+            sent = request.content
+        except Exception:  # noqa: BLE001 - a streamed body
+            sent = None
+        record(request.method, request.url.path, request.url.query.decode("latin-1")
+               if isinstance(request.url.query, bytes) else request.url.query, sent, response.status_code,
+               response.headers.get("content-type", ""), response.content, (time.perf_counter() - t0) * 1000)
+    except Exception:  # noqa: BLE001
+        _error("httpx")
+
+
+def _hook_httpx(module) -> None:
+    """httpx transports: ASGI (FastAPI/Starlette async tests: AsyncClient(transport=ASGITransport(app))),
+    WSGI (Flask/Django through httpx), and the network transports, for requests to a live local server."""
+    def wrap_sync(cls, local_only):
+        original = getattr(cls, "handle_request", None)
+        if original is None or getattr(original, "_doppel", False):
+            return
+
+        def handle_request(self, request):
+            with _Outermost() as outermost:
+                t0 = time.perf_counter()
+                response = original(self, request)
+                if outermost and (not local_only or _is_local(request.url.host)):
+                    try:
+                        response.read()
+                    except Exception:  # noqa: BLE001
+                        _error("httpx read")
+                        return response
+                    _httpx_record(request, response, t0)
+                return response
+        handle_request._doppel = True
+        cls.handle_request = handle_request
+
+    def wrap_async(cls, local_only):
+        original = getattr(cls, "handle_async_request", None)
+        if original is None or getattr(original, "_doppel", False):
+            return
+
+        async def handle_async_request(self, request):
+            with _Outermost() as outermost:
+                t0 = time.perf_counter()
+                response = await original(self, request)
+                if outermost and (not local_only or _is_local(request.url.host)):
+                    try:
+                        await response.aread()
+                    except Exception:  # noqa: BLE001
+                        _error("httpx aread")
+                        return response
+                    _httpx_record(request, response, t0)
+                return response
+        handle_async_request._doppel = True
+        cls.handle_async_request = handle_async_request
+
+    for name, kind, local_only in (("ASGITransport", "async", False), ("WSGITransport", "sync", False),
+                                   ("HTTPTransport", "sync", True), ("AsyncHTTPTransport", "async", True)):
+        cls = getattr(module, name, None)
+        if isinstance(cls, type):
+            (wrap_async if kind == "async" else wrap_sync)(cls, local_only)
+
+
+def _hook_requests(module) -> None:
+    """requests against a live local server (Django LiveServerTestCase, pytest-flask's live_server, ...)."""
+    HTTPAdapter = getattr(module, "HTTPAdapter", None)  # noqa: N806
+    if HTTPAdapter is None or getattr(HTTPAdapter.send, "_doppel", False):
+        return
+    original = HTTPAdapter.send
+
+    def send(self, request, *args, **kwargs):
+        with _Outermost() as outermost:
+            t0 = time.perf_counter()
+            response = original(self, request, *args, **kwargs)
+            if outermost:
+                try:
+                    from urllib.parse import urlsplit
+                    url = urlsplit(request.url)
+                    if _is_local(url.hostname):
+                        record(request.method, url.path or "/", url.query, request.body, response.status_code,
+                               response.headers.get("Content-Type", ""), response.content,
+                               (time.perf_counter() - t0) * 1000)
+                except Exception:  # noqa: BLE001
+                    _error("requests")
+            return response
+    send._doppel = True
+    HTTPAdapter.send = send
+
+
+def _hook_django_async(module) -> None:
+    AsyncClient = getattr(module, "AsyncClient", None)  # noqa: N806
+    if AsyncClient is None or getattr(AsyncClient.request, "_doppel", False):
+        return
+    original = AsyncClient.request
+
+    async def request(self, **scope):
+        with _Outermost() as outermost:
+            t0 = time.perf_counter()
+            try:
+                response = await original(self, **scope)
+            except Exception as e:
+                if outermost:
+                    record(scope.get("method", "GET"), scope.get("path", ""), _qs(scope.get("query_string", "")),
+                           None, 0, "text/plain", f"{type(e).__name__}: {e}", (time.perf_counter() - t0) * 1000)
+                raise
+            if outermost:
+                try:
+                    body = "(streaming response)" if getattr(response, "streaming", False) else response.content
+                    record(scope.get("method", "GET"), scope.get("path", ""), _qs(scope.get("query_string", "")),
+                           None, response.status_code, response.get("Content-Type", ""), body,
+                           (time.perf_counter() - t0) * 1000)
+                except Exception:  # noqa: BLE001
+                    _error("django async")
+            return response
+    request._doppel = True
+    AsyncClient.request = request
+
+
+def _qs(value) -> str:
+    return value.decode("latin-1") if isinstance(value, bytes) else str(value or "")
+
+
+def _hook_django_all(module) -> None:
+    _hook_django(module)
+    _hook_django_async(module)
+
+
+HOOKS = {"werkzeug.test": _hook_werkzeug, "django.test.client": _hook_django_all,
+         "starlette.testclient": _hook_starlette, "httpx": _hook_httpx, "requests.adapters": _hook_requests}
 
 
 class _PostImport(importlib.abc.MetaPathFinder):

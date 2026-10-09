@@ -302,3 +302,164 @@ def test_a_parent_test_run_never_leaks_into_the_worlds():
                                          "PATH": "/bin", "PYTHONHASHSEED": "7"})
     assert "PYTEST_CURRENT_TEST" not in env and env["PYTEST_ADDOPTS"] == "-p no:randomly -p no:cacheprovider"
     assert env["PATH"] == "/bin" and env["PYTHONHASHSEED"] == "0"
+
+
+# ---- gaps closed: async clients, live servers, detection, large suites, confirmation ----------
+
+def _two(tmp_path, files_base: dict, files_head: dict):
+    for name, files in (("b", files_base), ("h", files_head)):
+        root = tmp_path / name
+        for rel, text in files.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(textwrap.dedent(text), encoding="utf-8")
+    return tmp_path / "b", tmp_path / "h"
+
+
+ASYNC_FASTAPI = '''
+from fastapi import FastAPI
+app = FastAPI()
+
+@app.get("/items/{n}")
+async def item(n: int):
+    return {"n": n, "price": n * PRICE}
+'''
+ASYNC_TEST = '''
+import asyncio
+import httpx
+from main import app
+
+def test_items_concurrently():
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+            return await asyncio.gather(*(c.get(f"/items/{i}") for i in range(3)))
+    assert all(r.status_code == 200 for r in asyncio.run(go()))
+'''
+
+
+def test_fastapi_async_tests_through_httpx_are_recorded_one_request_each(tmp_path):
+    pytest.importorskip("fastapi")
+    base, head = _two(tmp_path, {"main.py": "PRICE = 10\n" + ASYNC_FASTAPI, "test_main.py": ASYNC_TEST},
+                      {"main.py": "PRICE = 12\n" + ASYNC_FASTAPI, "test_main.py": ASYNC_TEST})
+    r = check(base, head, backend="local")
+    assert r["stats"]["recorded_requests"] == 3                       # concurrent requests: each recorded once
+    assert sorted(f.request for f in r["findings"]) == ["GET /items/1", "GET /items/2"]   # 0 * price is 0
+
+
+def test_django_async_client_is_recorded(tmp_path):
+    pytest.importorskip("django")
+    common = {"proj/__init__.py": "", "proj/settings.py": '''
+                SECRET_KEY = "x"; ROOT_URLCONF = "proj.urls"; ALLOWED_HOSTS = ["*"]
+                INSTALLED_APPS = ["django.contrib.contenttypes", "django.contrib.auth"]
+                DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
+                ''',
+              "proj/tests.py": '''
+                from django.test import SimpleTestCase
+                class Api(SimpleTestCase):
+                    async def test_api(self):
+                        response = await self.async_client.get("/api/")
+                        self.assertEqual(response.status_code, 200)
+                ''',
+              "manage.py": '''
+                import os, sys
+                os.environ.setdefault("DJANGO_SETTINGS_MODULE", "proj.settings")
+                from django.core.management import execute_from_command_line
+                execute_from_command_line(sys.argv)
+                '''}
+    urls = ('from django.http import JsonResponse\nfrom django.urls import path\n'
+            'urlpatterns = [path("api/", lambda r: JsonResponse({"v": %d}))]\n')
+    base, head = _two(tmp_path, {**common, "proj/urls.py": urls % 1}, {**common, "proj/urls.py": urls % 2})
+    r = check(base, head, backend="local")
+    assert [(f.request, f.detail) for f in r["findings"]] == [("GET /api/", "changed: v")]
+
+
+LIVE_TEST = '''
+import threading
+import httpx, requests
+from werkzeug.serving import make_server
+from app import app
+
+def test_live_server():
+    server = make_server("127.0.0.1", 0, app)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.port}"
+    try:
+        assert requests.get(url + "/users/1").status_code == 200
+        assert httpx.get(url + "/users/9").status_code == 404
+    finally:
+        server.shutdown()
+'''
+
+
+def test_live_server_tests_are_recorded_through_requests_and_httpx(tmp_path):
+    leaky = FLASK_APP.replace('"name": u["name"],', '"name": u["name"], "secret": u["secret"],')
+    base = flask_repo(tmp_path / "b", tests=LIVE_TEST)
+    head = flask_repo(tmp_path / "h", leaky, LIVE_TEST)
+    r = check(base, head, backend="local")
+    assert r["stats"]["recorded_requests"] == 2
+    assert [(f.request, f.detail) for f in r["findings"]] == [("GET /users/1", "changed: secret (added)")]
+
+
+def test_only_local_destinations_count_as_the_app():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("rec", Path(traffic.RECORDER))
+    rec = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rec)
+    assert all(rec._is_local(h) for h in ("localhost", "127.0.0.1", "[::1]", "0.0.0.0", "testserver"))
+    assert not any(rec._is_local(h) for h in ("api.stripe.com", "example.org", "10.0.0.5"))
+
+
+def test_makefile_noxfile_and_subfolder_detection(tmp_path):
+    (tmp_path / "Makefile").write_text("lint:\n\tflake8\n\ntest:\n\t@pytest -q tests --cov=x\n", encoding="utf-8")
+    found = detect(tmp_path)
+    assert found["test"] == "python -m pytest -q tests" and found["source"]["test"] == "Makefile"
+    (tmp_path / "Makefile").unlink()
+    (tmp_path / "noxfile.py").write_text('@nox.session\ndef tests(session):\n    session.run("pytest", "-x", '
+                                         '"tests")\n', encoding="utf-8")
+    assert detect(tmp_path)["test"] == "python -m pytest -x tests"
+    mono = tmp_path / "mono"
+    (mono / "services" / "api").mkdir(parents=True)
+    (mono / "services" / "api" / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    with pytest.raises(NotComparable, match="services/api"):
+        check(mono, mono, backend="local")
+
+
+def test_a_large_suite_is_split_by_file_and_merged_back(tmp_path):
+    many = {f"tests/test_m{i:02d}.py": f"from app import app\n\ndef test_{i}():\n"
+                                       f"    assert app.test_client().get('/users/1').status_code == 200\n"
+            for i in range(traffic.SHARD_FILES + 5)}
+    base = flask_repo(tmp_path / "b", tests="def test_x():\n    pass\n")
+    for rel, text in many.items():
+        (base / rel).write_text(text, encoding="utf-8")
+    plan = traffic.shards(base, "python -m pytest -q")
+    assert len(plan) == 2 and all("tests/test_m" in cmd for cmd in plan)
+    r = check(base, base, backend="local")
+    assert r["stats"]["passed"] == traffic.SHARD_FILES + 6 and r["findings"] == []
+
+
+def test_a_difference_that_does_not_happen_again_is_dropped(tmp_path, monkeypatch):
+    flag = tmp_path / "rare-seen"
+    monkeypatch.setenv("RARE_FLAG", str(flag))
+    rare = FLASK_APP.replace('return jsonify({"id": u["id"], "name": u["name"], "nonce": random.random()})',
+                             'import os\n    once = RARE and not os.path.exists(os.environ["RARE_FLAG"])\n'
+                             '    if once:\n        open(os.environ["RARE_FLAG"], "w").close()\n'
+                             '    return jsonify({"id": u["id"], "name": "glitch" if once else u["name"], '
+                             '"nonce": random.random()})')
+    base = flask_repo(tmp_path / "b", rare.replace("app = Flask(__name__)", "app = Flask(__name__)\nRARE = False"))
+    head = flask_repo(tmp_path / "h", rare.replace("app = Flask(__name__)", "app = Flask(__name__)\nRARE = True"))
+    r = check(base, head, backend="local")
+    assert r["findings"] == [] and r["stats"]["confirmation"] == {"ran": True, "tests": 1, "dropped": 1}
+
+
+def test_a_real_difference_survives_confirmation(tmp_path):
+    base, head = pair(tmp_path, FLASK_APP.replace("if qty <= 0:", "if qty < 0:"))
+    r = check(base, head, backend="local")
+    assert len(r["findings"]) == 1 and r["stats"]["confirmation"]["ran"] and not r["stats"]["confirmation"]["dropped"]
+
+
+def test_confirm_commands_select_single_tests(tmp_path):
+    (tmp_path / "tests").mkdir()
+    assert traffic.confirm_command(tmp_path, "python -m pytest -p no:logging tests -q", ["tests/a.py::t"]) == \
+        "python -m pytest -p no:logging -q tests/a.py::t"
+    assert traffic.confirm_command(tmp_path, "python manage.py test blog", ["blog.tests.T.test_a"]) == \
+        "python manage.py test blog.tests.T.test_a"
+    assert traffic.confirm_command(tmp_path, "make test", ["x"]) == ""
