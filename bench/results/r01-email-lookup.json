@@ -2235,5 +2235,81 @@
   "backend": "nebius",
   "judge_version": 2
  },
- "set": "main"
+ "set": "main",
+ "testmode": {
+  "detected": true,
+  "caught": true,
+  "caught_by_traffic": true,
+  "any_regression": true,
+  "needs_human": 0,
+  "findings": [
+   {
+    "kind": "test",
+    "test": "tests/test_users.py::UserTests::test_create_user",
+    "request": "(test outcome)",
+    "detail": "the test passed on base and fails on head",
+    "base": "\"passed\"",
+    "head": "\"failed\"",
+    "label": "regression",
+    "why": "The test fails because removing the validate_email method eliminates application-level email uniqueness validation, causing a database integrity error instead of a validation error.",
+    "on_target": true
+   },
+   {
+    "kind": "body",
+    "test": "tests/test_users.py::UserTests::test_create_user",
+    "request": "POST /api/users",
+    "detail": "changed: description, errors (removed), message",
+    "base": "{\"description\": \"The server found one or more errors in the information that you sent.\", \"errors\": {\"json\": {\"email\": [\"Use a different email.\"]}}, \"message\": \"Validation Error\"}",
+    "head": "{\"description\": \"UNIQUE constraint failed: users.email\", \"errors\": \"(absent)\", \"message\": \"Database integrity error\"}",
+    "label": "regression",
+    "why": "The API now returns a 500 database integrity error with a different message instead of a 400 validation error with structured field errors when duplicate email is submitted.",
+    "on_target": true
+   },
+   {
+    "kind": "error",
+    "test": "tests/test_users.py::UserTests::test_create_user",
+    "request": "GET /api/users/2",
+    "detail": "status 200 -> 500",
+    "base": "200",
+    "head": "500",
+    "label": "regression",
+    "why": "The GET /api/users/2 request now returns 500 instead of 200 because the failed user creation leaves the database in an inconsistent state.",
+    "on_target": false
+   }
+  ],
+  "finding_count": 3,
+  "summary": "Removing the validate_email method removes application-level email uniqueness validation, causing database integrity errors instead of proper validation errors and breaking user creation flow.",
+  "stats": {
+   "tests": 44,
+   "requests": 117,
+   "new_tests": 0,
+   "removed_tests": 0,
+   "passed": 44,
+   "failing_on_base": 0,
+   "flaky": 0,
+   "unstable": 1,
+   "noisy_keys": 5,
+   "recorded_requests": 117
+  },
+  "noise_keys": [
+   "access_token",
+   "first_seen",
+   "last_seen",
+   "refresh_token",
+   "timestamp"
+  ],
+  "flaky": [],
+  "unstable": [
+   "tests/test_pagination.py::PaginationTests::test_pagination_after_desc"
+  ],
+  "test_command": "python -m pytest -p no:logging",
+  "backend": "nebius",
+  "usd": {
+   "judge": 0.002141
+  },
+  "seconds": {
+   "suite": 31.6,
+   "judge": 3.4
+  }
+ }
 }

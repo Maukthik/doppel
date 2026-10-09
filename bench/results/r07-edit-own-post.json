@@ -2867,5 +2867,81 @@
   "backend": "nebius",
   "judge_version": 2
  },
- "set": "main"
+ "set": "main",
+ "testmode": {
+  "detected": true,
+  "caught": true,
+  "caught_by_traffic": true,
+  "any_regression": true,
+  "needs_human": 0,
+  "findings": [
+   {
+    "kind": "test",
+    "test": "tests/test_posts.py::PostTests::test_edit_post",
+    "request": "(test outcome)",
+    "detail": "the test passed on base and fails on head",
+    "base": "\"passed\"",
+    "head": "\"failed\"",
+    "label": "regression",
+    "why": "The test fails on head because the ownership check now compares post.user_id (an integer) to token_auth.current_user() (a User object), which always evaluates to False, causing a 403 instead of 200.",
+    "on_target": true
+   },
+   {
+    "kind": "status",
+    "test": "tests/test_posts.py::PostTests::test_edit_post",
+    "request": "PUT /api/posts/1",
+    "detail": "status 200 -> 403",
+    "base": "200",
+    "head": "403",
+    "label": "regression",
+    "why": "The status changes from 200 to 403 because the condition post.user_id != token_auth.current_user() incorrectly compares an integer to a User object, always failing the ownership check.",
+    "on_target": true
+   },
+   {
+    "kind": "request",
+    "test": "tests/test_posts.py::PostTests::test_edit_post",
+    "request": "GET /api/posts/1",
+    "detail": "a request only the base run made",
+    "base": "200",
+    "head": "\"(not sent)\"",
+    "label": "intended",
+    "why": "Announced in the PR description: \"Compare the post's `user_id` instead of loading the `author` relationship on every edit.\". The GET /api/posts/1 request is no longer sent on head because the PUT request fails with 403 due to the broken ownership check, so the test does not proceed to fetch the updated post.",
+    "on_target": false
+   }
+  ],
+  "finding_count": 3,
+  "summary": "The PR introduces a regression by comparing post.user_id (int) to token_auth.current_user() (User object) instead of post.user_id to token_auth.current_user().id, breaking post editing for all users.",
+  "stats": {
+   "tests": 44,
+   "requests": 117,
+   "new_tests": 0,
+   "removed_tests": 0,
+   "passed": 44,
+   "failing_on_base": 0,
+   "flaky": 0,
+   "unstable": 1,
+   "noisy_keys": 5,
+   "recorded_requests": 117
+  },
+  "noise_keys": [
+   "access_token",
+   "first_seen",
+   "last_seen",
+   "refresh_token",
+   "timestamp"
+  ],
+  "flaky": [],
+  "unstable": [
+   "tests/test_pagination.py::PaginationTests::test_pagination_after_desc"
+  ],
+  "test_command": "python -m pytest -p no:logging",
+  "backend": "nebius",
+  "usd": {
+   "judge": 0.002255
+  },
+  "seconds": {
+   "suite": 32.8,
+   "judge": 3.0
+  }
+ }
 }
