@@ -217,13 +217,16 @@ def summary() -> Path:
              "test written after the bug was found hidden. Python and libraries are the bug's own (BugsInPy).", "",
              f"**{count['caught']} caught · {count['invisible']} invisible (the suite never sent a request through "
              f"the bug) · {count['not runnable']} not runnable** — of {len(rows)} run.", "",
-             "| Bug | Python | Result | Tests run | Requests | Detail |", "|---|---|---|---|---|---|"]
+             "Unconfirmed = differences seen once but not when their tests were rerun (dropped as noise by "
+             "safeguard S5, kept in each bug's JSON under stats.confirmation.unconfirmed for audit).", "",
+             "| Bug | Python | Result | Tests run | Requests | Unconfirmed | Detail |", "|---|---|---|---|---|---|---|"]
     for r in rows:
         st = r.get("stats") or {}
         detail = (r["findings"][0]["request"] + ": " + r["findings"][0]["detail"])[:90] if r.get("findings") else \
             (r.get("reason", "") or "").splitlines()[0][:90] if r.get("reason") else ""
+        unconfirmed = (st.get("confirmation") or {}).get("dropped", "")
         lines.append(f"| {r['project']} #{r['bug']} | {r['python']} | {r['status']} | {st.get('passed', '')} | "
-                     f"{st.get('recorded_requests', '')} | {detail.replace('|', '/')} |")
+                     f"{st.get('recorded_requests', '')} | {unconfirmed or ''} | {detail.replace('|', '/')} |")
     out = RESULTS / "README.md"
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines))

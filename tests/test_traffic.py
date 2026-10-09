@@ -449,7 +449,9 @@ def test_a_difference_that_does_not_happen_again_is_dropped(tmp_path, monkeypatc
     base = flask_repo(tmp_path / "b", rare.replace("app = Flask(__name__)", "app = Flask(__name__)\nRARE = False"))
     head = flask_repo(tmp_path / "h", rare.replace("app = Flask(__name__)", "app = Flask(__name__)\nRARE = True"))
     r = check(base, head, backend="local")
-    assert r["findings"] == [] and r["stats"]["confirmation"] == {"ran": True, "tests": 1, "dropped": 1}
+    c = r["stats"]["confirmation"]
+    assert r["findings"] == [] and (c["ran"], c["tests"], c["dropped"]) == (True, 1, 1)
+    assert c["unconfirmed"][0]["request"] == "GET /users/1" and "name" in c["unconfirmed"][0]["detail"]
 
 
 def test_a_real_difference_survives_confirmation(tmp_path):

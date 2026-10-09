@@ -912,10 +912,14 @@ def confirm(session, base: Path, test: str, findings: list[Finding], a: dict, b:
                         for k in set(nz["paths"]) | set(nz2["paths"])}}
     seen_again = {_key(f) for f in compare_worlds(again_a, again_b, merged, excluded)[0]}
     kept = [f for f in findings if _key(f) in seen_again and f.persona not in merged["flaky"]]
-    dropped = len(findings) - len(kept)
-    if dropped:
-        log(f"[tests] {dropped} difference(s) did not happen again and were dropped as noise")
-    return kept, {"ran": True, "tests": len(tests), "dropped": dropped}
+    gone = [f for f in findings if f not in kept]
+    if gone:
+        log(f"[tests] {len(gone)} difference(s) did not happen again and were dropped as noise")
+    # kept for audit, never as findings: a difference that depends on test order (state left by earlier tests)
+    # can also fail to come back when only its tests rerun, and a reader should be able to tell the two apart
+    unconfirmed = [{"kind": f.kind, "test": f.persona, "request": f.request, "detail": f.detail[:300],
+                    "base": str(f.base)[:300], "head": str(f.head)[:300]} for f in gone[:50]]
+    return kept, {"ran": True, "tests": len(tests), "dropped": len(gone), "unconfirmed": unconfirmed}
 
 
 RECORDED = {"werkzeug/Flask test client": r"test_client\(|werkzeug\.test|flask\.testing",
