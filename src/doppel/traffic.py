@@ -475,28 +475,40 @@ class NebiusSession:
     each a disposable fork, all at the same time."""
 
     def __init__(self, base: Path, head: Path, install: str = "", image: str = "", log=lambda m: None,
-                 extra_env: dict | None = None):
+                 extra_env: dict | None = None, python: str = ""):
         import asyncio
         import shlex
 
         from doppel.backends.nebius import APP, code_files, make_client
-        from doppel.probe import image_for
+        from doppel.probe import IMAGE, image_for
+        if not python and image_for(base) != IMAGE:   # the app declares another Python (requires-python)
+            python = image_for(base).split(":")[1].split("-")[0]
+            log(f"[tests] the app needs Python {python}: it will be installed in the sandbox")
         self.loop = asyncio.new_event_loop()
         self.log, self.app = log, APP
         changed, removed = _changed_files(base, head)
         changed = [c for c in changed if not is_test_file(c)]   # head world: the PR's code, the base's tests
         removed = [r for r in removed if not is_test_file(r)]
         sandbox_env = world_env("/doppel/hook", "/tmp/dt", {}, ":", extra=extra_env)
-        self.exports = "".join(f"export {k}={shlex.quote(v)}; " for k, v in sandbox_env.items())
+        # another Python than the image's: installed inside the sandbox with uv, into a venv every job uses (the
+        # platform need not offer a python:X.Y image; asking for one it lacks fails to start the sandbox)
+        self.venv = PYTHON_VENV if python and PYTHON_VERSION.match(python) else ""
+        activate = f"export VIRTUAL_ENV={self.venv}; export PATH={self.venv}/bin:$PATH; " if self.venv else ""
+        self.exports = activate + "".join(f"export {k}={shlex.quote(v)}; " for k, v in sandbox_env.items())
+        provision = (f"pip install --quiet uv && uv python install {python} && "
+                     f"uv venv --quiet --seed -p {python} {self.venv} && {activate}") if self.venv else ""
         self.files = {f"doppel/hook/{n}": d for n, d in hook_files().items()}
 
         async def build():
             client = make_client()
-            img = await client.images.use(image or image_for(base))
+            img = await client.images.use(image or IMAGE)   # always the standard image (see python)
             img = await img.apply_files(code_files(base))
-            if install:
+            if provision:
+                log(f"[tests] installing Python {python} in the sandbox (uv)")
+            if install or provision:
                 log(f"[tests] installing once: {install[:120]}")
-                img = await img.run(shell=f"cd {APP} && {install}", disposable=False, timeout=TEST_TIMEOUT)
+                img = await img.run(shell=f"cd {APP} && {provision}{install or 'true'}", disposable=False,
+                                    timeout=TEST_TIMEOUT)
                 if img.exit_code != 0:
                     raise NotComparable("the install command failed:\n"
                                         + ((img.stdout or "") + (img.stderr or ""))[-3000:])
@@ -507,7 +519,8 @@ class NebiusSession:
                 head_img = await head_img.run(shell=rm, disposable=False, timeout=120)
             if install and any(DEPENDENCY_FILES.search(c) for c in changed + removed):
                 log("[tests] the PR changes dependencies: installing them again for head")
-                head_img = await head_img.run(shell=f"cd {APP} && {install}", disposable=False, timeout=TEST_TIMEOUT)
+                head_img = await head_img.run(shell=f"cd {APP} && {activate}{install}", disposable=False,
+                                              timeout=TEST_TIMEOUT)
             return {"base": img, "head": head_img}
         self.images = self.loop.run_until_complete(build())
 
@@ -544,16 +557,16 @@ def _untar(stdout: str, stderr: str) -> dict:
 
 
 PYTHON_VERSION = re.compile(r"^3\.\d{1,2}$")
+PYTHON_VENV = "/opt/doppel-python"
 
 
 def open_session(backend: str, base: Path, head: Path, install: str, log=lambda m: None, python: str = "",
                  extra_env: dict | None = None):
-    """python: a version ("3.8": the Nebius image python:3.8-slim) or, locally, an interpreter path (its
-    venv runs the tests). Empty: the app's requires-python decides the image; locally, your environment."""
+    """python: a version ("3.8": installed in the sandbox with uv, on the standard image) or, locally, an
+    interpreter path (its venv runs the tests). Empty: the image's Python; locally, your environment."""
     if backend == "local":
         return LocalSession(base, head, install, log, python=python, extra_env=extra_env)
-    image = f"python:{python}-slim" if PYTHON_VERSION.match(python or "") else ""
-    return NebiusSession(base, head, install, image=image, log=log, extra_env=extra_env)
+    return NebiusSession(base, head, install, log=log, extra_env=extra_env, python=python)
 
 
 # ---------------------------------------------------------------- 3b. planning: shards and confirmation

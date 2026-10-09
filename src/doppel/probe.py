@@ -50,7 +50,13 @@ def probe_local(repo: str | Path, env: dict | None = None, timeout: int = 120) -
 
 async def _probe_nebius(client, repo: Path, install: str, image: str, exports: str) -> dict:
     from doppel.backends.nebius import APP, code_files
-    img = await client.images.use(image)
+    python = image.split(":")[1].split("-")[0] if image != IMAGE and ":" in image else ""
+    if python:   # never ask the platform for a python:X.Y image it may not have: install that Python with uv
+        venv = "/opt/doppel-python"
+        exports = (f"export VIRTUAL_ENV={venv}; export PATH={venv}/bin:$PATH; ") + exports
+        install = (f"pip install --quiet uv && uv python install {python} && uv venv --quiet --seed -p {python} "
+                   f"{venv} && {exports}" + (install or "true"))
+    img = await client.images.use(IMAGE)
     img = await img.apply_files(code_files(repo))
     run_probe = f"{exports}python /doppel/probe_app.py"
     shell = (f"cd {APP} && ({exports}{install}) > /tmp/install.log 2>&1; rc=$?; "

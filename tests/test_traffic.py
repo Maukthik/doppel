@@ -617,3 +617,39 @@ def test_why_nothing_was_recorded_names_what_the_tests_use(tmp_path):
     assert "websockets" in traffic.why_nothing_recorded(tmp_path)
     (tmp_path / "tests" / "test_ws.py").write_text("def test_math():\n    assert 1 + 1 == 2\n")
     assert "test functions directly" in traffic.why_nothing_recorded(tmp_path)
+
+
+def test_nebius_never_asks_for_another_image_and_installs_the_python_in_the_sandbox(tmp_path, monkeypatch):
+    """python:3.8-slim did not exist on the platform (NotFoundError starting the sandbox): every Python now
+    comes from the standard image plus uv, and every job runs in that venv."""
+    from doppel.backends import nebius
+    from doppel.probe import IMAGE
+    seen = {"images": [], "shells": []}
+
+    class Image:
+        exit_code, stdout, stderr = 0, "", ""
+
+        async def apply_files(self, files):
+            return self
+
+        async def run(self, shell, **kw):
+            seen["shells"].append(shell)
+            return self
+
+    class Images:
+        async def use(self, name):
+            seen["images"].append(name)
+            return Image()
+
+    class Client:
+        images = Images()
+    monkeypatch.setattr(nebius, "make_client", lambda: Client())
+    base, head = pair(tmp_path)
+    session = traffic.NebiusSession(base, head, install="pip install -r requirements.txt", python="3.8")
+    session.run([("base", "python -m pytest -q")])
+    session.close()
+    assert seen["images"] == [IMAGE]
+    install, job = seen["shells"][0], seen["shells"][-1]
+    assert "uv python install 3.8" in install and "uv venv --quiet --seed -p 3.8" in install
+    assert install.index("uv venv") < install.index("pip install -r requirements.txt")
+    assert "export PATH=/opt/doppel-python/bin:$PATH" in job and job.index("doppel-python") < job.index("pytest")
