@@ -271,7 +271,8 @@ def arm_testmode(base: Path, head: Path, pr: dict, backend: str, use_judge: bool
     rows = [{"kind": f.kind, "test": f.persona, "request": f.request, "detail": f.detail,
              "base": json.dumps(f.base, default=str)[:300], "head": json.dumps(f.head, default=str)[:300],
              "label": v.label, "why": v.why,
-             "on_target": bool(f.kind == "test" or (expect and expect.search(f.request)))}
+             "on_target": bool(f.kind == "test" or "test fails on this" in f.detail
+                               or (expect and expect.search(f.request)))}
             for f, v in zip(findings, judged["verdicts"], strict=True)]
     regressions = [x for x in rows if x["label"] in ("regression", "unjudged")]
     return {"detected": any(x["on_target"] for x in rows) if expect else bool(rows),

@@ -259,7 +259,10 @@ def _hook_unittest() -> None:
             def wrapped(self, test, *args):
                 try:
                     if "PYTEST_CURRENT_TEST" not in os.environ:  # pytest reports through the plugin instead
-                        _write("outcomes", {"test": test.id(), "when": "call", "outcome": outcome})
+                        entry = {"test": test.id(), "when": "call", "outcome": outcome}
+                        if outcome == "failed" and args and isinstance(args[0], tuple) and len(args[0]) == 3:
+                            entry["message"] = "".join(traceback.format_exception(*args[0]))[-1500:]
+                        _write("outcomes", entry)
                 except Exception:  # noqa: BLE001
                     _error("unittest outcome")
                 return original(self, test, *args)
@@ -288,6 +291,9 @@ def install() -> None:
 def pytest_runtest_logreport(report) -> None:
     try:
         if report.when == "call" or report.outcome != "passed":
-            _write("outcomes", {"test": report.nodeid, "when": report.when, "outcome": report.outcome})
+            entry = {"test": report.nodeid, "when": report.when, "outcome": report.outcome}
+            if report.outcome == "failed":
+                entry["message"] = str(getattr(report, "longreprtext", "") or "")[-1500:]
+            _write("outcomes", entry)
     except Exception:  # noqa: BLE001
         _error("pytest outcome")

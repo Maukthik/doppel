@@ -429,6 +429,7 @@ def read_world(files: dict) -> dict:
                 t = tests.setdefault(e["test"], {"outcome": "unknown", "requests": []})
                 if e["outcome"] in ("failed", "error"):
                     t["outcome"] = "failed"
+                    t["message"] = e.get("message", "") or t.get("message", "")
                 elif e["outcome"] == "skipped" and t["outcome"] != "failed":
                     t["outcome"] = "skipped"
                 elif e["outcome"] == "passed" and t["outcome"] == "unknown":
@@ -513,17 +514,25 @@ def compare_worlds(a: dict, b: dict, nz: dict, excluded: set[str]) -> tuple[list
             continue
         stats["tests"] += 1
         stats["requests"] += len(ta["requests"])
-        if ta["outcome"] == "passed" and tb["outcome"] == "failed":
-            findings.append(Finding("test", test, 0, "(test outcome)", "the test passed on base and fails on head",
-                                    "passed", "failed"))
+        broke = ta["outcome"] == "passed" and tb["outcome"] == "failed"
         if test in nz["unstable"]:
+            if broke:
+                findings.append(_test_failed(test, tb))
             continue
         pairs, only_a, only_b = _align(ta["requests"], tb["requests"])
+        if broke and pairs:
+            # the test stopped at a failing assertion: whatever base sent after head's last matched request
+            # was never going to be sent. That is the test ending early, not the app behaving differently.
+            last = max(i for i, _ in pairs)
+            only_a = [i for i in only_a if i < last]
+        elif broke:
+            only_a = []
+        local: list[Finding] = []
         for i, j in pairs:
             ra, rb = ta["requests"][i], tb["requests"][j]
             if ra["status"] != rb["status"] and (test, i) not in nz["status"]:
                 crashed = rb["status"] == 0 or rb["status"] >= 500
-                findings.append(Finding("error" if crashed and not (ra["status"] == 0 or ra["status"] >= 500)
+                local.append(Finding("error" if crashed and not (ra["status"] == 0 or ra["status"] >= 500)
                                         else "status", test, i, ra["sig"], f"status {ra['status']} -> {rb['status']}",
                                         ra["status"], rb["status"]))
                 continue
@@ -533,21 +542,40 @@ def compare_worlds(a: dict, b: dict, nz: dict, excluded: set[str]) -> tuple[list
             if paths:
                 from doppel.diff import _at
                 shown = [_clean(p) for p in paths[:4]]
-                findings.append(Finding("body", test, i, ra["sig"], "changed: " + summarize_paths(paths),
+                local.append(Finding("body", test, i, ra["sig"], "changed: " + summarize_paths(paths),
                                         {p: _at(ba, p) for p in shown}, {p: _at(bb, p) for p in shown}))
         for j in only_b:
             rb = tb["requests"][j]
-            findings.append(Finding("request", test, j, rb["sig"], "a request only the head run made",
+            local.append(Finding("request", test, j, rb["sig"], "a request only the head run made",
                                     "(not sent)", rb["status"]))
         for i in only_a:
             ra = ta["requests"][i]
-            findings.append(Finding("request", test, i, ra["sig"], "a request only the base run made",
+            local.append(Finding("request", test, i, ra["sig"], "a request only the base run made",
                                     ra["status"], "(not sent)"))
+        responses = [f for f in local if f.kind in ("error", "status", "body")]
+        if broke and responses:
+            # the failing test is evidence about the response change that broke it: one change, judged once
+            cause = max(responses, key=lambda f: f.step)
+            cause.detail += " (the base branch's test fails on this)"
+        elif broke:
+            local.insert(0, _test_failed(test, tb))
+        findings += local
     stats["new_tests"] = len(set(b["tests"]) - set(a["tests"]))
     return findings, stats
 
 
 # ---------------------------------------------------------------- 6. the check, with its safeguards
+
+def _test_failed(test: str, tb: dict) -> Finding:
+    """A base test that fails on head with no response difference to explain it: its own failure message is
+    the evidence."""
+    message = (tb.get("message") or "").strip()
+    errors = [ln[1:].strip() for ln in message.splitlines() if ln.startswith("E ")]   # pytest's "E   ..." lines
+    last = ("; ".join(errors[:3]) if errors else (message.splitlines()[-1] if message else
+                                                  "(no failure message recorded)"))[:300]
+    return Finding("test", test, 0, "(test outcome)", f"the test passed on base and fails on head: {last}",
+                   "passed", "failed")
+
 
 def _passed_or_failed(world: dict) -> tuple[int, int]:
     outcomes = [t["outcome"] for t in world["tests"].values()]

@@ -91,10 +91,37 @@ def test_lost_validation_shows_as_a_status_change_while_every_test_still_passes(
     assert [(f.kind, f.detail) for f in r["findings"]] == [("status", "status 400 -> 201")]
 
 
-def test_a_test_that_starts_failing_is_reported(tmp_path):
+def test_a_test_that_starts_failing_is_attached_to_the_change_that_broke_it(tmp_path):
+    # one change, judged once: the status change carries the failing test as evidence (s03 and s07 in the
+    # benchmark were false alarms because the failure was judged as a separate, unannounced change)
     base, head = pair(tmp_path, FLASK_APP.replace("), 201", "), 200"))
-    kinds = {(f.kind, f.detail) for f in check(base, head, backend="local")["findings"]}
-    assert ("test", "the test passed on base and fails on head") in kinds and ("status", "status 201 -> 200") in kinds
+    found = [(f.kind, f.detail) for f in check(base, head, backend="local")["findings"]]
+    assert found == [("status", "status 201 -> 200 (the base branch's test fails on this)")]
+
+
+STOPS_EARLY = FLASK_TESTS.replace(
+    "    assert rv.status_code == 201\n",
+    "    assert rv.status_code == 201\n"
+    "    client().get(\"/users/1\")   # never sent on head: the assertion stops the test\n")
+
+
+def test_requests_missing_only_because_the_test_stopped_are_not_findings(tmp_path):
+    base = flask_repo(tmp_path / "b", tests=STOPS_EARLY)
+    head = flask_repo(tmp_path / "h", FLASK_APP.replace("), 201", "), 200"), STOPS_EARLY)
+    found = [(f.kind, f.request) for f in check(base, head, backend="local")["findings"]]
+    assert found == [("status", "POST /orders")]
+
+
+CONFIG_TEST = FLASK_TESTS + (
+    "\n\ndef test_config():\n    import app as module\n"
+    "    assert getattr(module, 'VERSION', 1) == 1, 'VERSION must stay 1'\n    client().get('/users/9')\n")
+
+
+def test_a_failure_no_response_explains_keeps_its_own_message(tmp_path):
+    base = flask_repo(tmp_path / "b", tests=CONFIG_TEST)
+    head = flask_repo(tmp_path / "h", FLASK_APP + "\nVERSION = 2\n", CONFIG_TEST)
+    [f] = check(base, head, backend="local")["findings"]
+    assert f.kind == "test" and "VERSION must stay 1" in f.detail
 
 
 def test_the_head_world_runs_the_base_tests_so_a_pr_cannot_hide_a_change(tmp_path):
@@ -102,7 +129,7 @@ def test_the_head_world_runs_the_base_tests_so_a_pr_cannot_hide_a_change(tmp_pat
                                  'pass')
     base, head = pair(tmp_path, FLASK_APP.replace("), 201", "), 200"), hidden)
     r = check(base, head, backend="local")
-    assert any(f.kind == "test" for f in r["findings"])   # the base's test still ran against the head code
+    assert any("test fails on this" in f.detail for f in r["findings"])   # the base's test still ran on head
 
 
 def test_no_tests_is_not_comparable(tmp_path):
