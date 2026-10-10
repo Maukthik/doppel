@@ -20,11 +20,12 @@ MAX_SANDBOXES = 12
 RETRIES = 3
 BACKOFF = (5, 15, 30)   # seconds before the 2nd, 3rd, ... attempt
 
-GIT = ("(command -v git >/dev/null 2>&1 || (apt-get update -qq >/dev/null && "
-       "apt-get install -y -qq --no-install-recommends git >/dev/null))")
-BUILD_TOOLS = ("apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends build-essential "
+APT = "DEBIAN_FRONTEND=noninteractive apt-get"   # no terminal in a sandbox: never ask, never warn about it
+GIT = (f"(command -v git >/dev/null 2>&1 || ({APT} update -qq >/dev/null && "
+       f"{APT} install -y -qq --no-install-recommends git >/dev/null 2>&1))")
+BUILD_TOOLS = (f"{APT} update -qq >/dev/null && {APT} install -y -qq --no-install-recommends build-essential "
                "pkg-config git libpq-dev libxml2-dev libxslt1-dev libffi-dev libssl-dev libjpeg-dev zlib1g-dev "
-               "default-libmysqlclient-dev >/dev/null")
+               "default-libmysqlclient-dev >/dev/null 2>&1")
 NEEDS_GIT = re.compile(r"git\+|git://|\bgit@[\w.-]+:")
 NEEDS_BUILD = re.compile("|".join([
     r"command '(gcc|cc|x86_64-linux-gnu-gcc)' failed", r"unable to execute '?(gcc|cc)", r"gcc: not found",

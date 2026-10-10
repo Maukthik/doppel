@@ -133,12 +133,24 @@ def checkout(bug: dict) -> tuple[Path, Path]:
         # the project's own package is the code under test (this checkout), never a PyPI release: BugsInPy's
         # lists include it (fastapi==0.55.1), and its pins contradict the libraries this commit needs
         own = re.compile(rf"^{re.escape(bug['project'])}\s*(==|>=|<=|~=|$)", re.I)
-        reqs = [r for r in bug["requirements"] if not own.match(r)] + OLD_ENV
+        reqs = [windows_only(r) for r in bug["requirements"] if not own.match(r)] + OLD_ENV
         if not any(r.lower().startswith("pytest") for r in reqs):
             reqs.append("pytest<7" if bug["python"] in ("3.6", "3.7") else "pytest<8")
         (target / REQS).write_text("\n".join(reqs) + "\n", encoding="utf-8")   # same in both: not a change
         out[side] = target
     return out["base"], out["head"]
+
+
+WINDOWS_ONLY = ("pywin32", "pypiwin32", "pywinpty", "wincertstore", "windows-curses", "winshell", "comtypes")
+
+
+def windows_only(requirement: str) -> str:
+    """Some BugsInPy lists were frozen on Windows (Sanic's has pywin32==227, which does not exist for Linux):
+    mark such packages Windows-only, with pip's own environment marker."""
+    name = re.split(r"[<>=!~;\s\[]", requirement, maxsplit=1)[0].strip().lower()
+    if name in WINDOWS_ONLY and ";" not in requirement:
+        return f'{requirement}; sys_platform == "win32"'
+    return requirement
 
 
 def local_python(bug: dict, base: Path) -> str:
