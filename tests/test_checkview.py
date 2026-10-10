@@ -1,0 +1,78 @@
+"""The doppel check page and the zero-setup results page."""
+import json
+import sys
+from pathlib import Path
+
+from doppel.checkview import headline, is_check, render_check
+
+HASH = "scrypt:32768:8:1$kKr5dNCX1YvSJk1y$64aab80f332b0dfa93895df14a201c7c78b2ec55bbef61138b58520af26d"
+ROWS = [{"source": "your tests", "who": f"test_users.py::test_{i}", "request": req, "kind": "body",
+         "detail": detail, "base": {"password_hash": "(absent)"}, "head": {"password_hash": HASH},
+         "label": "unjudged", "why": ""}
+        for i, (req, detail) in enumerate([("GET /api/users", "changed: data.*.password_hash (added) x2"),
+                                           ("GET /api/users/7", "changed: password_hash (added)"),
+                                           ("GET /api/feed", "changed: data.*.author.password_hash (added) x3")])]
+DATA = {"mode": "check", "app": "microblog-api", "pr": {"title": "Return the full user record", "body": ""},
+        "rows": ROWS, "seconds": 51.7,
+        "tests": {"ran": True, "stats": {"tests": 44, "requests": 117, "confirmation": {"ran": True, "tests": 3}},
+                  "test": "python -m pytest -p no:logging", "source": "tox.ini", "noise_keys": ["timestamp"]},
+        "twin": {"ran": False, "skipped": True, "reason": "turned off (--no-twin)"}}
+
+
+def test_one_change_however_many_routes_and_paths_it_shows_up_on():
+    page = render_check(DATA)
+    assert "1 behavior change, seen in 3 requests" in page
+    assert "Responses now include password_hash" in page                      # plain words, not raw paths
+    assert page.count('<article class="change') == 1
+    assert "3 requests from 3 tests" in page and "GET /api/users/{id}" in page  # ids folded into routes
+
+
+def test_base_and_head_side_by_side_raw_locally_masked_on_the_public_site():
+    assert HASH in render_check(DATA)                                          # local: the evidence itself
+    public = render_check(DATA, public=True)
+    assert HASH not in public and "[hidden on the site]" in public
+
+
+def test_the_page_says_what_each_mode_did_and_how_doppel_decides():
+    page = render_check(DATA)
+    assert "<b>44</b> tests sent <b>117</b> requests" in page and "(from tox.ini)" in page
+    assert "turned off (--no-twin)" in page and "Base vs base again" in page
+
+
+def test_no_differences_and_no_comparison_read_differently():
+    same = render_check({**DATA, "rows": []})
+    assert "No regressions" in same and "Every response matched" in same
+    none = render_check({**DATA, "rows": [], "tests": {"ran": False, "reason": "no test suite found"}})
+    assert 'class="banner grey"' in none and "Couldn&#x27;t check this PR" in none
+
+
+def test_headlines_name_the_change():
+    def g(kind, detail):
+        return {"example": {"kind": kind, "detail": detail}}
+    assert headline(g("body", "changed: total")) == "Values changed: total"
+    assert headline(g("body", "changed: in_stock (added), id (removed)")) == \
+        "Responses now include in_stock; responses no longer include id"
+    crash = headline(g("error", "status 200 -> 0 (the base branch's test fails on this)"))
+    assert crash.startswith("Requests now crash")
+    assert headline(g("status", "status 400 -> 201")) == "Status 400 -> 201"
+
+
+def test_doppel_view_recognises_a_check(tmp_path):
+    (tmp_path / "check.json").write_text(json.dumps(DATA))
+    assert is_check(tmp_path / "check.json") and is_check(tmp_path)
+    (tmp_path / "run.json").write_text(json.dumps({"worlds": {}}))
+    assert not is_check(tmp_path / "run.json")
+
+
+def test_the_results_page_lists_every_app(tmp_path, monkeypatch):
+    sys.path.insert(0, str(Path(__file__).parent.parent / "bench"))
+    import fresh_apps
+    monkeypatch.setattr(fresh_apps, "RESULTS", tmp_path)
+    for name, status in (("ctfd", "works"), ("redash", "stopped")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "result.json").write_text(json.dumps(
+            {"name": name, "framework": "Flask", "status": status, "tests": 10, "requests": 30, "commit": "abc",
+             "seconds": 5, "category": "needs a service", "reason": "3 of 4 tests fail on the unchanged code",
+             "test_command": "python -m pytest", "source": "tox.ini"}))
+    page = fresh_apps.page().read_text()
+    assert "1 work" in page and "1 stopped" in page and "needs a service" in page and "<b>30</b> requests" in page

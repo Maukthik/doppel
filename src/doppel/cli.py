@@ -261,9 +261,12 @@ def cmd_init(a) -> int:
 
 
 def cmd_view(a) -> int:
+    from doppel.checkview import is_check, write_check_view
     from doppel.viewer import is_run, is_trace, write_run_view, write_view
     path = Path(a.path)
-    if is_run(path):
+    if is_check(path):
+        out = write_check_view(path, Path(a.out) if a.out else None)
+    elif is_run(path):
         out = write_run_view(path, Path(a.out) if a.out else None)
     elif is_trace(path):
         out = write_view(path, Path(a.out) if a.out else None)
@@ -375,6 +378,7 @@ def main(argv=None) -> int:
     k.add_argument("--no-twin", action="store_true", help="test mode only")
     k.add_argument("--no-guided", action="store_true", help="the twin without the AI reviewer's suspicions")
     k.add_argument("--twin-json", help="also save the twin's raw recording here (for `doppel view`)")
+    k.add_argument("--app", default=None, help="the app's name on the report page (default: the base folder's)")
     t = sub.add_parser("tests", help="test mode: run the app's own tests on base and head and compare every "
                                      "response they saw (no doppel.toml needed)")
     t.add_argument("--base", required=True, help="the code before the change")

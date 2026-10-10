@@ -112,6 +112,20 @@ def _pattern(request: str) -> str:
     return f"{method} {path}".strip()
 
 
+def _fields(detail: str) -> str:
+    """"changed: data.*.author.password_hash (added) x3, timestamp" -> "password_hash (added), timestamp": the
+    fields that changed and how, without where in the body or how often (that differs per route)."""
+    import re
+    detail = re.sub(r"\s*\(the base branch's test fails on this\)", "", detail.removeprefix("changed: "))
+    parts = []
+    for item in re.split(r",\s*(?![^()]*\))", detail):
+        item = re.sub(r"\s+x\d+$", "", item.strip())
+        m = re.match(r"(.*?)(\s*\((?:added|removed)\))?$", item)
+        leaf = re.sub(r".*\.", "", m.group(1)) or m.group(1)
+        parts.append(leaf + (m.group(2) or ""))
+    return ", ".join(sorted(set(p for p in parts if p and not p.startswith("+"))))
+
+
 def group(rows: list[dict]) -> list[dict]:
     """One entry per distinct change. Judged rows: same verdict and the judge's same reasoning (the judge
     already looked at each distinct change once, so equal reasoning is the same change). Unjudged rows: same
@@ -121,6 +135,8 @@ def group(rows: list[dict]) -> list[dict]:
     for r in rows:
         if r.get("why"):
             key = (r["label"], r["why"].strip())
+        elif r.get("kind") == "body" and r["detail"].startswith("changed: "):
+            key = (r["label"], "body", _fields(r["detail"]))   # the same field change, wherever it shows up
         else:
             key = (r["label"], _pattern(r["request"]), re.sub(r"\s*\(the base branch's test fails on this\)", "",
                                                                r["detail"]))
@@ -280,12 +296,18 @@ def cmd_check(a) -> int:
     rows = tests.get("rows", []) + twin.get("rows", [])
     regressions = [r for r in rows if r["label"] in ("regression", "unjudged")]
     if a.json:
+        title = next((ln.lstrip("# ").strip() for ln in pr_text.splitlines() if ln.strip()), "")
+        res = tests.get("result") or {}
         Path(a.json).write_text(json.dumps({
-            "mode": "check", "regressions": len(regressions), "rows": rows,
-            "tests": {k: v for k, v in tests.items() if k != "result"} | (
-                {"stats": tests["result"]["stats"], "noise_keys": tests["result"]["noise_keys"]}
-                if tests.get("ran") else {}),
-            "twin": {k: v for k, v in twin.items() if k != "rows"}}, indent=1, default=str), encoding="utf-8")
+            "mode": "check", "app": getattr(a, "app", None) or Path(a.base).resolve().name,
+            "pr": {"title": title, "body": pr_text},
+            "regressions": len(group(regressions)), "regression_requests": len(regressions), "rows": rows,
+            "tests": {k: v for k, v in tests.items() if k not in ("result", "rows")} | ({
+                "stats": res["stats"], "noise_keys": res["noise_keys"], "test": res["test"],
+                "source": res["detected"]["source"]["test"], "excluded": res["excluded"], "flaky": res["flaky"],
+                "unstable": res["unstable"]} if tests.get("ran") else {}),
+            "twin": {k: v for k, v in twin.items() if k != "rows"},
+            "seconds": round(time.perf_counter() - t0, 1)}, indent=1, default=str), encoding="utf-8")
     if not tests.get("ran") and not twin.get("ran"):
         return 2
     return 1 if a.strict and regressions else 0

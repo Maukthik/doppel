@@ -35,7 +35,7 @@ def test_both_modes_find_the_leak_in_one_report(tmp_path, capsys):
     assert "**Your tests** (test mode, no setup): 4 tests sent 4 requests" in md
     assert "users (from doppel-personas.json)" in md
     data = json.loads(out.read_text())
-    assert data["mode"] == "check" and data["regressions"] == 2
+    assert data["mode"] == "check" and data["regressions"] == 1 and data["regression_requests"] == 2
     assert {r["source"] for r in data["rows"]} == {"your tests", "invented users"}
 
 
