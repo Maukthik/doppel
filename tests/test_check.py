@@ -27,7 +27,9 @@ def test_both_modes_find_the_leak_in_one_report(tmp_path, capsys):
     out = tmp_path / "check.json"
     assert run("--base", base, "--head", head, "--strict", "--json", out) == 1
     md = capsys.readouterr().out
-    assert "## Doppel: 2 behavior change(s)" in md
+    # one change (the leak), found by both modes: one row, with both sources counted
+    assert "## Doppel: 1 behavior change, seen in 2 requests" in md
+    assert "| 1 | changed: secret (added) | `GET /users/{id}` | 1 request from 1 test, 1 request from 1 user |" in md
     assert "| your tests | test_app.py::test_user | `GET /users/1` | changed: secret (added)" in md
     assert "| invented users | reader | `GET /users/1` | changed: secret (added)" in md
     assert "**Your tests** (test mode, no setup): 4 tests sent 4 requests" in md
@@ -64,3 +66,20 @@ def test_the_action_runs_doppel_check_with_base_branch_personas():
     script = next(s["run"] for s in action["runs"]["steps"] if s.get("name") == "Run Doppel")
     assert "doppel check" in script and "--strict" in script and 'PERSONAS="$BASE/' in script
     assert "--no-twin" in script and action["inputs"]["twin"]["default"] == "auto"
+
+
+def test_the_report_groups_requests_into_distinct_changes():
+    from doppel.check import report
+    why = {"qty": "Removing the qty validation lets invalid orders through.",
+           "total": "order_total now applies tax before the coupon discount."}
+    rows = ([{"source": "invented users", "who": f"user{i}", "request": "POST /orders", "detail": "status 400 -> 201",
+              "base": 400, "head": 201, "kind": "status", "label": "regression", "why": why["qty"]} for i in range(6)]
+            + [{"source": "invented users", "who": "buyer", "request": req, "detail": "changed: total",
+                "base": {"total": 1}, "head": {"total": 2}, "kind": "body", "label": "regression",
+                "why": why["total"]} for req in ("POST /orders", "GET /orders/1", "GET /orders/2")])
+    md = report({"ran": False, "reason": "no test suite found"}, {"ran": True, "rows": rows, "personas": 7,
+                                                                  "source": "from personas.json"})
+    assert "## Doppel: 2 regressions the PR doesn't mention, seen in 9 requests" in md
+    assert "| 1 | status 400 -> 201 | `POST /orders` | 6 requests from 6 users |" in md
+    assert "`POST /orders`<br>`GET /orders/{id}` | 3 requests from 1 user |" in md   # ids folded into a route
+    assert "All 9 requests behind these" in md

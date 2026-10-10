@@ -286,6 +286,41 @@ def arm_testmode(base: Path, head: Path, pr: dict, backend: str, use_judge: bool
             "seconds": {"suite": round(t1 - t0, 1), "judge": round(time.perf_counter() - t1, 1)}}
 
 
+def arm_check(base: Path, head: Path, pr: dict, backend: str, use_judge: bool = True) -> dict:
+    """`doppel check`, exactly as a user runs it: test mode and the guided twin together, one report. Scored like
+    the other arms; also records which mode made each catch."""
+    import tempfile
+
+    from doppel import cli
+    t0 = time.perf_counter()
+    with tempfile.TemporaryDirectory(prefix="bench-check-") as tmp:
+        out = Path(tmp) / "check.json"
+        args = ["check", "--base", str(base), "--head", str(head), "--backend", backend, "--json", str(out)]
+        if use_judge:
+            (Path(tmp) / "PR.md").write_text(pr_text(pr), encoding="utf-8")
+            args += ["--pr", str(Path(tmp) / "PR.md")]
+        code = cli.main(args)
+        data = json.loads(out.read_text("utf-8")) if out.exists() else {"rows": []}
+    expect = re.compile(pr["expect"]) if pr.get("expect") else None
+
+    def on_target(r: dict) -> bool:
+        if r["source"] == "your tests" and (r.get("kind") == "test" or "test fails on this" in r.get("detail", "")):
+            return True                       # the app's own test failed: the suite itself noticed
+        return bool(expect and expect.search(r.get("request", "")))
+    rows = [{**r, "on_target": on_target(r)} for r in data.get("rows", [])]
+    flagged = [r for r in rows if r["label"] in ("regression", "unjudged")]
+    hit = [r for r in flagged if r["on_target"]] if expect else flagged
+    return {"caught": bool(hit), "any_regression": bool(flagged), "exit_code": code,
+            "caught_by": sorted({r["source"] for r in hit}),
+            "needs_human": sum(r["label"] == "needs_human" for r in rows), "finding_count": len(rows),
+            "findings": [{k: (json.dumps(v, default=str)[:300] if k in ("base", "head") else v) for k, v in r.items()}
+                         for r in rows[:80]],
+            "tests_mode": {k: v for k, v in (data.get("tests") or {}).items() if k in ("ran", "reason", "stats")},
+            "twin_mode": {k: v for k, v in (data.get("twin") or {}).items()
+                          if k in ("ran", "reason", "coverage", "personas", "source")},
+            "backend": backend, "seconds": round(time.perf_counter() - t0, 1)}
+
+
 def main(argv=None) -> int:
     load_dotenv()
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -334,7 +369,7 @@ def main(argv=None) -> int:
                 key += "_guided" if a.guided else ""
                 key += "_fixed" if a.personas else ""
                 key += "_nojudge" if a.no_judge else ""
-            if arm == "testmode" and a.no_judge:
+            if arm in ("testmode", "check") and a.no_judge:
                 key += "_nojudge"
             if key in result and not a.force:
                 continue
@@ -349,6 +384,8 @@ def main(argv=None) -> int:
                     result[key] = arm_review(base, head, pr)
                 elif arm == "testmode":
                     result[key] = arm_testmode(base, head, pr, a.backend, not a.no_judge)
+                elif arm == "check":
+                    result[key] = arm_check(base, head, pr, a.backend, not a.no_judge)
             except Exception as e:  # noqa: BLE001 - record and keep going; rerun picks it up
                 print(f"[bench] {pr['id']} {arm}: {type(e).__name__}: {e}", file=sys.stderr)
                 result.setdefault("errors", {})[key] = f"{type(e).__name__}: {str(e)[:1500]}"
@@ -360,7 +397,7 @@ def main(argv=None) -> int:
         served = f" served={cov['served']}/{cov['requests']}" if cov else ""
         marks = " ".join(f"{k}={'CAUGHT' if result[k]['caught'] else '-'}"
                          for k in ("tests", "review", "doppel", "doppel_guided", "doppel_fixed", "doppel_fixed_nojudge",
-                                   "testmode", "testmode_nojudge")
+                                   "testmode", "testmode_nojudge", "check", "check_nojudge")
                          if k in result)
         print(f"[bench] {pr['kind']:10} {pr['id']:24} {marks}{served}")
     return 0

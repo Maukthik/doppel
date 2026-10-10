@@ -103,56 +103,134 @@ def _cell(value, n: int = 70) -> str:
     return text.replace("|", "\\|").replace("`", "'").replace("\n", " ")
 
 
-def _table(rows: list[dict], why: bool = True) -> list[str]:
-    head = "| Found by | Where | Request | What changed | Base | Head |" + (" Why |" if why else "")
-    out = [head, "|---|---|---|---|---|---|" + ("---|" if why else "")]
+def _pattern(request: str) -> str:
+    """GET /orders/17?x=1 -> GET /orders/{id}: requests that differ only in ids are the same route."""
+    import re
+    method, _, path = request.partition(" ")
+    path = path.split("?")[0]
+    path = re.sub(r"/(\d+|[0-9a-f]{8,}|[0-9a-f-]{36})(?=/|$)", "/{id}", path)
+    return f"{method} {path}".strip()
+
+
+def group(rows: list[dict]) -> list[dict]:
+    """One entry per distinct change. Judged rows: same verdict and the judge's same reasoning (the judge
+    already looked at each distinct change once, so equal reasoning is the same change). Unjudged rows: same
+    route and the same kind of difference. Each group keeps every row it stands for."""
+    import re
+    groups: dict[tuple, dict] = {}
     for r in rows:
-        cells = [r["source"], _cell(r["who"], 50), f"`{_cell(r['request'], 50)}`", _cell(r["detail"], 80),
-                 f"`{_cell(r['base'], 40)}`", f"`{_cell(r['head'], 40)}`"]
+        if r.get("why"):
+            key = (r["label"], r["why"].strip())
+        else:
+            key = (r["label"], _pattern(r["request"]), re.sub(r"\s*\(the base branch's test fails on this\)", "",
+                                                               r["detail"]))
+        g = groups.setdefault(key, {"label": r["label"], "why": r.get("why", ""), "rows": []})
+        g["rows"].append(r)
+    out = []
+    for g in groups.values():
+        rows_ = g["rows"]
+        routes = list(dict.fromkeys(_pattern(r["request"]) for r in rows_))
+        sources = list(dict.fromkeys(r["source"] for r in rows_))
+        who = list(dict.fromkeys(r["who"] for r in rows_))
+        changes = list(dict.fromkeys(r["detail"] for r in rows_))
+        out.append({**g, "routes": routes, "sources": sources, "who": who, "changes": changes,
+                    "example": rows_[0], "requests": len(rows_)})
+    return sorted(out, key=lambda g: -g["requests"])
+
+
+def _group_table(groups: list[dict], why: bool) -> list[str]:
+    head = "| | Change | Where | Seen by | Example: base → head |" + (" Why |" if why else "")
+    out = [head, "|---|---|---|---|---|" + ("---|" if why else "")]
+    for k, g in enumerate(groups, 1):
+        ex = g["example"]
+        change = _cell("; ".join(g["changes"][:2]) + (f" (+{len(g['changes']) - 2} more)" if len(g["changes"]) > 2
+                                                         else ""), 90)
+        where = "<br>".join(f"`{_cell(r, 45)}`" for r in g["routes"][:3]) + (
+            f"<br>+{len(g['routes']) - 3} more" if len(g["routes"]) > 3 else "")
+        seen = ", ".join(_seen(g["rows"], src) for src in g["sources"])
+        cells = [str(k), change, where, seen, f"`{_cell(ex['base'], 40)}` → `{_cell(ex['head'], 40)}`"]
         if why:
-            cells.append(_cell(r["why"], 200))
+            cells.append(_cell(g["why"], 220))
         out.append("| " + " | ".join(cells) + " |")
     return out
+
+
+def _n(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _seen(rows: list[dict], source: str) -> str:
+    """"7 requests from 6 users" / "1 request from 1 test", for one mode."""
+    mine = [r for r in rows if r["source"] == source]
+    who = len({r["who"] for r in mine})
+    noun = {"your tests": "test", "invented users": "user"}.get(source, source)
+    return f"{_n(len(mine), 'request')} from {_n(who, noun)}"
+
+
+def _all_requests(rows: list[dict]) -> list[str]:
+    out = ["| Found by | Who | Request | What changed | Base | Head |", "|---|---|---|---|---|---|"]
+    for r in rows:
+        out.append("| " + " | ".join([r["source"], _cell(r["who"], 45), f"`{_cell(r['request'], 45)}`",
+                                      _cell(r["detail"], 70), f"`{_cell(r['base'], 35)}`",
+                                      f"`{_cell(r['head'], 35)}`"]) + " |")
+    return out
+
+
+def _section(title: str, groups: list[dict], why: bool, open_: bool = True) -> list[str]:
+    rows = [r for g in groups for r in g["rows"]]
+    lines = ["", title, ""] if open_ else ["", f"<details><summary>{title}</summary>", ""]
+    lines += _group_table(groups, why)
+    lines += ["", f"<details><summary>All {_n(len(rows), 'request')} behind "
+                  f"{'this' if len(groups) == 1 else 'these'}</summary>", ""]
+    lines += _all_requests(rows) + ["", "</details>"]
+    if not open_:
+        lines += ["", "</details>"]
+    return lines
 
 
 def report(tests: dict, twin: dict) -> str:
     from doppel.report import suspicions_section
     rows = tests.get("rows", []) + twin.get("rows", [])
-    regressions = [r for r in rows if r["label"] in ("regression", "unjudged")]
-    human = [r for r in rows if r["label"] == "needs_human"]
-    intended = [r for r in rows if r["label"] == "intended"]
+    regressions = group([r for r in rows if r["label"] in ("regression", "unjudged")])
+    human = group([r for r in rows if r["label"] == "needs_human"])
+    intended = group([r for r in rows if r["label"] == "intended"])
+    unjudged = bool(regressions) and all(g["label"] == "unjudged" for g in regressions)
+    n_requests = sum(g["requests"] for g in regressions)
     if not tests.get("ran") and not twin.get("ran"):
         title = "## Doppel: couldn't check this PR"
+    elif regressions and unjudged:
+        title = f"## Doppel: {_n(len(regressions), 'behavior change')}, seen in {_n(n_requests, 'request')}"
     elif regressions:
-        unjudged = all(r["label"] == "unjudged" for r in regressions)
-        title = (f"## Doppel: {len(regressions)} behavior change(s)" if unjudged else
-                 f"## Doppel: {len(regressions)} regression(s) the PR doesn't mention")
+        title = (f"## Doppel: {_n(len(regressions), 'regression')} the PR doesn't mention, "
+                 f"seen in {_n(n_requests, 'request')}")
     else:
         title = "## Doppel: no regressions"
-    lines = [title, "", "Two independent checks ran on this PR, each comparing the code before and after it:", ""]
+    lines = [title, ""]
+    summary = []
     if tests.get("ran"):
         st = tests["result"]["stats"]
-        lines.append(f"- **Your tests** (test mode, no setup): {st['tests']} tests sent {st['requests']} requests "
-                     f"through the app on base and on head.")
+        summary.append(f"- **Your tests** (test mode, no setup): {st['tests']} tests sent {st['requests']} requests "
+                       "through the app, on base and on head.")
     else:
         reason = tests["reason"].splitlines()[0].split(" Use the HTTP twin")[0]   # the twin is right below
-        lines.append(f"- **Your tests** (test mode): couldn't compare: {reason[:300]}")
+        summary.append(f"- **Your tests** (test mode): couldn't compare: {reason[:300]}")
     if twin.get("ran"):
         cov = twin.get("coverage") or {}
-        served = f", {cov['served']}/{cov['requests']} requests served" if cov.get("requests") else ""
-        lines.append(f"- **Invented users** (the twin): {twin.get('personas', 0)} users ({twin.get('source', '')}), "
-                     f"replayed in both worlds{served}.")
+        served = f"; the app served {cov['served']} of {cov['requests']} requests" if cov.get("requests") else ""
+        summary.append(f"- **Invented users** (the twin): {twin.get('personas', 0)} users "
+                       f"({twin.get('source', '')}), replayed in both worlds{served}.")
     else:
-        lines.append(f"- **Invented users** (the twin): {twin['reason'].splitlines()[0][:300]}")
+        summary.append(f"- **Invented users** (the twin): {twin['reason'].splitlines()[0][:300]}")
+    lines += ["Two independent checks compared the code before and after this PR:", "", *summary]
     if regressions:
-        lines += ["", "### 🚨 Regressions" if not all(r["label"] == "unjudged" for r in regressions)
-                  else "### Behavior changes (not judged: no PR description given)", ""]
-        lines += _table(regressions, why=any(r["why"] for r in regressions))
+        title = ("### Behavior changes (not judged: no PR description given)" if unjudged
+                 else "### 🚨 Regressions the PR doesn't mention")
+        lines += _section(title, regressions, why=not unjudged)
     if human:
-        lines += ["", "### ❓ Needs a human", ""] + _table(human)
+        lines += _section("### ❓ Needs a human", human, why=True)
     if intended:
-        lines += ["", f"<details><summary>✅ Intended: matches the PR description ({len(intended)})</summary>", ""]
-        lines += _table(intended) + ["", "</details>"]
+        lines += _section(f"✅ Intended: matches the PR description ({len(intended)})", intended, why=True,
+                          open_=False)
     extra = suspicions_section(twin.get("suspicions")) if twin.get("ran") else ""
     if extra:
         lines += ["", extra.strip()]
@@ -163,6 +241,9 @@ def report(tests: dict, twin: dict) -> str:
             lines += ["", foot]
     if not tests.get("ran") and not twin.get("ran"):
         lines += ["", "> " + tests["reason"].replace("\n", "\n> ")[:2500]]
+    lines += ["", "<sub>Each change is proven by real runs of the code before and after the PR; the verdicts are "
+                  "Nemotron's, against the PR description.</sub>"] if (regressions or human or intended) and \
+        not unjudged else []
     return "\n".join(lines) + "\n"
 
 
