@@ -52,6 +52,8 @@ Seed once, a fresh world per persona, replay, diff, Markdown report, offline tes
 - [ ] 3-minute video, Devpost text, feedback on Token Factory and Nemotron.
 - [x] Doppel Viewer: `doppel view` for runs and init traces, with the twin's timeline.
 - [x] Replay site: `doppel site` + GitHub Pages workflow (hash-leak hero, gallery, benchmark).
+- [x] `doppel check`: test mode and the guided twin in parallel, one report and exit code; the GitHub
+  Action runs it (test mode needs no doppel.toml).
 - [x] Test mode (`doppel tests`, `src/doppel/traffic.py`): the app's own tests as the users, three
   worlds, four safeguards; first run on microblog-api in `bench/results/testmode`.
 - [x] Setup that generalizes: the probe (facts from the running app), the front-door seed

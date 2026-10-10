@@ -1,5 +1,5 @@
 name: Doppel
-description: A twin of your app tries every pull request first and comments with the regressions it found.
+description: Runs your tests and a twin of your app on every pull request, before and after, and comments with the regressions it proves.
 author: Maukthik
 branding:
   icon: copy
@@ -21,6 +21,9 @@ inputs:
   guided:
     description: Let Nemotron Ultra list suspected regressions first; probe personas prove or refute each one
     default: "true"
+  twin:
+    description: "auto = also run the guided twin when the repo has a doppel.toml; off = test mode only"
+    default: "auto"
   fail-on-regression:
     description: Fail the check when the judge finds a regression
     default: "true"
@@ -58,7 +61,7 @@ runs:
     - name: Install Doppel
       shell: bash
       run: pip install --quiet "${{ github.action_path }}[nebius]"
-    - name: Run the twin
+    - name: Run Doppel
       id: run
       shell: bash
       env:
@@ -91,20 +94,17 @@ runs:
         mkdir -p .doppel/out
         BASE=".doppel/base/${{ inputs.app-dir }}"
         HEAD=".doppel/head/${{ inputs.app-dir }}"
-        # personas come from the base branch: a PR must not choose the users that test it
-        PERSONAS="$BASE/${{ inputs.personas }}"
-        if [ ! -f "$PERSONAS" ]; then
-          PERSONAS=".doppel/out/personas.json"
-          doppel personas --app "$BASE" --head "$HEAD" -n "${{ inputs.personas-count }}" --out "$PERSONAS" || exit 2
-        fi
         printf '# %s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > .doppel/out/PR.md
-        JUDGE=""
-        if [ "${{ inputs.judge }}" = "true" ]; then
-          JUDGE="--pr .doppel/out/PR.md --tests-out .doppel/out/test_doppel_regressions.py"
-          if [ "${{ inputs.guided }}" = "true" ]; then JUDGE="$JUDGE --guided"; fi
-        fi
-        doppel run --backend nebius --base "$BASE" --head "$HEAD" --personas "$PERSONAS" $JUDGE --rehearse \
-          --out .doppel/out/report.md --json .doppel/out/run.json --strict
+        # doppel check: test mode always (the app's own tests, no setup); the guided twin too when the repo
+        # has a doppel.toml. Personas come from the base branch only: a PR must not choose the users that test it
+        PERSONAS="$BASE/${{ inputs.personas }}"
+        ARGS=(--backend nebius --base "$BASE" --head "$HEAD" -n "${{ inputs.personas-count }}" --strict
+              --out .doppel/out/report.md --json .doppel/out/check.json --twin-json .doppel/out/run.json)
+        if [ -f "$PERSONAS" ]; then ARGS+=(--personas "$PERSONAS"); fi
+        if [ "${{ inputs.judge }}" = "true" ]; then ARGS+=(--pr .doppel/out/PR.md); fi
+        if [ "${{ inputs.guided }}" != "true" ]; then ARGS+=(--no-guided); fi
+        if [ "${{ inputs.twin }}" = "off" ]; then ARGS+=(--no-twin); fi
+        doppel check "${ARGS[@]}"
         code=$?
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
         [ -f .doppel/out/report.md ] && cat .doppel/out/report.md >> "$GITHUB_STEP_SUMMARY"

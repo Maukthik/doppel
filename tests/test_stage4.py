@@ -55,5 +55,5 @@ def test_action_definition_wires_the_steps():
     action = yaml.safe_load((ROOT / "action.yml").read_text(encoding="utf-8"))
     assert action["runs"]["using"] == "composite"
     names = [s.get("name") for s in action["runs"]["steps"]]
-    assert names.index("Run the twin") < names.index("Comment on the PR") < names.index("Fail on regressions")
+    assert names.index("Run Doppel") < names.index("Comment on the PR") < names.index("Fail on regressions")
     assert {"nebius-api-key", "nebius-project-id"} <= {k for k, v in action["inputs"].items() if v.get("required")}

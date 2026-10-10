@@ -90,5 +90,5 @@ def test_an_honest_pr_gets_no_setup_warning(tmp_path):
 def test_the_action_reads_personas_from_the_base_branch():
     yaml = pytest.importorskip("yaml")
     action = yaml.safe_load((SHOP.parent.parent / "action.yml").read_text(encoding="utf-8"))
-    script = next(s["run"] for s in action["runs"]["steps"] if s.get("name") == "Run the twin")
+    script = next(s["run"] for s in action["runs"]["steps"] if s.get("name") == "Run Doppel")
     assert 'PERSONAS="$BASE/' in script and 'PERSONAS="$HEAD/' not in script

@@ -205,6 +205,34 @@ On a pull request, `[app]` is read from the PR (it may add a dependency or a mig
 the base branch, so a PR can't add the fields it changes to `ignore`. A PR that edits `doppel.toml`,
 `doppel_seed.py` or the personas file gets a warning in its comment.
 
+## One command, both modes
+
+```bash
+doppel check --base main-checkout --head pr-checkout --pr PR.md --strict
+```
+
+`doppel check` runs **test mode** (your own test suite, compared response by response; nothing to set up) and,
+when the repo has a `doppel.toml`, the **guided twin** (Nemotron's invented users, steered by an AI reviewer's
+suspicions, exploring what no test calls) at the same time. Both are judged against the PR description and become
+one report: regressions with the old and new value and which mode found them, then what needs a human, then the
+intended changes, then the reviewer's suspicions as the twin checked them. A mode that can't run says why; it never
+becomes a verdict. Exit codes: 0 no regressions, 1 regressions (with `--strict`), 2 neither mode could compare.
+
+In GitHub Actions it is one workflow file and two secrets; no `doppel.toml` needed for test mode:
+
+```yaml
+on: pull_request
+jobs:
+  doppel:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, pull-requests: write }
+    steps:
+      - uses: Maukthik/doppel@main
+        with:
+          nebius-api-key: ${{ secrets.NEBIUS_API_KEY }}
+          nebius-project-id: ${{ secrets.NEBIUS_PROJECT_ID }}
+```
+
 ## Test mode: no setup at all
 
 ```bash

@@ -357,6 +357,24 @@ def main(argv=None) -> int:
     st = sub.add_parser("site", help="build the static replay site from recorded runs (for GitHub Pages)")
     st.add_argument("--gallery", default="site/gallery.json", help="which runs to publish (default: site/gallery.json)")
     st.add_argument("--out", default="_site", help="output folder (default: _site)")
+    k = sub.add_parser("check", help="both modes at once: test mode always, the guided twin when there is a "
+                                     "doppel.toml; one report, one exit code")
+    k.add_argument("--base", required=True, help="the code before the change")
+    k.add_argument("--head", required=True, help="the code after the change")
+    k.add_argument("--backend", choices=["local", "nebius"], default="nebius")
+    k.add_argument("--pr", help="PR title and description (Markdown): both modes are judged against it")
+    k.add_argument("--out", help="write the combined Markdown report here")
+    k.add_argument("--json", help="write every finding, verdict and mode status here")
+    k.add_argument("--strict", action="store_true", help="exit 1 when there are regressions")
+    k.add_argument("--command", default=None, help="test command (default: read from the repo)")
+    k.add_argument("--install", default=None, help="install command (default: read from the repo)")
+    k.add_argument("--python", default="", help="Python for test mode (a version, or locally an interpreter)")
+    k.add_argument("--personas", default=None, help="the twin's users (default: <base>/doppel-personas.json, "
+                                                    "else Nemotron writes them)")
+    k.add_argument("-n", type=int, default=12, help="how many users Nemotron writes when there is no file")
+    k.add_argument("--no-twin", action="store_true", help="test mode only")
+    k.add_argument("--no-guided", action="store_true", help="the twin without the AI reviewer's suspicions")
+    k.add_argument("--twin-json", help="also save the twin's raw recording here (for `doppel view`)")
     t = sub.add_parser("tests", help="test mode: run the app's own tests on base and head and compare every "
                                      "response they saw (no doppel.toml needed)")
     t.add_argument("--base", required=True, help="the code before the change")
@@ -395,6 +413,9 @@ def main(argv=None) -> int:
             return cmd_site(a)
         if a.cmd == "tests":
             return cmd_tests(a)
+        if a.cmd == "check":
+            from doppel.check import cmd_check
+            return cmd_check(a)
         if a.cmd == "probe":
             from doppel.probe import main as probe_main
             args = [a.app, "--backend", a.backend] + (["--install", a.install] if a.install is not None else []) \
