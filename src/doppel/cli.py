@@ -124,11 +124,12 @@ def cmd_run(a) -> int:
 def cmd_tests(a) -> int:
     """Test mode: compare what the app's own tests see on base and head (doppel.traffic)."""
     from doppel import traffic
+    from doppel.sandbox import InfraError
     t0 = time.perf_counter()
     try:
         result = traffic.check(a.base, a.head, backend=a.backend, test=a.command, install=a.install,
                                log=lambda m: print(m, file=sys.stderr), python=a.python)
-    except traffic.NotComparable as e:
+    except (traffic.NotComparable, InfraError) as e:
         md = traffic.not_comparable(str(e))
         print(md)
         if a.out:

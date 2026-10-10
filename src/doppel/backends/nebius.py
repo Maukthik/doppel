@@ -80,6 +80,20 @@ class NebiusTwin:
         self.seed_log = ""  # what the seed printed, plus a scan of the SQLite databases right after it
         self.tl = Timeline("nebius")  # what happened inside the sandboxes, for doppel view and the site
 
+    async def _install(self, image, repo, what: str):
+        """Install with git provided when the dependencies need it; once more with the build tools when it fails
+        for want of a compiler or system headers (doppel.sandbox)."""
+        from doppel import sandbox
+        shell = sandbox.install_shell(self.spec.install, repo)
+        try:
+            return await self._step(image, self.spec.exports() + shell, what, shown=self.spec.install)
+        except RuntimeError as e:
+            if not sandbox.needs_build_tools(str(e)):
+                raise
+            self.log(f"[twin] {what} needs a compiler or system libraries: installing build tools, trying again")
+            return await self._step(image, self.spec.exports() + sandbox.with_build_tools(shell),
+                                    what + " (with build tools)", shown=self.spec.install)
+
     async def _step(self, image, shell: str, what: str, shown: str | None = None, kind: str = "checkpoint"):
         """Non-disposable run: the result is a new checkpoint. `shown` is the command as the user wrote it,
         for the error message (the seed step also carries Doppel's database scan, which nobody needs to read)."""
@@ -135,7 +149,7 @@ class NebiusTwin:
             img = await img.apply_files(code_files(base_dir))
         self._count(img)
         if s.install:
-            img = await self._step(img, s.exports() + s.install, "install (base)")
+            img = await self._install(img, base_dir, "install (base)")
         if s.seed:
             from doppel.dbscan import one_liner
             # keep the seed's own exit code; the scan only reports and can never fail the step
@@ -156,7 +170,7 @@ class NebiusTwin:
             head = await self._step(head, "rm -f -- " + " ".join(shlex.quote(r) for r in gone),
                                     f"remove {len(gone)} file(s) the PR deletes")
         if s.install:
-            head = await self._step(head, s.exports() + s.install, "install (head)")
+            head = await self._install(head, head_dir, "install (head)")
         if s.migrate:
             head = await self._step(head, s.exports() + s.migrate, "migrate (head)")
         self.log(f"[twin] base world {base.uuid} | head world {head.uuid}")

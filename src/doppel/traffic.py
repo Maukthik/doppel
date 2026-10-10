@@ -499,28 +499,48 @@ class NebiusSession:
                      f"uv venv --quiet --seed -p {python} {self.venv} && {activate}") if self.venv else ""
         self.files = {f"doppel/hook/{n}": d for n, d in hook_files().items()}
 
+        from doppel import sandbox
+        self.sandbox, self.log = sandbox, log
+        self.sem = sandbox.throttle()
+
+        async def install_on(img, what: str, again: bool = False):
+            """The install step: git first when needed; if it fails for want of a compiler or headers, once
+            more with the build tools. Returns the installed image, or raises NotComparable with the output."""
+            shell = sandbox.install_shell(install or "true", base)
+            setup = "" if again else provision
+            out = await sandbox.retrying(lambda: img.run(shell=f"cd {APP} && {setup}{activate}{shell}",
+                                                         disposable=False, timeout=TEST_TIMEOUT), what, log)
+            text = (out.stdout or "") + (out.stderr or "")
+            if out.exit_code != 0 and sandbox.needs_build_tools(text):
+                log(f"[tests] {what} needs a compiler or system libraries: installing build tools, trying again")
+                out = await sandbox.retrying(lambda: img.run(
+                    shell=f"cd {APP} && {setup}{activate}{sandbox.with_build_tools(shell)}", disposable=False,
+                    timeout=TEST_TIMEOUT), what + " (with build tools)", log)
+                text = (out.stdout or "") + (out.stderr or "")
+            if out.exit_code != 0:
+                raise NotComparable(f"{what} failed:\n" + text[-3000:])
+            return out
+
         async def build():
             client = make_client()
-            img = await client.images.use(image or IMAGE)   # always the standard image (see python)
-            img = await img.apply_files(code_files(base))
+            img = await sandbox.retrying(lambda: client.images.use(image or IMAGE), "starting the sandbox", log)
+            img = await sandbox.retrying(lambda: img.apply_files(code_files(base)), "uploading the code", log)
             if provision:
                 log(f"[tests] installing Python {python} in the sandbox (uv)")
             if install or provision:
                 log(f"[tests] installing once: {install[:120]}")
-                img = await img.run(shell=f"cd {APP} && {provision}{install or 'true'}", disposable=False,
-                                    timeout=TEST_TIMEOUT)
-                if img.exit_code != 0:
-                    raise NotComparable("the install command failed:\n"
-                                        + ((img.stdout or "") + (img.stderr or ""))[-3000:])
+                img = await install_on(img, "the install command")
             head_files = {k: v for k, v in code_files(head).items() if k.split("/", 1)[-1] in set(changed)}
-            head_img = await img.apply_files(head_files) if head_files else img
+            head_img = img
+            if head_files:
+                head_img = await sandbox.retrying(lambda: img.apply_files(head_files), "uploading the PR's code", log)
             if removed:
                 rm = f"cd {APP} && rm -f -- " + " ".join(shlex.quote(r) for r in removed)
-                head_img = await head_img.run(shell=rm, disposable=False, timeout=120)
+                head_img = await sandbox.retrying(lambda: head_img.run(shell=rm, disposable=False, timeout=120),
+                                                  "removing files the PR deletes", log)
             if install and any(DEPENDENCY_FILES.search(c) for c in changed + removed):
                 log("[tests] the PR changes dependencies: installing them again for head")
-                head_img = await head_img.run(shell=f"cd {APP} && {activate}{install}", disposable=False,
-                                              timeout=TEST_TIMEOUT)
+                head_img = await install_on(head_img, "installing the PR's dependencies", again=True)
             return {"base": img, "head": head_img}
         self.images = self.loop.run_until_complete(build())
 
@@ -533,10 +553,14 @@ class NebiusSession:
             return (f"mkdir -p /tmp/dt && cd {self.app} && ({self.exports}{cmd}) > /tmp/dt/output.txt 2>&1; "
                     "echo $? > /tmp/dt/exit; cd /tmp/dt && tar czf - . | base64 -w0")
 
+        async def one(code: str, cmd: str):
+            return await self.sandbox.retrying(
+                lambda: self.images[code].run(shell=script(cmd), files=self.files, disposable=True, timeout=timeout,
+                                              truncate_output_at=OUTPUT_LIMIT),
+                "running the tests in a sandbox", self.log, self.sem)
+
         async def go():
-            outs = await asyncio.gather(*[self.images[code].run(shell=script(cmd), files=self.files, disposable=True,
-                                                                timeout=timeout, truncate_output_at=OUTPUT_LIMIT)
-                                          for code, cmd in jobs])
+            outs = await asyncio.gather(*[one(code, cmd) for code, cmd in jobs])
             return [_untar(o.stdout or "", o.stderr or "") for o in outs]
         return self.loop.run_until_complete(go())
 

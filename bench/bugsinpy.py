@@ -158,7 +158,10 @@ def local_python(bug: dict, base: Path) -> str:
 def run_one(project: str, n: int, backend: str, judge: bool, force: bool) -> dict:
     out = RESULTS / f"{project}-{n}.json"
     if out.exists() and not force:
-        return json.loads(out.read_text("utf-8"))
+        done = json.loads(out.read_text("utf-8"))
+        if done["status"] != "infra error" and "TransportError" not in done.get("reason", ""):
+            return done             # an infrastructure error (or an old run's transport error) is retried
+    from doppel.sandbox import InfraError
     from doppel.traffic import NotComparable, check, detect
     bug = info(project, n)
     t0 = time.perf_counter()
@@ -192,6 +195,8 @@ def run_one(project: str, n: int, backend: str, judge: bool, force: bool) -> dic
         flagged = [x for x in rows if x.get("label", "regression") in ("regression", "needs_human")]
         result.update(status="caught" if flagged else "invisible", findings=rows[:60], finding_count=len(rows),
                       stats=r["stats"], noise_keys=r["noise_keys"], excluded=r["excluded"][:20])
+    except InfraError as e:
+        result.update(status="infra error", reason=str(e)[:2500])
     except NotComparable as e:
         result.update(status="not runnable", reason=str(e)[:2500])
     except Exception as e:  # noqa: BLE001 - one bug's failure must not stop the others
@@ -211,12 +216,13 @@ def _changed(base: Path, head: Path) -> list[str]:
 def summary() -> Path:
     rows = [json.loads(f.read_text("utf-8")) for f in sorted(RESULTS.glob("*.json"))]
     rows.sort(key=lambda r: (WEB.index(r["project"]) if r["project"] in WEB else 9, r["bug"]))
-    count = {s: sum(r["status"] == s for r in rows) for s in ("caught", "invisible", "not runnable")}
+    count = {s: sum(r["status"] == s for r in rows) for s in ("caught", "invisible", "not runnable", "infra error")}
     lines = ["# Real bugs: Doppel test mode on BugsInPy's web-framework bugs", "",
              "Each bug is a PR that brings a real, fixed bug back (base = the fix, head = the buggy commit), with the "
              "test written after the bug was found hidden. Python and libraries are the bug's own (BugsInPy).", "",
              f"**{count['caught']} caught · {count['invisible']} invisible (the suite never sent a request through "
-             f"the bug) · {count['not runnable']} not runnable** — of {len(rows)} run.", "",
+             f"the bug) · {count['not runnable']} not runnable · {count['infra error']} infrastructure "
+             f"errors (rerun)** — of {len(rows)} run.", "",
              "Unconfirmed = differences seen once but not when their tests were rerun (dropped as noise by "
              "safeguard S5, kept in each bug's JSON under stats.confirmation.unconfirmed for audit).", "",
              "| Bug | Python | Result | Tests run | Requests | Unconfirmed | Detail |", "|---|---|---|---|---|---|---|"]

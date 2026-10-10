@@ -49,7 +49,9 @@ def probe_local(repo: str | Path, env: dict | None = None, timeout: int = 120) -
 
 
 async def _probe_nebius(client, repo: Path, install: str, image: str, exports: str) -> dict:
+    from doppel import sandbox
     from doppel.backends.nebius import APP, code_files
+    install = sandbox.install_shell(install, repo)
     python = image.split(":")[1].split("-")[0] if image != IMAGE and ":" in image else ""
     if python:   # never ask the platform for a python:X.Y image it may not have: install that Python with uv
         venv = "/opt/doppel-python"
