@@ -651,7 +651,9 @@ def test_nebius_never_asks_for_another_image_and_installs_the_python_in_the_sand
     session.run([("base", "python -m pytest -q")])
     session.close()
     assert seen["images"] == [IMAGE]
-    install, job = seen["shells"][0], seen["shells"][-1]
+    assert "tar xzf /tmp/.doppel-upload.tgz" in seen["shells"][0]           # the code first, as one archive
+    shells = [sh for sh in seen["shells"] if "doppel-upload" not in sh]
+    install, job = shells[0], shells[-1]
     assert "uv python install 3.8" in install and "uv venv --quiet --seed -p 3.8" in install
     assert install.index("uv venv") < install.index("pip install -r requirements.txt")
     assert "export PATH=/opt/doppel-python/bin:$PATH" in job and job.index("doppel-python") < job.index("pytest")

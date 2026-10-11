@@ -177,3 +177,63 @@ def test_the_http_twin_installs_the_same_way():
     twin._step = step
     asyncio.run(twin._install("img", ".", "install (base)"))
     assert len(seen) == 2 and "build-essential" in seen[1]
+
+
+# --- the code goes up as one archive ------------------------------------------------------------
+
+def test_the_archive_holds_every_file_with_its_content_and_mode(tmp_path):
+    import io
+    import os
+    import tarfile
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "app.py").write_text("print('hi')\n")
+    (tmp_path / "run.sh").write_text("#!/bin/sh\n")
+    if os.name != "nt":
+        os.chmod(tmp_path / "run.sh", 0o755)
+    files = {"app/pkg/app.py": tmp_path / "pkg" / "app.py", "app/run.sh": tmp_path / "run.sh"}
+    with tarfile.open(fileobj=io.BytesIO(sandbox.archive(files)), mode="r:gz") as tar:
+        members = {m.name: m for m in tar.getmembers()}
+        assert set(members) == {"app/pkg/app.py", "app/run.sh"}
+        assert tar.extractfile("app/pkg/app.py").read() == b"print('hi')\n"
+        assert all(m.isfile() and m.uid == 0 for m in members.values())
+        if os.name != "nt":
+            assert members["app/run.sh"].mode & 0o111
+
+
+def test_upload_is_one_request_and_one_unpack_whatever_the_file_count(tmp_path, fast):
+    for i in range(300):
+        (tmp_path / f"m{i}.py").write_text(f"x = {i}\n")
+    calls = []
+
+    class Image:
+        exit_code, stdout, stderr = 0, "", ""
+
+        async def run(self, shell, files=None, **kw):
+            calls.append((shell, sorted(files or {})))
+            return Image()
+    files = {f"app/m{i}.py": tmp_path / f"m{i}.py" for i in range(300)}
+    asyncio.run(sandbox.upload(Image(), files, "uploading the code"))
+    assert calls == [(f"tar xzf {sandbox.UPLOAD_PATH} -C / && rm -f {sandbox.UPLOAD_PATH}", [sandbox.UPLOAD_PATH])]
+
+
+def test_a_dropped_upload_is_retried_and_a_failed_unpack_is_an_infra_error(tmp_path, fast):
+    (tmp_path / "a.py").write_text("x = 1\n")
+    tries = []
+
+    class Image:
+        def __init__(self, code=0):
+            self.exit_code, self.stdout, self.stderr = code, "", "tar: short read"
+
+        async def run(self, shell, files=None, **kw):
+            tries.append(shell)
+            if len(tries) == 1:
+                raise ContreeTransportError("ReadError")
+            return Image(code=2)
+    with pytest.raises(sandbox.InfraError, match="unpacking the code"):
+        asyncio.run(sandbox.upload(Image(), {"app/a.py": tmp_path / "a.py"}, "uploading the code"))
+    assert len(tries) == 2
+
+
+def test_nothing_to_upload_leaves_the_image_as_it_is():
+    marker = object()
+    assert asyncio.run(sandbox.upload(marker, {}, "uploading the PR's code")) is marker

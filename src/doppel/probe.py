@@ -59,7 +59,7 @@ async def _probe_nebius(client, repo: Path, install: str, image: str, exports: s
         install = (f"pip install --quiet uv && uv python install {python} && uv venv --quiet --seed -p {python} "
                    f"{venv} && {exports}" + (install or "true"))
     img = await client.images.use(IMAGE)
-    img = await img.apply_files(code_files(repo))
+    img = await sandbox.upload(img, code_files(repo), "uploading the code")
     run_probe = f"{exports}python /doppel/probe_app.py"
     shell = (f"cd {APP} && ({exports}{install}) > /tmp/install.log 2>&1; rc=$?; "
              f"if [ $rc -ne 0 ]; then echo '@@install-failed@@' >&2; tail -n 30 /tmp/install.log >&2; fi; "

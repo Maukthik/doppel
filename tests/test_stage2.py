@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from doppel import personas as gen
+from doppel import sandbox
 from doppel.backends import nebius
 from doppel.spec import TwinSpec
 
@@ -17,6 +18,21 @@ SHOP = Path(__file__).resolve().parent.parent / "examples" / "shop"
 
 
 # --- fake ConTree ---------------------------------------------------------------
+
+def _unpack(data: bytes) -> dict:
+    """{"app/path": a local file holding that entry's bytes}, like the sandbox after `tar xzf`."""
+    import io
+    import tarfile
+    import tempfile
+    out, where = {}, Path(tempfile.mkdtemp(prefix="fake-sandbox-"))
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        for m in tar.getmembers():
+            dest = where / m.name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(tar.extractfile(m).read())
+            out[m.name] = str(dest)
+    return out
+
 
 class FakeImage:
     """Mimics contree_sdk's async image: run() prepares, awaiting executes; apply_files bakes files in."""
@@ -41,10 +57,20 @@ class FakeImage:
     def __await__(self):
         return self._exec().__await__()
 
+    def _lay(self, held: dict, new: dict) -> dict:
+        """Files laid on top of what the image holds: the new ones win, as in a real sandbox."""
+        return {**held, **new}
+
     async def _exec(self):
         shell, disposable, files = self.req
         self.log.append(("run", shell, disposable, sorted(files), self.history))
-        out = type(self)(self.log, {**self.files, **files}, self.history + ((shell,) if not disposable else ()))
+        files = dict(files)
+        if sandbox.UPLOAD_PATH in files:   # the code as one archive: unpack it like `tar xzf ... -C /` would
+            self.log.append(("apply", sorted(_unpack(files.pop(sandbox.UPLOAD_PATH)))))
+            held = self._lay(self.files, _unpack(self.req[2][sandbox.UPLOAD_PATH]))
+        else:
+            held = {**self.files, **files}
+        out = type(self)(self.log, held, self.history + ((shell,) if not disposable else ()))
         if "doppel/paths.json" in files:  # world verification: hash the files as the sandbox holds them
             import hashlib
             paths = json.loads(files["doppel/paths.json"])
@@ -113,8 +139,8 @@ def test_nebius_twin_refuses_a_head_world_without_the_pr_code(tmp_path):
         (d / "app.py").write_text(body)
 
     class DroppingImage(FakeImage):
-        async def apply_files(self, files):  # existing files win: the PR's version never lands
-            return DroppingImage(self.log, {**files, **self.files}, self.history + ("apply",))
+        def _lay(self, held, new):  # existing files win: the PR's version never lands
+            return {**new, **held}
 
     client = FakeClient()
     client.images = SimpleNamespace(use=lambda tag: _ret(DroppingImage(client.log)))

@@ -524,7 +524,7 @@ class NebiusSession:
         async def build():
             client = make_client()
             img = await sandbox.retrying(lambda: client.images.use(image or IMAGE), "starting the sandbox", log)
-            img = await sandbox.retrying(lambda: img.apply_files(code_files(base)), "uploading the code", log)
+            img = await sandbox.upload(img, code_files(base), "uploading the code", log)
             if provision:
                 log(f"[tests] installing Python {python} in the sandbox (uv)")
             if install or provision:
@@ -533,7 +533,7 @@ class NebiusSession:
             head_files = {k: v for k, v in code_files(head).items() if k.split("/", 1)[-1] in set(changed)}
             head_img = img
             if head_files:
-                head_img = await sandbox.retrying(lambda: img.apply_files(head_files), "uploading the PR's code", log)
+                head_img = await sandbox.upload(img, head_files, "uploading the PR's code", log)
             if removed:
                 rm = f"cd {APP} && rm -f -- " + " ".join(shlex.quote(r) for r in removed)
                 head_img = await sandbox.retrying(lambda: head_img.run(shell=rm, disposable=False, timeout=120),

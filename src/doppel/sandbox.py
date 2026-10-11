@@ -8,12 +8,19 @@
                   requirements) gets git first; one that fails to compile (no C compiler, no libpq,
                   libxml2, ...) is retried once with the build tools installed
 
-Used by test mode (doppel.traffic.NebiusSession), the HTTP twin (doppel.backends.nebius) and the probe.
+    upload()      the code goes up as ONE archive, unpacked in the sandbox: the SDK sends every file as its own
+                  request, all at once, and thousands of them broke the connection pool (paperless-ngx,
+                  label-studio: ReadError and pool timeouts on every attempt, 46 minutes lost on one run)
+
+Used by test mode (doppel.traffic.NebiusSession), the HTTP twin (doppel.backends.nebius), the setup agent and the
+probe.
 """
 from __future__ import annotations
 
 import asyncio
+import io
 import re
+import tarfile
 from pathlib import Path
 
 MAX_SANDBOXES = 12
@@ -35,6 +42,10 @@ NEEDS_BUILD = re.compile("|".join([
 GIT_MISSING = re.compile(r"No such file or directory: 'git'|Cannot find command 'git'|git: not found", re.I)
 REQUIREMENT_FILES = ("requirements*.txt", "requirements/*.txt", "*requirements*.txt", "pyproject.toml", "setup.py",
                      "setup.cfg", "Pipfile", "tox.ini")
+
+
+UPLOAD_PATH = "/tmp/.doppel-upload.tgz"
+UNPACK_TIMEOUT = 900
 
 
 class InfraError(RuntimeError):
@@ -104,3 +115,36 @@ def install_shell(install: str, repo: str | Path) -> str:
 
 def with_build_tools(install: str) -> str:
     return f"{BUILD_TOOLS} && {install}"
+
+
+def archive(files: dict[str, Path]) -> bytes:
+    """{"path/in/sandbox": local file} as one gzip'd tar. Every entry is a regular file with the local file's
+    content (a symlink is stored as what it points to), owned by root, keeping the local permission bits."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=6) as tar:
+        for dest, src in sorted(files.items()):
+            src = Path(src)
+            st = src.stat()
+            info = tarfile.TarInfo(str(dest).lstrip("/"))
+            info.size, info.mtime, info.mode = st.st_size, int(st.st_mtime), (st.st_mode & 0o777) or 0o644
+            info.uid = info.gid = 0
+            info.uname = info.gname = "root"
+            with src.open("rb") as f:
+                tar.addfile(info, f)
+    return buf.getvalue()
+
+
+async def upload(img, files: dict[str, Path], what: str, log=lambda m: None):
+    """Lay files into an image with one upload and one unpack; returns the new image. A failed unpack is an
+    error about the upload, never a result about the app."""
+    if not files:
+        return img
+    data = archive(files)
+    log(f"[sandbox] {what}: {len(files)} files as one archive ({len(data) / 1e6:.1f} MB)")
+    out = await retrying(lambda: img.run(shell=f"tar xzf {UPLOAD_PATH} -C / && rm -f {UPLOAD_PATH}",
+                                         files={UPLOAD_PATH: data}, disposable=False, timeout=UNPACK_TIMEOUT),
+                         what, log)
+    if getattr(out, "exit_code", 0) not in (0, None):
+        raise InfraError(f"{what}: unpacking the code in the sandbox failed (exit {out.exit_code}): "
+                         f"{((out.stderr or '') + (out.stdout or ''))[-400:]}. Nothing was learned about the app.")
+    return out

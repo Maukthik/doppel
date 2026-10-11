@@ -21,12 +21,14 @@ import os
 import shlex
 from pathlib import Path
 
+from doppel import sandbox
 from doppel.errors import failure_text
 from doppel.spec import TwinSpec
 from doppel.timeline import Timeline
 
 APP = "/app"
-SKIP_PARTS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules", ".ruff_cache"}
+SKIP_PARTS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules", ".ruff_cache", ".mypy_cache",
+              ".tox", ".nox"}
 RUNNER = Path(__file__).resolve().parent.parent / "runner.py"
 PORT = 8000
 MAX_PARALLEL = 40          # the beta allows 50 concurrent operations; leave headroom
@@ -83,7 +85,6 @@ class NebiusTwin:
     async def _install(self, image, repo, what: str):
         """Install with git provided when the dependencies need it; once more with the build tools when it fails
         for want of a compiler or system headers (doppel.sandbox)."""
-        from doppel import sandbox
         shell = sandbox.install_shell(self.spec.install, repo)
         try:
             return await self._step(image, self.spec.exports() + shell, what, shown=self.spec.install)
@@ -146,7 +147,7 @@ class NebiusTwin:
         with self.tl.span("build", f"image {s.image}"):
             img = await self.client.images.use(s.image)
         with self.tl.span("build", "upload base code"):
-            img = await img.apply_files(code_files(base_dir))
+            img = await sandbox.upload(img, code_files(base_dir), "uploading the base code", self.log)
         self._count(img)
         if s.install:
             img = await self._install(img, base_dir, "install (base)")
@@ -163,7 +164,7 @@ class NebiusTwin:
 
         base = await self._step(seeded, s.exports() + s.migrate, "migrate (base)") if s.migrate else seeded
         with self.tl.span("build", "fork head world (PR files on top)", kind="fork"):
-            head = await seeded.apply_files(code_files(head_dir))
+            head = await sandbox.upload(seeded, code_files(head_dir), "uploading the head code", self.log)
         self._count(head)
         gone = removed_files(base_dir, head_dir)
         if gone:  # files the PR deletes: laying head's files on top would leave them in place

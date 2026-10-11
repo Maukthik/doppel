@@ -115,10 +115,11 @@ class NebiusWorkspace:
         return "".join(f"export {k}={shlex.quote(str(v))}; " for k, v in {**self.env, **(env or {})}.items())
 
     async def _open(self, repo: Path, install: str, image: str):
+        from doppel import sandbox
         from doppel.backends.nebius import code_files, make_client
         self.client = make_client()
         img = await self.client.images.use(image)
-        img = await img.apply_files(code_files(repo))
+        img = await sandbox.upload(img, code_files(repo), "uploading the code")
         if install:
             out = await img.run(shell=f"cd /app && {self._exports()}{install}", disposable=False, timeout=1800)
             self.install_log = f"exit {out.exit_code}\n" + _tail((out.stdout or "") + (out.stderr or ""), 1500)
