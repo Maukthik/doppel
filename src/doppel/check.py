@@ -170,8 +170,8 @@ def _group_table(groups: list[dict], why: bool) -> list[str]:
     out = [head, "|---|---|---|---|---|" + ("---|" if why else "")]
     for k, g in enumerate(groups, 1):
         ex = g["example"]
-        change = _cell("; ".join(g["changes"][:2]) + (f" (+{len(g['changes']) - 2} more)" if len(g["changes"]) > 2
-                                                         else ""), 90)
+        from doppel.checkview import headline
+        change = _cell(headline(g), 90)      # the same plain words as the check page
         where = "<br>".join(f"`{_cell(r, 45)}`" for r in g["routes"][:3]) + (
             f"<br>+{len(g['routes']) - 3} more" if len(g["routes"]) > 3 else "")
         seen = ", ".join(_seen(g["rows"], src) for src in g["sources"])
