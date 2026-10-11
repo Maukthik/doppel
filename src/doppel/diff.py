@@ -16,9 +16,51 @@ class Finding:
     detail: str
     base: object = None
     head: object = None
+    context: str = ""    # what led to it (what was sent, the steps before, the responses' fields): for the judge
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def _fields_of(body) -> list[str]:
+    """Top-level field names a client sees (a list's first item, or a page's first data item)."""
+    if isinstance(body, dict) and isinstance(body.get("data"), list):   # a page: its items' fields, or none
+        return list(body["data"][0]) if body["data"] and isinstance(body["data"][0], dict) else []
+    if isinstance(body, list) and body and isinstance(body[0], dict):
+        return list(body[0])
+    return list(body) if isinstance(body, dict) else []
+
+
+def context(steps_b: list[dict], i: int, steps_h: list[dict], j: int, req: str = "request") -> str:
+    """What led to a difference, in a line the judge can read without the code: what this request sent, the
+    (up to three) steps before it with their statuses on base and head, and the fields each response had.
+    A changed status after the user sent a newly announced field, or a changed list right after the same user
+    did something the PR announces, is a consequence; without this the judge sees only the difference."""
+    import json as _json
+
+    def sent(step) -> str:
+        value = step.get("sent")
+        return "" if value in (None, "", {}, []) else _json.dumps(value, ensure_ascii=False, default=str)[:300]
+    sb, sh = steps_b[i], (steps_h[j] if 0 <= j < len(steps_h) else {})
+    parts = []
+    if sent(sb):
+        parts.append(f"sent {sent(sb)}")
+    before = []
+    for k in range(max(0, i - 3), i):
+        b = steps_b[k]
+        h = steps_h[j - (i - k)] if 0 <= j - (i - k) < len(steps_h) else {}
+        status = str(b.get("status")) if b.get("status") == h.get("status") else \
+            f"base {b.get('status')}, head {h.get('status')}"
+        what = sent(b)
+        before.append(f"{b.get(req)}" + (f" sent {what[:120]}" if what else "") + f" -> {status}")
+    if before:
+        parts.append("before that: " + "; ".join(before))
+    fb, fh = _fields_of(sb.get("body")), _fields_of(sh.get("body"))
+    if fb or fh:
+        parts.append("base response fields: " + ", ".join(fb[:25]) if fb == fh else
+                     f"base response fields: {', '.join(fb[:25]) or '(none)'}; head response fields: "
+                     f"{', '.join(fh[:25]) or '(none)'}")
+    return " | ".join(parts)[:900]
 
 
 def _strip(value, ignore: set[str]):
@@ -103,17 +145,18 @@ def compare(base: list[dict], head: list[dict], ignore=(), slow_ratio: float = 2
         rh = head_by_name.get(rb["persona"])
         if rh is None:
             continue
-        for sb, sh in zip(rb["steps"], rh["steps"], strict=False):
+        for k, (sb, sh) in enumerate(zip(rb["steps"], rh["steps"], strict=False)):
             who, i, req = rb["persona"], sb["i"], sb["request"]
+            mark = len(findings)
             b_bad = sb["status"] == 0 or sb["status"] >= 500
             h_bad = sh["status"] == 0 or sh["status"] >= 500
             if h_bad and not b_bad:
                 findings.append(Finding("error", who, i, req, f"head failed with {sh['status'] or 'no response'}",
-                                        sb["status"], sh["status"]))
+                                        sb["status"], sh["status"], context(rb["steps"], k, rh["steps"], k)))
                 continue
             if sb["status"] != sh["status"]:
                 findings.append(Finding("status", who, i, req, f"status {sb['status']} -> {sh['status']}",
-                                        sb["status"], sh["status"]))
+                                        sb["status"], sh["status"], context(rb["steps"], k, rh["steps"], k)))
                 continue
             bb, hb = _strip(sb["body"], ignore), _strip(sh["body"], ignore)
             if bb != hb:
@@ -130,5 +173,7 @@ def compare(base: list[dict], head: list[dict], ignore=(), slow_ratio: float = 2
             if sh["ms"] >= slow_ratio * max(sb["ms"], 1) and sh["ms"] - sb["ms"] >= slow_min_ms:
                 findings.append(Finding("slow", who, i, req, f"{sb['ms']:.0f} ms -> {sh['ms']:.0f} ms",
                                         sb["ms"], sh["ms"]))
+            for f in findings[mark:]:
+                f.context = f.context or context(rb["steps"], k, rh["steps"], k)
     findings.sort(key=lambda f: (KINDS.index(f.kind), f.persona, f.step))
     return findings

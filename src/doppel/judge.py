@@ -53,17 +53,31 @@ Behavior changes:
 
 
 ANNOUNCE_PROMPT = """Below is a pull request DESCRIPTION, written by its author, and behavior changes that were
-observed when the same users used the app before and after the PR. You do not see the code on purpose:
-decide only from what the description tells a reader to expect.
+observed when the same users (or the app's own tests) used the app before and after the PR. You do not see the code
+on purpose: decide only from what the description tells a reader to expect, and from what each user did (its
+"context": what the request sent, the steps just before it, the fields each response had).
 
-For EACH change id: does the description announce this change, so that a client reading it would
-expect exactly this (this status code, field, value, ordering or error)? A description that only
-explains a code edit ("removes a check", "simplify the query", "tidy the validators", "no behavior
-change", "doesn't need its own check") does NOT announce the resulting behavior.
+For EACH change id: would a client who read the description expect this change? Yes when either
+(a) the description announces exactly this behavior, or
+(b) it follows directly and necessarily from something the description announces, given what was sent and done.
+    For example: a request that uses a newly announced field or value is now accepted; a newly announced endpoint
+    now answers instead of 404 (including by asking for a login); a request that breaks a newly announced rule is
+    now rejected with a validation error; a list reads differently because of an announced behavior the same
+    user just ran into; an announced rename makes the old name disappear and the new one appear.
+
+It is NOT expected, whatever the description says nearby, when:
+- it contradicts the announcement: a rule announced as "at most 140 characters" rejecting a 20-character post;
+  something announced as still visible to its owner now hidden from its owner;
+- it reaches beyond it: a field, endpoint or kind of data the description doesn't touch; data that silently
+  disappears instead of being renamed or moved (check the response fields in the context);
+- the request did nothing the announcement is about.
+A description that only explains a code edit ("removes a check", "simplify the query", "tidy the validators", "no
+behavior change", "doesn't need its own check") announces no behavior at all.
 
 Return ONLY JSON:
-{{"checks": [{{"id": "c1", "announced": true|false,
-               "quote": "the sentence from the description that announces it, word for word (if announced)"}}]}}
+{{"checks": [{{"id": "c1", "expected": true|false,
+               "quote": "the announcing sentence from the description, word for word (if expected)",
+               "because": "one sentence: how the change follows from it, or what contradicts it"}}]}}
 
 PR description:
 {pr}
@@ -122,9 +136,11 @@ def describe(findings: list[Finding], groups: dict[str, list[int]]) -> str:
     for cid, idx in groups.items():
         f = findings[idx[0]]
         seen = sorted({findings[i].request for i in idx})
+        contexts = list(dict.fromkeys(findings[i].context for i in idx if getattr(findings[i], "context", "")))
         lines.append(json.dumps({"id": cid, "kind": f.kind, "what": f.detail, "requests": seen[:5],
                                  "personas": sorted({findings[i].persona for i in idx})[:5],
-                                 "base": f.base, "head": f.head}, ensure_ascii=False, default=str)[:1500])
+                                 "base": f.base, "head": f.head, "context": contexts[:2]},
+                                ensure_ascii=False, default=str)[:2400])
     return "\n".join(lines)
 
 
@@ -167,14 +183,17 @@ def judge(findings: list[Finding], pr_text: str, diff: str, model: str | None = 
         v, c = verdicts[idx[0]], said.get(cid, {})
         if findings[idx[0]].kind == "slow":
             continue
-        is_announced = c.get("announced") is True and announced(str(c.get("quote") or ""), pr_text)
-        if is_announced:
-            new = Verdict("intended", f"Announced in the PR description: \"{str(c['quote'])[:160]}\". {v.why}")
+        expected = c.get("expected", c.get("announced")) is True
+        because = str(c.get("because") or "").strip()[:300]
+        if expected and announced(str(c.get("quote") or ""), pr_text):   # the quote has to be really there
+            new = Verdict("intended", f"Announced in the PR description: \"{str(c['quote'])[:160]}\". "
+                                      + (because or v.why))
         elif v.label == "needs_human" and not v.why.startswith("Not found in the PR description"):
             new = v
         else:
-            new = Verdict("regression", v.why.removeprefix("Not found in the PR description: ") if v.label != "intended"
-                          else "The PR description doesn't announce this change. " + v.why)
+            reason = because if (because and not expected) else v.why.removeprefix("Not found in the PR description: ")
+            new = Verdict("regression", reason if v.label != "intended"
+                          else "The PR description doesn't announce this change. " + reason)
         for i in idx:
             verdicts[i] = new
     summary = str(raw.get("summary", "")) if isinstance(raw, dict) else ""

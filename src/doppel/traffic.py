@@ -843,8 +843,10 @@ def compare_worlds(a: dict, b: dict, nz: dict, excluded: set[str]) -> tuple[list
         elif broke:
             only_a = []
         local: list[Finding] = []
+        from doppel.diff import context as _context
         for i, j in pairs:
             ra, rb = ta["requests"][i], tb["requests"][j]
+            mark = len(local)
             if ra["status"] != rb["status"] and (test, i) not in nz["status"]:
                 crashed = rb["status"] == 0 or rb["status"] >= 500
                 local.append(Finding("error" if crashed and not (ra["status"] == 0 or ra["status"] >= 500)
@@ -859,6 +861,8 @@ def compare_worlds(a: dict, b: dict, nz: dict, excluded: set[str]) -> tuple[list
                 shown = [_clean(p) for p in paths[:4]]
                 local.append(Finding("body", test, i, ra["sig"], "changed: " + summarize_paths(paths),
                                         {p: _at(ba, p) for p in shown}, {p: _at(bb, p) for p in shown}))
+            for f in local[mark:]:
+                f.context = _context(ta["requests"], i, tb["requests"], j, req="sig")
         for j in only_b:
             rb = tb["requests"][j]
             local.append(Finding("request", test, j, rb["sig"], "a request only the head run made",
