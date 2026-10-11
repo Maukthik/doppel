@@ -152,3 +152,10 @@ def test_the_failing_step_says_how_many_and_where_to_look():
     step = next(s for s in action["runs"]["steps"] if s.get("name") == "Fail on regressions")
     assert "::error title=Doppel::" in step["run"] and "${PAGE:-" in step["run"] and "regressions" in step["run"]
     assert "align-items:start" in render_check(DATA)       # a short mode card is not stretched into an empty box
+
+
+def test_the_page_commit_does_not_reference_the_pr():
+    import yaml
+    action = yaml.safe_load((Path(__file__).parent.parent / "action.yml").read_text(encoding="utf-8"))
+    step = next(s for s in action["runs"]["steps"] if s.get("name") == "Publish the check page")
+    assert 'PR #' not in step["run"].replace('"#N"', "")   # "#1" in a commit message adds a PR timeline entry
