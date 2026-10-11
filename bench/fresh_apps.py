@@ -51,8 +51,10 @@ APPS = [
     {"name": "label-studio", "repo": "https://github.com/HumanSignal/label-studio", "framework": "Django"},
     {"name": "bakerydemo", "repo": "https://github.com/wagtail/bakerydemo", "framework": "Django (Wagtail)"},
     {"name": "mealie", "repo": "https://github.com/mealie-recipes/mealie", "framework": "FastAPI"},
+    # the subfolder used to be hand-given ("subdir": "backend"); Doppel now finds it and keeps the whole repo,
+    # whose root .env the backend's settings read
     {"name": "fastapi-template", "repo": "https://github.com/fastapi/full-stack-fastapi-template",
-     "framework": "FastAPI", "subdir": "backend"},
+     "framework": "FastAPI"},
 ]
 HELDOUT_RULE = """Chosen on 11 Oct 2026, before any change to the setup layer, and not inspected for how they set up:
   - an open-source Python web application (Flask, Django or FastAPI), not a library or framework
@@ -132,11 +134,13 @@ def local_python(app: dict, code: Path) -> tuple[str, str]:
     py = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     if not py.exists():
         subprocess.run(["uv", "venv", "-q", "--seed", "-p", version, str(venv)], check=True)
-    install = detect(code)["install"]
+    plan = detect(code)["plan"]
+    install = " && ".join(plan["install"])        # no system packages here: those are for the Linux sandbox
+    where = code / plan["workdir"] if plan["workdir"] else code
     if install:
         env = {**os.environ, "VIRTUAL_ENV": str(venv),
                "PATH": str(py.parent) + os.pathsep + os.environ.get("PATH", "")}
-        r = subprocess.run(install, shell=True, cwd=code, env=env, capture_output=True, text=True, timeout=1800)
+        r = subprocess.run(install, shell=True, cwd=where, env=env, capture_output=True, text=True, timeout=1800)
         if r.returncode:
             return "", "the install command failed:\n" + (r.stdout + r.stderr)[-2500:]
     return str(py), ""

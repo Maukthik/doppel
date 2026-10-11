@@ -264,7 +264,7 @@ def test_detect_reads_tox_then_ci_then_layout(tmp_path):
     (wf / "ci.yml").write_text("jobs:\n  t:\n    steps:\n      - run: pip install -r requirements.txt\n"
                                "      - run: |\n          pytest -q --cov=app -n auto tests\n")
     found = detect(tmp_path)
-    assert found["test"] == "python -m pytest -q tests" and found["source"]["test"] == "CI workflow"
+    assert found["test"] == "python -m pytest -q tests" and found["source"]["test"] == "CI workflow (ci.yml, job t)"
     assert found["install"].startswith("pip install --quiet -r requirements.txt")
     (tmp_path / "tox.ini").write_text("[testenv]\ndeps = -r requirements-dev.txt\ncommands = pytest -p no:logging "
                                       "--cov=api\n")

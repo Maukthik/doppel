@@ -28,7 +28,6 @@ Safeguards (each one a reason a result could otherwise be wrong):
 from __future__ import annotations
 
 import base64
-import configparser
 import difflib
 import io
 import json
@@ -39,7 +38,6 @@ import subprocess
 import tarfile
 import tempfile
 import threading
-import tomllib
 from pathlib import Path
 
 from doppel.diff import Finding, changed_paths, summarize_paths
@@ -58,11 +56,7 @@ MAX_FAILING_SHARE = 0.5
 SKIP = shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache", ".tox", ".venv", "venv", "node_modules",
                               ".mypy_cache", ".ruff_cache", "*.pyc")
 IN_PROCESS_ORIGIN = re.compile(r"https?://(?:localhost|testserver|127\.0\.0\.1|example\.com)(?::\d+)?(?=[/?#\"']|$)")
-DEV_REQUIREMENTS = ("requirements-dev.txt", "requirements_dev.txt", "requirements-test.txt", "requirements_test.txt",
-                    "test-requirements.txt", "dev-requirements.txt", "requirements/dev.txt", "requirements/test.txt",
-                    "requirements/testing.txt")
-TEST_LINE = re.compile(r"(?:^|\s|&&|;)((?:python3?\s+-m\s+)?pytest\b[^\n&;|]*|python3?\s+manage\.py\s+test\b[^\n&;|]*|"
-                       r"python3?\s+-m\s+unittest\b[^\n&;|]*)")
+from doppel.setup_plan import DEV_REQUIREMENTS, TEST_LINE  # noqa: E402,F401 - re-exported
 
 
 class NotComparable(RuntimeError):
@@ -71,111 +65,19 @@ class NotComparable(RuntimeError):
 
 # ---------------------------------------------------------------- 1. read the repo's own truth
 
-def _clean_test_command(cmd: str) -> str:
-    """The project's test command, minus what would make worlds differ or slow them for nothing:
-    coverage, parallel workers (their split order varies), reports written to files."""
-    parts = cmd.strip().split()
-    out, skip_next = [], False
-    for p in parts:
-        if skip_next:
-            skip_next = False
-            continue
-        if p.startswith(("--cov", "--junitxml", "--html", "--numprocesses", "--dist", "--durations")):
-            continue
-        if p in ("-n", "--maxprocesses"):
-            skip_next = True
-            continue
-        out.append(p)
-    text = " ".join(out)
-    return re.sub(r"^pytest\b", "python -m pytest", text)
-
-
-def _from_tox(repo: Path) -> tuple[str, list[str]]:
-    f = repo / "tox.ini"
-    if not f.exists():
-        return "", []
-    cfg = configparser.ConfigParser(interpolation=None)
-    try:
-        cfg.read(f, encoding="utf-8")
-    except configparser.Error:
-        return "", []
-    sec = "testenv" if cfg.has_section("testenv") else next((s for s in cfg.sections() if s.startswith("testenv")), "")
-    if not sec:
-        return "", []
-    commands = [c.strip() for c in cfg.get(sec, "commands", fallback="").splitlines() if c.strip()]
-    test = next((m.group(1) for c in commands if (m := TEST_LINE.search(" " + c))), "")
-    deps = [d.strip() for d in cfg.get(sec, "deps", fallback="").splitlines() if d.strip()]
-    return test, deps
-
-
-def _from_ci(repo: Path) -> tuple[str, list[str]]:
-    """The test command and pip installs in the repo's GitHub Actions workflows (read as text: no YAML
-    library needed in the sandbox, and multi-line `run: |` blocks are just lines)."""
-    test, installs = "", []
-    for f in sorted((repo / ".github" / "workflows").glob("*.y*ml")):
-        for line in f.read_text("utf-8", errors="replace").splitlines():
-            body = re.sub(r"^\s*(?:-\s*)?(?:run:\s*)?", "", line).strip()
-            if not test and (m := TEST_LINE.search(" " + body)):
-                test = m.group(1)
-            if re.match(r"(?:python3?\s+-m\s+)?pip3?\s+install\b", body) and "tox" not in body:
-                installs.append(body)
-    return test, installs
-
-
-def _from_makefile(repo: Path) -> str:
-    """The pytest/manage.py/unittest line in a Makefile's test target (`make` itself may not exist in a slim
-    image, so the recipe line is run directly)."""
-    f = next((repo / n for n in ("Makefile", "makefile", "GNUmakefile") if (repo / n).exists()), None)
-    if f is None:
-        return ""
-    target = None
-    for line in f.read_text("utf-8", errors="replace").splitlines():
-        m = re.match(r"^([A-Za-z0-9_.-]+)\s*:(?!=)", line)
-        if m:
-            target = m.group(1)
-            continue
-        if target in ("test", "tests", "check", "unittest", "pytest") and line.startswith(("\t", "    ")):
-            hit = TEST_LINE.search(" " + line.strip().lstrip("@-"))
-            if hit:
-                return hit.group(1)
-    return ""
-
-
-TEST_SCRIPTS = ("scripts/test.sh", "scripts/tests.sh", "test.sh", "run_tests.sh", "scripts/run_tests.sh", "bin/test")
-
-
-def _from_script(repo: Path) -> str:
-    """A test script's environment settings and its test line (`export PYTHONPATH=./docs_src` then pytest),
-    without the lint, format or coverage steps around them."""
-    for name in TEST_SCRIPTS:
-        f = repo / name
-        if not f.is_file():
-            continue
-        exports, test = [], ""
-        for line in f.read_text("utf-8", errors="replace").splitlines():
-            line = line.strip()
-            m = re.match(r"^export\s+([A-Za-z_][A-Za-z0-9_]*=\S+)\s*$", line)
-            if m and not test:
-                exports.append(m.group(1))
-            elif not test and (hit := TEST_LINE.search(" " + line)):
-                test = re.sub(r"\s*(\$\{?@\}?|\$\*|\$\{?\d\}?)\s*", " ", hit.group(1)).strip()
-        if test:
-            return " ".join(f"export {e};" for e in exports) + (" " if exports else "") + test
-    return ""
-
-
-def _from_noxfile(repo: Path) -> str:
-    """session.run("pytest", "-q", ...) in a nox session named like tests."""
-    f = repo / "noxfile.py"
-    if not f.exists():
-        return ""
-    text = f.read_text("utf-8", errors="replace")
-    m = re.search(r"session\.run\(\s*['\"](pytest|python)['\"]((?:\s*,\s*['\"][^'\"]*['\"])*)", text)
-    if not m:
-        return ""
-    args = re.findall(r"['\"]([^'\"]*)['\"]", m.group(2))
-    cmd = " ".join([m.group(1), *args])
-    return cmd if TEST_LINE.search(" " + cmd) else ""
+def detect(repo: str | Path) -> dict:
+    """{"test": command, "install": command, "source": where each came from, "plan": the full SetupPlan}.
+    The plan (doppel.setup_plan) reads, most trusted first: doppel.toml [tests], tox.ini, the CI job that runs
+    the tests, then the usual layout; the install always follows the test command's source."""
+    from doppel import setup_plan
+    plan = setup_plan.plan(repo)
+    settings, bare = split_env(plan.test)
+    cleaned = " ".join(f"export {k}={v};" for k, v in settings.items()) + (" " if settings else "") + \
+        setup_plan.clean_test_command(bare) if plan.test else ""
+    plan.test = cleaned
+    return {"test": cleaned, "install": plan.install_shell(),
+            "source": {"test": plan.source.get("test", ""), "install": plan.source.get("install", "")},
+            "plan": plan.to_dict()}
 
 
 def suites_below(repo: str | Path, depth: int = 2) -> list[str]:
@@ -201,89 +103,6 @@ def suites_below(repo: str | Path, depth: int = 2) -> list[str]:
 def _looks_testable(folder: Path) -> bool:
     return any((folder / n).exists() for n in ("tox.ini", "pytest.ini", "conftest.py", "manage.py", "noxfile.py")) \
         or ((folder / "pyproject.toml").exists() and (folder / "tests").is_dir())
-
-
-def detect(repo: str | Path) -> dict:
-    """{"test": command, "install": command, "source": where each came from}. The repo's own files win:
-    an explicit [tests] table in doppel.toml, then tox.ini, then CI workflows, then the usual layout."""
-    repo = Path(repo)
-    spec = repo / "doppel.toml"
-    if spec.exists():
-        try:
-            table = tomllib.loads(spec.read_text("utf-8")).get("tests", {})
-        except tomllib.TOMLDecodeError:
-            table = {}
-        if table.get("command"):
-            return {"test": table["command"], "install": table.get("install", _default_install(repo)),
-                    "source": {"test": "doppel.toml [tests]", "install": "doppel.toml [tests]" if table.get("install")
-                               else "requirements files"}}
-    tox_test, tox_deps = _from_tox(repo)
-    ci_test, ci_installs = _from_ci(repo)
-    if tox_test:
-        test, source = tox_test, "tox.ini"
-    elif ci_test and "tox" not in ci_test:
-        test, source = ci_test, "CI workflow"
-    elif script_test := _from_script(repo):
-        test, source = script_test, "test script"
-    elif make_test := _from_makefile(repo):
-        test, source = make_test, "Makefile"
-    elif nox_test := _from_noxfile(repo):
-        test, source = nox_test, "noxfile.py"
-    elif (repo / "manage.py").exists() and not _uses_pytest(repo):
-        test, source = "python manage.py test", "manage.py (Django's test runner)"
-    elif _has_tests(repo):
-        test, source = "python -m pytest", "tests found in the repo"
-    else:
-        test, source = "", ""
-    install, isource = _default_install(repo), "requirements files"
-    if tox_deps and source == "tox.ini":
-        install = "pip install --quiet " + " ".join(d if d.startswith("-r") or d.startswith("-e") else f"'{d}'"
-                                                   for d in tox_deps)
-        install = install.replace("-r ", "-r ").strip()
-        isource = "tox.ini deps"
-    elif ci_installs:
-        install, isource = " && ".join(dict.fromkeys(i.replace("pip install", "pip install --quiet", 1)
-                                                     for i in ci_installs)), "CI workflow"
-    if test and "pytest" in test and "pytest" not in install:
-        install = (install + " && " if install else "") + "pip install --quiet pytest"
-    settings, bare = split_env(test)
-    cleaned = " ".join(f"export {k}={v};" for k, v in settings.items()) + (" " if settings else "") + \
-        _clean_test_command(bare) if test else ""
-    return {"test": cleaned, "install": install,
-            "source": {"test": source, "install": isource}}
-
-
-def _uses_pytest(repo: Path) -> bool:
-    if (repo / "pytest.ini").exists() or (repo / "conftest.py").exists():
-        return True
-    for name in ("pyproject.toml", "setup.cfg", "tox.ini"):
-        f = repo / name
-        if f.exists() and re.search(r"\[(tool[.:])?pytest", f.read_text("utf-8", "replace")):
-            return True
-    return False
-
-
-def _has_tests(repo: Path) -> bool:
-    return any(p for p in repo.rglob("test*.py") if not {".venv", "venv", "node_modules", ".tox"} & set(p.parts))
-
-
-def _default_install(repo: Path) -> str:
-    parts = []
-    if (repo / "requirements.txt").exists():
-        parts.append("-r requirements.txt")
-    parts += [f"-r {name}" for name in DEV_REQUIREMENTS if (repo / name).exists()]
-    pyproject = repo / "pyproject.toml"
-    if pyproject.exists():
-        try:
-            project = tomllib.loads(pyproject.read_text("utf-8")).get("project", {})
-        except tomllib.TOMLDecodeError:
-            project = {}
-        extras = [e for e in ("test", "tests", "testing", "dev") if e in (project.get("optional-dependencies") or {})]
-        if project and not parts:
-            parts.append(f"-e '.[{','.join(extras)}]'" if extras else "-e .")
-        elif extras:
-            parts.append(f"-e '.[{','.join(extras)}]'")
-    return f"pip install --quiet {' '.join(parts)}" if parts else ""
 
 
 # ---------------------------------------------------------------- 2. the recorder, as files for a world
@@ -396,8 +215,9 @@ class LocalSession:
     (tests may write files), all jobs of a batch at the same time."""
 
     def __init__(self, base: Path, head: Path, install: str = "", log=lambda m: None, python: str = "",
-                 extra_env: dict | None = None):
+                 extra_env: dict | None = None, workdir: str = ""):
         self.extra_env = dict(extra_env or {})
+        self.workdir = workdir
         # absolute(), not resolve(): a venv's python is a symlink to the base interpreter, and resolving it
         # would drop the venv (and everything installed in it)
         self.path_prefix = str(Path(python).absolute().parent) if python and Path(python).exists() else ""
@@ -420,7 +240,8 @@ class LocalSession:
             shutil.copytree(self.code[code], work)
             out.mkdir()
             dirs.append((work, out))
-        threads = [threading.Thread(target=_run_one, args=(work, out, self.hook, cmd, timeout, self.path_prefix,
+        threads = [threading.Thread(target=_run_one, args=(work / self.workdir if self.workdir else work, out,
+                                                           self.hook, cmd, timeout, self.path_prefix,
                                                            self.extra_env))
                    for (work, out), (_, cmd) in zip(dirs, jobs, strict=True)]
         for t in threads:
@@ -475,17 +296,18 @@ class NebiusSession:
     each a disposable fork, all at the same time."""
 
     def __init__(self, base: Path, head: Path, install: str = "", image: str = "", log=lambda m: None,
-                 extra_env: dict | None = None, python: str = ""):
+                 extra_env: dict | None = None, python: str = "", workdir: str = ""):
         import asyncio
         import shlex
 
         from doppel.backends.nebius import APP, code_files, make_client
         from doppel.probe import IMAGE, image_for
-        if not python and image_for(base) != IMAGE:   # the app declares another Python (requires-python)
-            python = image_for(base).split(":")[1].split("-")[0]
+        code = base / workdir if workdir else base
+        if not python and image_for(code) != IMAGE:   # the app declares another Python (requires-python)
+            python = image_for(code).split(":")[1].split("-")[0]
             log(f"[tests] the app needs Python {python}: it will be installed in the sandbox")
         self.loop = asyncio.new_event_loop()
-        self.log, self.app = log, APP
+        self.log, self.app = log, f"{APP}/{workdir}" if workdir else APP
         changed, removed = _changed_files(base, head)
         changed = [c for c in changed if not is_test_file(c)]   # head world: the PR's code, the base's tests
         removed = [r for r in removed if not is_test_file(r)]
@@ -506,15 +328,15 @@ class NebiusSession:
         async def install_on(img, what: str, again: bool = False):
             """The install step: git first when needed; if it fails for want of a compiler or headers, once
             more with the build tools. Returns the installed image, or raises NotComparable with the output."""
-            shell = sandbox.install_shell(install or "true", base)
+            shell = sandbox.install_shell(install or "true", code)
             setup = "" if again else provision
-            out = await sandbox.retrying(lambda: img.run(shell=f"cd {APP} && {setup}{activate}{shell}",
+            out = await sandbox.retrying(lambda: img.run(shell=f"cd {self.app} && {setup}{activate}{shell}",
                                                          disposable=False, timeout=TEST_TIMEOUT), what, log)
             text = (out.stdout or "") + (out.stderr or "")
             if out.exit_code != 0 and sandbox.needs_build_tools(text):
                 log(f"[tests] {what} needs a compiler or system libraries: installing build tools, trying again")
                 out = await sandbox.retrying(lambda: img.run(
-                    shell=f"cd {APP} && {setup}{activate}{sandbox.with_build_tools(shell)}", disposable=False,
+                    shell=f"cd {self.app} && {setup}{activate}{sandbox.with_build_tools(shell)}", disposable=False,
                     timeout=TEST_TIMEOUT), what + " (with build tools)", log)
                 text = (out.stdout or "") + (out.stderr or "")
             if out.exit_code != 0:
@@ -585,12 +407,12 @@ PYTHON_VENV = "/opt/doppel-python"
 
 
 def open_session(backend: str, base: Path, head: Path, install: str, log=lambda m: None, python: str = "",
-                 extra_env: dict | None = None):
+                 extra_env: dict | None = None, workdir: str = ""):
     """python: a version ("3.8": installed in the sandbox with uv, on the standard image) or, locally, an
     interpreter path (its venv runs the tests). Empty: the image's Python; locally, your environment."""
     if backend == "local":
-        return LocalSession(base, head, install, log, python=python, extra_env=extra_env)
-    return NebiusSession(base, head, install, log=log, extra_env=extra_env, python=python)
+        return LocalSession(base, head, install, log, python=python, extra_env=extra_env, workdir=workdir)
+    return NebiusSession(base, head, install, log=log, extra_env=extra_env, python=python, workdir=workdir)
 
 
 # ---------------------------------------------------------------- 3b. planning: shards and confirmation
@@ -992,6 +814,9 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
     "flaky", "unstable", "noise_keys", "detected", "worlds"}."""
     base, head = Path(base).resolve(), Path(head).resolve()
     found = detect(base)
+    plan = found.get("plan") or {}
+    workdir = plan.get("workdir", "") if not test else ""   # a command you give runs where you point
+    code = base / workdir if workdir else base               # where the tests and the manifest are
     test = test or found["test"]
     install = found["install"] if install is None else install
     if not test:
@@ -1004,20 +829,26 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
                             "configuration, manage.py or test files): test mode needs the app's own tests. Use "
                             "the HTTP twin (`doppel run` with a doppel.toml) instead.")
     log(f"[tests] test command: {test}   (from {found['source']['test'] if test == found['test'] else 'you'})")
+    if workdir:
+        log(f"[tests] running in {workdir}/ (the whole repo is there too)")
     if backend != "local" and install:
         log(f"[tests] install: {install[:140]}   (from {found['source']['install']})")
-    extra_env, test = split_env(test)
+    command_env, test = split_env(test)
+    extra_env = {**(plan.get("env") or {}), **command_env}
     if extra_env:
         log(f"[tests] environment for every world: {extra_env}")
+    services = plan.get("services") or []
+    unmet = (f" The project's CI starts services Doppel doesn't start yet: {', '.join(services)}."
+             if services else "")
     if deselect and runner_kind(test) == "pytest":
         import shlex
         test = test + " " + " ".join(shlex.quote(f"--deselect={d}") for d in deselect)   # one word: never split
     session = runner(backend, base, head, install, log) if runner else open_session(backend, base, head, install,
-                                                                                   log, python, extra_env)
+                                                                                   log, python, extra_env, workdir)
     try:
-        plan = shards(base, test)
+        plan = shards(code, test)
         if len(plan) > 1:
-            log(f"[tests] {len(test_files(base, test))} test files: split across {len(plan)} sandboxes per world")
+            log(f"[tests] {len(test_files(code, test))} test files: split across {len(plan)} sandboxes per world")
         log(f"[tests] running `{test}` in 3 worlds (base, base again, head)")
         runs = session.run([(code, cmd) for code in ("base", "base", "head") for cmd in plan])
         k = len(plan)
@@ -1026,12 +857,12 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
         # S1: the base has to have run
         passed, failed = _passed_or_failed(a)
         if passed + failed == 0:
-            raise NotComparable(f"the test command ran no test on the unchanged code (exit {a['exit']}). "
+            raise NotComparable(f"the test command ran no test on the unchanged code (exit {a['exit']}).{unmet} "
                                 "Its output:\n" + a["output"][-3000:])
         if failed > MAX_FAILING_SHARE * (passed + failed):
             raise NotComparable(f"{failed} of {passed + failed} tests fail on the unchanged code here, so this "
                                 "environment is not the one the tests expect (a missing service, env var or "
-                                "dependency). Output:\n" + a["output"][-3000:])
+                                f"dependency).{unmet} Output:\n" + a["output"][-3000:])
         failing_on_base = {t for w in (a, a2) for t, v in w["tests"].items() if v["outcome"] == "failed"}
         # S2: noise from two runs of the same code
         nz = noise(a, a2)
@@ -1039,11 +870,11 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
         requests = sum(len(t["requests"]) for t in a["tests"].values())
         if requests == 0:
             raise NotComparable(f"the tests ran ({passed} passed) but sent no request through a test client Doppel "
-                                "records, so there is no traffic to compare. " + why_nothing_recorded(base) +
+                                "records, so there is no traffic to compare. " + why_nothing_recorded(code) +
                                 " The tests' own pass/fail still applies; for behavior checks use the HTTP twin.")
         findings, stats = compare_worlds(a, b, nz, failing_on_base)
         # S5: a difference counts only if it happens again
-        findings, confirmed = confirm(session, base, test, findings, a, b, nz, failing_on_base, log)
+        findings, confirmed = confirm(session, code, test, findings, a, b, nz, failing_on_base, log)
         stats["confirmation"] = confirmed
     finally:
         session.close()
