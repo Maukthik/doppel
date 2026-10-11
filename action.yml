@@ -174,6 +174,13 @@ runs:
     - name: Fail on regressions
       if: steps.run.outputs.exit-code == '1' && inputs.fail-on-regression == 'true'
       shell: bash
+      env:
+        PAGE: ${{ steps.page.outputs.url }}
+        RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
-        echo "Doppel found behavior changes the PR doesn't mention. See the PR comment."
+        # one line a reviewer can act on, as an error annotation (shown on the run's summary, not only in this log)
+        N=$(python -c "import json; print(json.load(open('.doppel/out/check.json')).get('regressions', 0))" 2>/dev/null || echo "")
+        WHAT="${N:-Some} regression$([ "$N" = "1" ] || echo s) the PR doesn't mention"
+        WHERE="${PAGE:-the PR comment and the run artifacts ($RUN)}"
+        echo "::error title=Doppel::$WHAT. See $WHERE"
         exit 1

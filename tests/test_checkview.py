@@ -144,3 +144,11 @@ def test_the_head_box_does_not_inherit_the_viewers_head_row_grid():
     page = render_check(DATA)
     assert 'class="w after"' in page and 'class="w head"' not in page   # the viewer's CSS styles .head as a grid row
     assert "What is Doppel?" in page and 'class="what"' in page
+
+
+def test_the_failing_step_says_how_many_and_where_to_look():
+    import yaml
+    action = yaml.safe_load((Path(__file__).parent.parent / "action.yml").read_text(encoding="utf-8"))
+    step = next(s for s in action["runs"]["steps"] if s.get("name") == "Fail on regressions")
+    assert "::error title=Doppel::" in step["run"] and "${PAGE:-" in step["run"] and "regressions" in step["run"]
+    assert "align-items:start" in render_check(DATA)       # a short mode card is not stretched into an empty box

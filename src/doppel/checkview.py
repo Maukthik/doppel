@@ -244,7 +244,7 @@ CHECK_CSS = r"""
 footer a{color:var(--free);font-weight:500}
 .banner{font-size:1.25rem;font-weight:600;padding:14px 20px;border-radius:12px;margin:18px 0 26px;color:#fff}
 .banner.red{background:var(--stop)}.banner.green{background:var(--pass)}.banner.grey{background:var(--quiet)}
-.modes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;margin:0 0 22px}
+.modes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;margin:0 0 22px;align-items:start}
 .mode{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:14px 18px}
 .mode h3{margin:0 0 8px;font-size:1rem;font-weight:600}.mode h3 span{color:var(--quiet);font-weight:400;font-size:.85rem;margin-left:6px}
 .mode ul{margin:0;padding-left:18px;font-size:.92rem}.mode li{margin:2px 0}.mode p{margin:0;font-size:.92rem;color:var(--quiet)}
