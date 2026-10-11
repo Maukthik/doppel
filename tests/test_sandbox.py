@@ -58,6 +58,7 @@ class FakeWorld:
 @pytest.fixture
 def fast(monkeypatch):
     monkeypatch.setattr(sandbox, "BACKOFF", (0, 0, 0))
+    monkeypatch.setattr(sandbox, "UPLOAD_BACKOFF", (0,))
 
 
 def session(monkeypatch, tmp_path, world, install="pip install -r requirements.txt", head_app=FLASK_APP):
@@ -218,7 +219,7 @@ def test_upload_is_one_request_and_one_unpack_whatever_the_file_count(tmp_path, 
     assert calls[0][0].startswith(f"cat {sandbox.UPLOAD_PATH}.* > {sandbox.UPLOAD_PATH} && tar xzf")
 
 
-def test_a_big_archive_goes_up_in_parts_a_few_at_a_time_and_joins_back(tmp_path, fast, monkeypatch):
+def test_a_big_archive_goes_up_in_parts_one_at_a_time_and_joins_back(tmp_path, fast, monkeypatch):
     # 8.7 MB and up failed as one request every time; parts of 2 MB, three at once, each retried alone
     import io
     import os
@@ -251,7 +252,7 @@ def test_a_big_archive_goes_up_in_parts_a_few_at_a_time_and_joins_back(tmp_path,
             return Image()
     asyncio.run(sandbox.upload(Image(), files, "uploading the code"))
     parts = runs[0]
-    assert len(parts) > 3 and len(sent) == len(parts) and peak[0] <= sandbox.UPLOAD_PARALLEL
+    assert len(parts) > 3 and len(sent) == len(parts) and peak[0] == 1     # one at a time by default
     whole = b"".join(parts[k] for k in sorted(parts))
     with tarfile.open(fileobj=io.BytesIO(whole), mode="r:gz") as tar:
         assert sorted(tar.getnames()) == sorted(files)
@@ -287,3 +288,27 @@ def test_a_missing_pkg_config_calls_for_the_build_tools():
            "      Command 'pkg-config --exists mysqlclient' returned non-zero exit status 127.\n")
     assert sandbox.needs_build_tools(out)
     assert "pkg-config" in sandbox.BUILD_TOOLS and "default-libmysqlclient-dev" in sandbox.BUILD_TOOLS
+
+
+
+def test_a_part_gets_more_tries_than_other_calls_and_the_log_says_how_fast(tmp_path, fast, monkeypatch):
+    import os
+    monkeypatch.setattr(sandbox, "UPLOAD_PART", 32 * 1024)
+    (tmp_path / "b.bin").write_bytes(os.urandom(70_000))
+    drops = {"left": sandbox.RETRIES}          # more drops than an ordinary call survives
+
+    class Files:
+        async def _upload_bytes_file(self, data):
+            if drops["left"]:
+                drops["left"] -= 1
+                raise ContreeTransportError("ReadError")
+
+    class Image:
+        _client = SimpleNamespace(files=Files())
+        exit_code, stdout, stderr = 0, "", ""
+
+        async def run(self, shell, files=None, **kw):
+            return Image()
+    lines = []
+    asyncio.run(sandbox.upload(Image(), {"app/b.bin": tmp_path / "b.bin"}, "uploading the code", lines.append))
+    assert any("MB sent in" in m and "MB/s" in m for m in lines)

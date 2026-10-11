@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 import re
 import tarfile
+import time
 from pathlib import Path
 
 MAX_SANDBOXES = 12
@@ -47,8 +49,12 @@ REQUIREMENT_FILES = ("requirements*.txt", "requirements/*.txt", "*requirements*.
 
 
 UPLOAD_PATH = "/tmp/.doppel-upload.tgz"
-UPLOAD_PART = 2 * 1024 * 1024   # every upload up to 5.3 MB went through; every one from 8.7 MB failed
-UPLOAD_PARALLEL = 3
+# One request carrying 5.3 MB went through, 8.7 MB failed every time; 2 MB parts three at a time still failed
+# for some parts again and again. What fails is a request that takes too long while it shares the uplink, not
+# its size: so small parts, one at a time, each with more tries. A fast uplink (a CI runner) can raise both.
+UPLOAD_PART = int(float(os.getenv("DOPPEL_UPLOAD_PART_MB", "1")) * 1024 * 1024)
+UPLOAD_PARALLEL = int(os.getenv("DOPPEL_UPLOAD_PARALLEL", "1"))
+UPLOAD_ATTEMPTS, UPLOAD_BACKOFF = 5, (5, 15, 30, 60)
 UNPACK_TIMEOUT = 900
 
 
@@ -70,9 +76,12 @@ def throttle() -> asyncio.Semaphore:
     return asyncio.Semaphore(MAX_SANDBOXES)
 
 
-async def retrying(make, what: str, log=lambda m: None, sem: asyncio.Semaphore | None = None):
+async def retrying(make, what: str, log=lambda m: None, sem: asyncio.Semaphore | None = None,
+                   attempts: int | None = None, backoff: tuple = ()):
     """await make() (a fresh coroutine per attempt), inside the throttle, retrying transient failures."""
-    for attempt in range(RETRIES):
+    tries = attempts or RETRIES
+    waits = backoff or BACKOFF
+    for attempt in range(tries):
         try:
             if sem is None:
                 return await make()
@@ -81,12 +90,13 @@ async def retrying(make, what: str, log=lambda m: None, sem: asyncio.Semaphore |
         except Exception as e:  # noqa: BLE001 - classified below
             if not transient(e):
                 raise
-            if attempt == RETRIES - 1:
-                raise InfraError(f"infrastructure error while {what}, {RETRIES} attempts: "
+            if attempt == tries - 1:
+                raise InfraError(f"infrastructure error while {what}, {tries} attempts: "
                                  f"{type(e).__name__}: {str(e)[:400]}. Nothing was learned about the app; "
                                  "rerun.") from e
-            log(f"[sandbox] {type(e).__name__} while {what}: retrying in {BACKOFF[attempt]} s")
-            await asyncio.sleep(BACKOFF[attempt])
+            wait = waits[min(attempt, len(waits) - 1)]
+            log(f"[sandbox] {type(e).__name__} while {what}: retrying in {wait} s")
+            await asyncio.sleep(wait)
     raise AssertionError("unreachable")
 
 
@@ -140,10 +150,9 @@ def archive(files: dict[str, Path]) -> bytes:
 
 async def upload(img, files: dict[str, Path], what: str, log=lambda m: None):
     """Lay files into an image: one archive, sent in parts of at most UPLOAD_PART bytes, joined and unpacked in
-    the sandbox; returns the new image. One large request failed every time (8.7 MB and up: ReadError and
-    timeouts on all three attempts; 5.3 MB and below went through), and one request per file broke the
-    connection pool. The parts go up a few at a time, each retried on its own; a failed unpack is an
-    InfraError, never a result about the app."""
+    the sandbox; returns the new image. One large request failed every time, one request per file broke the
+    connection pool; the parts go up one at a time by default (UPLOAD_PARALLEL), each retried on its own, and
+    the log says how fast it went. A failed unpack is an InfraError, never a result about the app."""
     if not files:
         return img
     data = archive(files)
@@ -153,12 +162,16 @@ async def upload(img, files: dict[str, Path], what: str, log=lambda m: None):
         + (f", {len(parts)} parts)" if len(parts) > 1 else ")"))
     send = getattr(getattr(getattr(img, "_client", None), "files", None), "_upload_bytes_file", None)
     if send is not None and len(parts) > 1:   # content-addressed: the run below finds the parts already there
-        gate = asyncio.Semaphore(UPLOAD_PARALLEL)
+        gate = asyncio.Semaphore(max(1, UPLOAD_PARALLEL))
+        started = time.monotonic()
 
         async def one(n: int, part: bytes):
             async with gate:
-                await retrying(lambda: send(part), f"{what} (part {n + 1} of {len(parts)})", log)
+                await retrying(lambda: send(part), f"{what} (part {n + 1} of {len(parts)})", log,
+                               attempts=UPLOAD_ATTEMPTS, backoff=UPLOAD_BACKOFF)
         await asyncio.gather(*(one(n, part) for n, part in enumerate(parts)))
+        took = max(time.monotonic() - started, 0.001)
+        log(f"[sandbox] {what}: {len(data) / 1e6:.1f} MB sent in {took:.0f} s ({len(data) / 1e6 / took:.2f} MB/s)")
     shell = (f"cat {UPLOAD_PATH}.* > {UPLOAD_PATH} && tar xzf {UPLOAD_PATH} -C / && "
              f"rm -f {UPLOAD_PATH} {UPLOAD_PATH}.*")
     out = await retrying(lambda: img.run(shell=shell, files=dict(zip(names, parts, strict=True)), disposable=False,
