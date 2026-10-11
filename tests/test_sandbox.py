@@ -186,8 +186,8 @@ def test_the_archive_holds_every_file_with_its_content_and_mode(tmp_path):
     import os
     import tarfile
     (tmp_path / "pkg").mkdir()
-    (tmp_path / "pkg" / "app.py").write_text("print('hi')\n")
-    (tmp_path / "run.sh").write_text("#!/bin/sh\n")
+    (tmp_path / "pkg" / "app.py").write_bytes(b"print('hi')\n")   # bytes: write_text gives \r\n on Windows
+    (tmp_path / "run.sh").write_bytes(b"#!/bin/sh\n")
     if os.name != "nt":
         os.chmod(tmp_path / "run.sh", 0o755)
     files = {"app/pkg/app.py": tmp_path / "pkg" / "app.py", "app/run.sh": tmp_path / "run.sh"}
