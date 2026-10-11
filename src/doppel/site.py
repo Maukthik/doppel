@@ -26,7 +26,7 @@ SECRET_ENV = re.compile(r"(API_KEY|TOKEN|SECRET|PASSWORD|PROJECT_ID)$")
 MASK = "[hidden on the site]"
 PLACEHOLDER = re.compile(r"(Bearer\s+|Basic\s+)?\{\w+\}")  # "Bearer {token}": a persona's template, not a secret
 # password hashes by format, wherever they appear (also inside truncated JSON that can't be parsed)
-HASH = re.compile(r"((?:scrypt|pbkdf2)[:\w-]*\$|\$argon2\w*\$|\$2[aby]\$\d\d\$)[^\s\"\\,}]+")
+HASH = re.compile(r"((?:scrypt|pbkdf2)[:\w-]*\$|\$argon2\w*\$|\$2[aby]\$\d\d\$)(?!\[hidden)[^\s\"\\,}]+")  # idempotent
 # "key": "value" for credential-looking keys, plain or backslash-escaped, in text that isn't valid JSON
 KEY_VALUE = re.compile(r'(\\?"[\w-]*(?:passw(?:or)?d|secret|token|api[_-]?key|authorization|cookie|session)'
                        r'[\w-]*\\?"\s*:\s*\\?")((?:[^"\\]|\\[^"])+)', re.I)
@@ -38,8 +38,10 @@ class SecretLeak(RuntimeError):
 
 def _mask(value):
     """Keep what a reader needs to see (that a password hash is there, and its scheme), drop the rest."""
-    if not isinstance(value, str) or not value:
-        return value
+    if not isinstance(value, str) or not value or MASK in value:
+        return value                      # nothing there, or already masked: masking twice must change nothing
+    if value.startswith("(") and value.endswith(")"):
+        return value                      # Doppel's own placeholders ("(absent)", "(not sent)") are not secrets
     if "$" in value[:40]:  # "scrypt:32768:8:1$salt$hash" or "pbkdf2:sha256:600000$..."
         return value.split("$", 1)[0] + "$" + MASK
     return MASK
@@ -48,7 +50,9 @@ def _mask(value):
 def _scrub_text(text: str) -> str:
     text = HASH.sub(lambda m: m.group(1) + MASK, text)
     text = KEY_VALUE.sub(lambda m: m.group(1) + (m.group(2) if m.group(2).startswith(("[hidden", "{")) or
-                                                  HASH.match(m.group(2)) or m.group(2).endswith(MASK) else MASK), text)
+                                                  HASH.match(m.group(2)) or m.group(2).endswith(MASK) or
+                                                  (m.group(2).startswith("(") and m.group(2).endswith(")"))
+                                                  else MASK), text)   # "(absent)" is Doppel's placeholder
     text = JWT.sub(MASK, text)
     return BEARER.sub(lambda m: m.group(1) + MASK, text)
 

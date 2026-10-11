@@ -30,6 +30,22 @@ Remove-Item -Recurse -Force .git
 git init -q -b main
 git config core.autocrlf false
 
+# microblog-api's own CI runs lint, 15 test combinations and a Codecov upload that needs a token this repo doesn't
+# have: replace it with one plain "tests" check, so the PR shows what matters (the tests pass, Doppel doesn't)
+Remove-Item -Force .github\workflows\*.yml
+@'
+name: tests
+on: [push, pull_request]
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install tox
+      - run: tox -e py312
+'@ | Set-Content -Encoding utf8 .github\workflows\tests.yml
 New-Item -ItemType Directory -Force .github\workflows | Out-Null
 @'
 name: doppel
@@ -61,8 +77,11 @@ $title = [System.Web.HttpUtility]::UrlEncode("Describe has_password in the API s
 $body = [System.Web.HttpUtility]::UrlEncode("Back ``has_password`` with the actual column so the OpenAPI docs describe it.")
 Set-Location $doppel
 Write-Host ""
-Write-Host "Done. Open this link and press 'Create pull request':"
-Write-Host "https://github.com/$Owner/$Repo/compare/main...describe-has-password?expand=1&title=$title&body=$body"
+$url = "https://github.com/$Owner/$Repo/compare/main...describe-has-password?expand=1&title=$title&body=$body"
+Write-Host "Done. Your browser opens the pull request page with its title and description filled in;"
+Write-Host "check both, then press 'Create pull request'. (If it doesn't open, copy this whole line:)"
+Write-Host $url
+Start-Process $url      # a terminal wraps long links and a click opens only part of it: open the full one directly
 Write-Host ""
 Write-Host "After the first run (it creates the gh-pages branch): Settings -> Pages -> Deploy from a branch -> gh-pages,"
 Write-Host "then re-run the job (Actions tab -> the run -> Re-run jobs) so the comment links the check page."

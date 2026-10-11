@@ -96,3 +96,45 @@ def test_the_action_publishes_the_page_and_links_it_first():
     assert "exit 0" in steps["Publish the check page"]["run"]          # publishing can never fail the job
     assert "Open the full check page" in steps["Comment on the PR"]["run"]
     assert action["inputs"]["publish-page"]["default"] == "true"
+
+
+# the live demo page (doppel-demo PR #1): one leak shown as 4 cards, base "hidden" though absent, the hash masked twice
+PLACES = [("GET /api/me", "changed: password_hash (added)", {"password_hash": None}, "in user detail endpoints"),
+          ("GET /api/users/1", "changed: password_hash (added)", {"password_hash": HASH}, "in user detail endpoints"),
+          ("GET /api/users", "changed: data.*.password_hash (added)", {"data.0.password_hash": HASH}, "in user lists"),
+          ("GET /api/feed", "changed: data.*.author.password_hash (added) x3", {"data.0.author.password_hash": HASH},
+           "in feed author objects"),
+          ("GET /api/posts/1", "changed: author.password_hash (added)", {"author.password_hash": HASH},
+           "in post author objects")]
+LIVE = {**DATA, "rows": [
+    {"source": "your tests", "who": f"t{i}", "request": req, "kind": "body", "detail": d,
+     "base": {k: "(absent)" for k in head}, "head": head, "label": "regression",
+     "why": f"The PR only documents has_password, but the diff exposes password hashes {where}."}
+    for i, (req, d, head, where) in enumerate(PLACES)]}
+
+
+def test_one_leak_judged_place_by_place_is_still_one_regression():
+    page = render_check(LIVE)
+    assert "1 regression the PR doesn&#x27;t mention, seen in 5 requests" in page
+    assert page.count('<article class="change') == 1
+
+
+def test_the_public_page_shows_absent_as_absent_and_masks_the_hash_once():
+    page = render_check(LIVE, public=True)
+    assert "(absent)" in page                                         # base really didn't have it
+    assert "scrypt:32768:8:1$[hidden on the site]" in page            # the scheme stays visible: it IS a hash
+    assert "on the site] on the site]" not in page and HASH not in page
+
+
+def test_the_example_shows_a_real_value_not_null():
+    from doppel.check import group
+    [g] = group(LIVE["rows"])
+    assert g["example"]["head"] != {"password_hash": None}
+
+
+def test_masking_twice_changes_nothing():
+    from doppel.site import _scrub_text, sanitize
+    once = sanitize(LIVE)
+    assert sanitize(once) == once
+    text = '{"password_hash": "' + HASH + '"}'
+    assert _scrub_text(_scrub_text(text)) == _scrub_text(text)

@@ -126,6 +126,14 @@ def _fields(detail: str) -> str:
     return ", ".join(sorted(set(p for p in parts if p and not p.startswith("+"))))
 
 
+def _telling(row: dict) -> bool:
+    """An example worth showing: head actually has a value (not null, not absent) where the change is."""
+    head = row.get("head")
+    if isinstance(head, dict):
+        return any(v not in (None, "", "(absent)", "(not sent)") for v in head.values())
+    return head not in (None, "", "(absent)", "(not sent)")
+
+
 def group(rows: list[dict]) -> list[dict]:
     """One entry per distinct change. Judged rows: same verdict and the judge's same reasoning (the judge
     already looked at each distinct change once, so equal reasoning is the same change). Unjudged rows: same
@@ -133,10 +141,12 @@ def group(rows: list[dict]) -> list[dict]:
     import re
     groups: dict[tuple, dict] = {}
     for r in rows:
-        if r.get("why"):
+        if r.get("kind") == "body" and r["detail"].startswith("changed: "):
+            # the same field change, wherever it shows up (a user object, a list, a post's author): one change,
+            # even when the judge wrote one explanation per place
+            key = (r["label"], "body", _fields(r["detail"]))
+        elif r.get("why"):
             key = (r["label"], r["why"].strip())
-        elif r.get("kind") == "body" and r["detail"].startswith("changed: "):
-            key = (r["label"], "body", _fields(r["detail"]))   # the same field change, wherever it shows up
         else:
             key = (r["label"], _pattern(r["request"]), re.sub(r"\s*\(the base branch's test fails on this\)", "",
                                                                r["detail"]))
@@ -149,8 +159,9 @@ def group(rows: list[dict]) -> list[dict]:
         sources = list(dict.fromkeys(r["source"] for r in rows_))
         who = list(dict.fromkeys(r["who"] for r in rows_))
         changes = list(dict.fromkeys(r["detail"] for r in rows_))
-        out.append({**g, "routes": routes, "sources": sources, "who": who, "changes": changes,
-                    "example": rows_[0], "requests": len(rows_)})
+        example = next((r for r in rows_ if _telling(r)), rows_[0])
+        out.append({**g, "why": g["why"] or example.get("why", ""), "routes": routes, "sources": sources, "who": who,
+                    "changes": changes, "example": example, "requests": len(rows_)})
     return sorted(out, key=lambda g: -g["requests"])
 
 
