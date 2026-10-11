@@ -76,3 +76,23 @@ def test_the_results_page_lists_every_app(tmp_path, monkeypatch):
              "test_command": "python -m pytest", "source": "tox.ini"}))
     page = fresh_apps.page().read_text()
     assert "1 work" in page and "1 stopped" in page and "needs a service" in page and "<b>30</b> requests" in page
+
+
+def test_doppel_view_public_masks_what_a_public_page_must_not_show(tmp_path):
+    from doppel import cli
+    (tmp_path / "check.json").write_text(json.dumps(DATA))
+    assert cli.main(["view", str(tmp_path / "check.json"), "--no-open", "--public", "--out",
+                     str(tmp_path / "p.html")]) == 0
+    assert HASH not in (tmp_path / "p.html").read_text() and "[hidden on the site]" in (tmp_path / "p.html").read_text()
+
+
+def test_the_action_publishes_the_page_and_links_it_first():
+    import yaml
+    action = yaml.safe_load((Path(__file__).parent.parent / "action.yml").read_text(encoding="utf-8"))
+    steps = {s.get("name"): s for s in action["runs"]["steps"]}
+    names = [s.get("name") for s in action["runs"]["steps"]]
+    assert names.index("Run Doppel") < names.index("Publish the check page") < names.index("Comment on the PR")
+    assert "--public" in steps["Run Doppel"]["run"] and "gh-pages" in steps["Publish the check page"]["run"]
+    assert "exit 0" in steps["Publish the check page"]["run"]          # publishing can never fail the job
+    assert "Open the full check page" in steps["Comment on the PR"]["run"]
+    assert action["inputs"]["publish-page"]["default"] == "true"

@@ -21,6 +21,9 @@ inputs:
   guided:
     description: Let Nemotron Ultra list suspected regressions first; probe personas prove or refute each one
     default: "true"
+  publish-page:
+    description: "true = publish the check page to this repo's GitHub Pages (gh-pages branch) and link it from the comment"
+    default: "true"
   twin:
     description: "auto = also run the guided twin when the repo has a doppel.toml; off = test mode only"
     default: "auto"
@@ -110,16 +113,55 @@ runs:
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
         [ -f .doppel/out/report.md ] && cat .doppel/out/report.md >> "$GITHUB_STEP_SUMMARY"
         [ -f .doppel/out/run.json ] && doppel view .doppel/out/run.json --no-open --out .doppel/out/doppel-run.html || true
+        [ -f .doppel/out/check.json ] && doppel view .doppel/out/check.json --no-open --public \
+          --out .doppel/out/doppel-check.html || true
         [ $code -le 1 ] || exit $code
+    - name: Publish the check page
+      id: page
+      if: always() && inputs.publish-page == 'true' && hashFiles('.doppel/out/doppel-check.html') != ''
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        # the page goes to this repo's GitHub Pages (gh-pages branch), so the PR comment can link to it.
+        # Anything that stops it (no write permission, a fork, Pages off) falls back to the artifacts link.
+        set +e
+        REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+        rm -rf .doppel/pages
+        if ! git clone -q --depth 1 --branch gh-pages "$REMOTE" .doppel/pages 2>/dev/null; then
+          mkdir -p .doppel/pages && git -C .doppel/pages init -q && git -C .doppel/pages checkout -q -b gh-pages \
+            && git -C .doppel/pages remote add origin "$REMOTE"
+        fi
+        DIR=".doppel/pages/doppel/pr-${PR:-manual}"
+        mkdir -p "$DIR" && cp .doppel/out/doppel-check.html "$DIR/index.html"
+        [ -f .doppel/out/doppel-run.html ] && cp .doppel/out/doppel-run.html "$DIR/replay.html"
+        touch .doppel/pages/.nojekyll
+        cd .doppel/pages
+        git -c user.name="doppel" -c user.email="doppel@users.noreply.github.com" add -A
+        git -c user.name="doppel" -c user.email="doppel@users.noreply.github.com" commit -qm "Doppel check for PR #${PR}"
+        if git push -q origin gh-pages 2>/dev/null; then
+          OWNER="${GITHUB_REPOSITORY%%/*}"; REPO="${GITHUB_REPOSITORY#*/}"
+          echo "url=https://${OWNER,,}.github.io/${REPO}/doppel/pr-${PR:-manual}/" >> "$GITHUB_OUTPUT"
+        else
+          echo "::notice::Doppel could not publish the check page (needs 'contents: write' and GitHub Pages on the gh-pages branch); it is in the run artifacts."
+        fi
+        exit 0
     - name: Comment on the PR
       if: always() && hashFiles('.doppel/out/report.md') != ''
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
-      run: >
-        doppel comment --report .doppel/out/report.md
-        --footer "<sub>Visual replay (doppel-run.html), personas, raw recordings and regression tests:
-        [run artifacts](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})</sub>"
+        PAGE: ${{ steps.page.outputs.url }}
+        RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        if [ -n "$PAGE" ]; then
+          FOOT="**[Open the full check page →]($PAGE)** (ready about a minute after this comment)<br>"
+        else
+          FOOT="The full check page (doppel-check.html) is in the [run artifacts]($RUN).<br>"
+        fi
+        FOOT="$FOOT<sub>Raw recordings and the twin's replay: [run artifacts]($RUN)</sub>"
+        doppel comment --report .doppel/out/report.md --footer "$FOOT"
     - name: Upload artifacts
       if: always()
       uses: actions/upload-artifact@v7

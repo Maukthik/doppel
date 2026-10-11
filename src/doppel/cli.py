@@ -265,7 +265,7 @@ def cmd_view(a) -> int:
     from doppel.viewer import is_run, is_trace, write_run_view, write_view
     path = Path(a.path)
     if is_check(path):
-        out = write_check_view(path, Path(a.out) if a.out else None)
+        out = write_check_view(path, Path(a.out) if a.out else None, public=getattr(a, "public", False))
     elif is_run(path):
         out = write_run_view(path, Path(a.out) if a.out else None)
     elif is_trace(path):
@@ -360,6 +360,7 @@ def main(argv=None) -> int:
     st = sub.add_parser("site", help="build the static replay site from recorded runs (for GitHub Pages)")
     st.add_argument("--gallery", default="site/gallery.json", help="which runs to publish (default: site/gallery.json)")
     st.add_argument("--out", default="_site", help="output folder (default: _site)")
+    v.add_argument("--public", action="store_true", help="mask secrets and password hashes (a page others will see)")
     k = sub.add_parser("check", help="both modes at once: test mode always, the guided twin when there is a "
                                      "doppel.toml; one report, one exit code")
     k.add_argument("--base", required=True, help="the code before the change")

@@ -225,13 +225,17 @@ on: pull_request
 jobs:
   doppel:
     runs-on: ubuntu-latest
-    permissions: { contents: read, pull-requests: write }
+    permissions: { contents: write, pull-requests: write }   # write: to publish the check page
     steps:
       - uses: Maukthik/doppel@main
         with:
           nebius-api-key: ${{ secrets.NEBIUS_API_KEY }}
           nebius-project-id: ${{ secrets.NEBIUS_PROJECT_ID }}
 ```
+
+The PR comment links to the full check page on the repo's GitHub Pages: after the first run creates the `gh-pages`
+branch, turn on Settings → Pages → Deploy from a branch → `gh-pages`. Without that (or on PRs from forks, whose
+token can't write), the page is in the run's artifacts instead.
 
 ## Test mode: no setup at all
 
