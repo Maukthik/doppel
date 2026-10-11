@@ -1,0 +1,65 @@
+# The zero-setup experiment (bench/fresh_apps.py) on a GitHub runner, not a home machine: uploading code to
+# Nebius from a slow home link (0.01 MB/s on 11 Oct) failed for reasons that say nothing about Doppel.
+# Start it from the Actions tab (Run workflow). Needs the repository secrets NEBIUS_API_KEY and NEBIUS_PROJECT_ID.
+name: bench-fresh
+
+on:
+  workflow_dispatch:
+    inputs:
+      set:
+        description: "dev or heldout"
+        default: dev
+        type: choice
+        options: [dev, heldout]
+      apps:
+        description: "app names, space-separated (empty: every app in the set)"
+        default: ""
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Doppel
+        run: pip install --quiet -e ".[nebius,dev]"
+      - name: Run the experiment
+        env:
+          NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
+          NEBIUS_PROJECT_ID: ${{ secrets.NEBIUS_PROJECT_ID }}
+          SET: ${{ inputs.set }}
+          APPS: ${{ inputs.apps }}
+        run: |
+          NEBIUS_API_KEY="$(printf '%s' "$NEBIUS_API_KEY" | tr -d '[:space:]')"
+          NEBIUS_PROJECT_ID="$(printf '%s' "$NEBIUS_PROJECT_ID" | tr -d '[:space:]')"
+          export NEBIUS_API_KEY NEBIUS_PROJECT_ID
+          if [ -z "$NEBIUS_API_KEY" ] || [ -z "$NEBIUS_PROJECT_ID" ]; then
+            echo "::error::set the repository secrets NEBIUS_API_KEY and NEBIUS_PROJECT_ID"; exit 2
+          fi
+          mkdir -p bench/screen-logs
+          # shellcheck disable=SC2086 - APPS is a space-separated list on purpose
+          python bench/fresh_apps.py run --set "$SET" --backend nebius --force $APPS 2>&1 | tee "bench/screen-logs/$SET.log"
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Zero-setup experiment: ${{ inputs.set }}"
+            echo '```'
+            grep -E '^\[fresh\] .* -> ' "bench/screen-logs/${{ inputs.set }}.log" || echo "no results"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-fresh-${{ inputs.set }}
+          path: |
+            bench/results/
+            bench/screen-logs/

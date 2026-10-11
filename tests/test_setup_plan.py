@@ -106,7 +106,7 @@ def test_dependency_groups_without_a_lock_file_use_pip_group(tmp_path):
     # flaskbb: its test dependencies (responses) live in [dependency-groups], which nothing read
     write(tmp_path, {"pyproject.toml": PYPROJECT_GROUPS, "Makefile": "test:\n\tpytest\n"})
     p = plan(tmp_path)
-    assert "pip install --quiet -e ." in p.install
+    assert any(s.startswith("(pip install --quiet -e . ||") for s in p.install)        # deps still go in if not
     assert any("'pip>=25.1'" in s and "--group dev" in s and "lint" not in s for s in p.install)
 
 
@@ -136,7 +136,8 @@ def test_an_app_in_one_subfolder_runs_there_with_the_whole_repo(tmp_path):
     write(tmp_path, {".env": "SECRET_KEY=x\n", "backend/pyproject.toml": PYPROJECT_GROUPS,
                      "backend/tests/test_a.py": "def test_a(): pass\n", "backend/conftest.py": ""})
     p = plan(tmp_path)
-    assert p.workdir == "backend" and p.test == "python -m pytest" and "pip install --quiet -e ." in p.install
+    assert p.workdir == "backend" and p.test == "python -m pytest" and any("pip install --quiet -e ." in s
+                                                                          for s in p.install)
 
 
 def test_the_tests_run_in_the_planned_subfolder(tmp_path):
@@ -170,3 +171,16 @@ def test_install_lines_are_kept_converted_or_recognised_as_tools(tmp_path):
     assert convert_install("echo hello", tmp_path) is None
     assert setup_plan.covers_project(["pip install --quiet -e ."]) and \
         not setup_plan.covers_project(["pip install --quiet pytest-django"])
+
+
+
+def test_a_setup_cfg_of_tool_settings_does_not_make_an_app_a_package(tmp_path):
+    # CTFd: setup.cfg held flake8/isort settings; `pip install -e .` failed on its flat layout and sank the run
+    write(tmp_path, {"setup.cfg": "[flake8]\nmax-line-length = 120\n", "requirements.txt": "flask\n",
+                     "pyproject.toml": "[project]\nname = 'ctfd'\nversion = '1'\n", "uv.lock": "",
+                     "tests/test_a.py": "def test_a(): pass\n"})
+    assert not setup_plan.installable(tmp_path)
+    assert not any("-e ." in s for s in plan(tmp_path).install)
+    (tmp_path / "setup.cfg").write_text("[metadata]\nname = pkg\n", encoding="utf-8")
+    assert setup_plan.installable(tmp_path)
+    assert any("--no-deps -e . ||" in s for s in plan(tmp_path).install)   # deps are in; the package is a nicety

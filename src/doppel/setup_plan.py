@@ -268,7 +268,15 @@ def _pyproject(repo: Path) -> dict:
 
 
 def installable(repo: Path) -> bool:
-    return (repo / "setup.py").exists() or (repo / "setup.cfg").exists() or "build-system" in _pyproject(repo)
+    """Is the project a package pip can build? A setup.cfg alone is often only tool settings (CTFd's is, and
+    `pip install -e .` failed on its flat layout), so it counts only with a [metadata] section."""
+    cfg = repo / "setup.cfg"
+    return (repo / "setup.py").exists() or "build-system" in _pyproject(repo) or \
+        (cfg.exists() and "[metadata]" in cfg.read_text("utf-8", errors="replace"))
+
+
+SELF_INSTALL_NOTE = ("echo '[doppel] the project itself did not install as a package; its dependencies did, "
+                     "and its tests run from its folder'")
 
 
 def project_install(repo: Path, groups: list[str] | None = None, extras: list[str] | None = None,
@@ -306,12 +314,15 @@ def project_install(repo: Path, groups: list[str] | None = None, extras: list[st
             export = f"uv export --frozen --no-hashes --no-emit-project {flags}".rstrip()
             steps.append(f"pip install --quiet uv && {export} -o {REQUIREMENTS_OUT} >/dev/null && "
                          f"pip install --quiet -r {REQUIREMENTS_OUT}")
-            if can_build:
-                steps.append("pip install --quiet --no-deps -e .")
+            if can_build:   # the dependencies are in already: the project as a package is a nicety
+                steps.append(f"(pip install --quiet --no-deps -e . || {SELF_INSTALL_NOTE})")
         else:
-            if can_build:
+            if can_build:   # if it won't build as a package, its dependencies still go in
                 target = f"'.[{','.join(pick_extras)}]'" if pick_extras else "."
-                steps.append(f"pip install --quiet -e {target}")
+                flags = " ".join(f"--extra {e}" for e in pick_extras)
+                steps.append(f"(pip install --quiet -e {target} || (pip install --quiet uv && uv pip install --quiet "
+                             f'--python "$(command -v python)" -r pyproject.toml {flags}'.rstrip() +
+                             f" && {SELF_INSTALL_NOTE}))")
             elif project.get("dependencies") or pick_extras:   # an app that isn't a package: just its dependencies
                 flags = " ".join(f"--extra {e}" for e in pick_extras)
                 steps.append(f'pip install --quiet uv && uv pip install --quiet --python "$(command -v python)" '
