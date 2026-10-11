@@ -13,6 +13,13 @@ Protocol (fixed before any run, no fixes during it):
     python bench/fresh_apps.py run --backend nebius          # the official numbers (sponsor stack)
     python bench/fresh_apps.py run flaskbb --backend local   # a local preview (your current tools, a fresh venv)
     python bench/fresh_apps.py page                          # bench/results/fresh/index.html
+    python bench/fresh_apps.py run --set heldout --backend nebius   # the held-out apps (see HELDOUT below)
+
+Two sets:
+  dev       the first ten apps. Screening them on 11 Oct 2026 found the gaps the setup layer was rebuilt for, so
+            their later numbers are development numbers (before and after), not an unseen-app claim.
+  heldout   ten more apps, chosen and pinned to a commit on 11 Oct 2026 BEFORE any setup-layer change, by the rule
+            written next to the list. They are run once after the rebuild, with no fixes for them: that is the claim.
 
 Each app gets bench/results/fresh/<app>/check.json and doppel-check.html (the same page `doppel view` makes).
 Finished apps are skipped; --force redoes them.
@@ -47,9 +54,43 @@ APPS = [
     {"name": "fastapi-template", "repo": "https://github.com/fastapi/full-stack-fastapi-template",
      "framework": "FastAPI", "subdir": "backend"},
 ]
+HELDOUT_RULE = """Chosen on 11 Oct 2026, before any change to the setup layer, and not inspected for how they set up:
+  - an open-source Python web application (Flask, Django or FastAPI), not a library or framework
+  - a commit within the last 12 months and a Python test suite in the repo
+  - not one of the ten dev apps
+  - run from the repo root with no hand-given subfolder, pinned to the commit below so the run cannot drift
+Rejected by the rule while choosing: fastapi-realworld-example-app (last commit 2022), Netflix/dispatch (last commit
+Sep 2025), open-webui (no Python test suite)."""
+HELDOUT = [
+    {"name": "ihatemoney", "repo": "https://github.com/spiral-project/ihatemoney", "framework": "Flask",
+     "sha": "e66a7672e8e5c41549bf53c4a824c72c43ab9079"},
+    {"name": "searxng", "repo": "https://github.com/searxng/searxng", "framework": "Flask",
+     "sha": "f4822b3fc46726bb259d14c6332b702c76b98f82"},
+    {"name": "changedetection", "repo": "https://github.com/dgtlmoon/changedetection.io", "framework": "Flask",
+     "sha": "75a508fecc37483e936795f1e3f9b076e375cf0f"},
+    {"name": "babybuddy", "repo": "https://github.com/babybuddy/babybuddy", "framework": "Django",
+     "sha": "2f80de4ae05e5f751d6fb29c36b25b4cda1755d5"},
+    {"name": "pretalx", "repo": "https://github.com/pretalx/pretalx", "framework": "Django",
+     "sha": "dc09fdfc29c4155edcf376199dd19654c53c2ad6"},
+    {"name": "tandoor", "repo": "https://github.com/TandoorRecipes/recipes", "framework": "Django",
+     "sha": "bb07441b3cd566dbc6c29ab09dc74b741804ef02"},
+    {"name": "inventree", "repo": "https://github.com/inventree/InvenTree", "framework": "Django",
+     "sha": "fcd8af4283f3b109f8253f418997fd7299cb521a"},
+    {"name": "lnbits", "repo": "https://github.com/lnbits/lnbits", "framework": "FastAPI",
+     "sha": "b717d51d7b6c099cb5cb4d730e59c6aa720e5365"},
+    {"name": "polar", "repo": "https://github.com/polarsource/polar", "framework": "FastAPI",
+     "sha": "6d5e2fca0ee8519936afb5d7a0da801633339a70"},
+    {"name": "fastapi-best-architecture", "repo": "https://github.com/fastapi-practices/fastapi_best_architecture",
+     "framework": "FastAPI", "sha": "e90b6f266cc545136a59cd3faf60610958dda44f"},
+]
+HELDOUT_RESULTS = HERE / "results" / "heldout"
+SET_TITLES = {"dev": "Ten real Python web apps, never seen before",
+              "heldout": "Ten held-out apps, chosen before the setup layer was rebuilt"}
+
 # What a stopped run's reason says, in words a reader can act on
 CATEGORIES = [
     ("install", ("install command failed", "No matching distribution", "Failed building wheel")),
+    ("missing dependency", ("ModuleNotFoundError", "No module named")),   # before services: "No module named 'redis'"
     ("needs a service", ("fail on the unchanged code", "Connection refused", "could not connect", "OperationalError",
                          "redis", "postgres", "psycopg")),
     ("no recorded requests", ("sent no request through a test client",)),
@@ -60,8 +101,21 @@ CATEGORIES = [
 
 
 def clone(app: dict) -> tuple[Path, str]:
+    """The app's code: its latest commit, or exactly app["sha"] when the set pins one."""
     src = CACHE / app["name"]
-    if not (src / ".git").exists():
+    pinned = app.get("sha")
+    if pinned:
+        here = subprocess.run(["git", "rev-parse", "HEAD"], cwd=src, capture_output=True, text=True).stdout.strip() \
+            if (src / ".git").exists() else ""
+        if here != pinned:
+            src.mkdir(parents=True, exist_ok=True)
+            git = lambda *a: subprocess.run(["git", *a], cwd=src, check=True, capture_output=True)  # noqa: E731
+            if not (src / ".git").exists():
+                git("init", "-q")
+                git("remote", "add", "origin", app["repo"])
+            git("fetch", "-q", "--depth", "1", "origin", pinned)
+            git("checkout", "-q", "--force", "FETCH_HEAD")
+    elif not (src / ".git").exists():
         CACHE.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "clone", "-q", "--depth", "1", app["repo"], str(src)], check=True)
     sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=src, capture_output=True, text=True).stdout.strip()
@@ -93,8 +147,16 @@ def category(reason: str) -> str:
     return next((name for name, signs in CATEGORIES if any(s.lower() in low for s in signs)), "other")
 
 
-def run_one(app: dict, backend: str, force: bool) -> dict:
-    out_dir = RESULTS / app["name"]
+def results_for(set_name: str) -> Path:
+    return RESULTS if set_name == "dev" else HELDOUT_RESULTS   # looked up at call time (tests patch RESULTS)
+
+
+def apps_for(set_name: str) -> list[dict]:
+    return APPS if set_name == "dev" else HELDOUT
+
+
+def run_one(app: dict, backend: str, force: bool, results: Path | None = None) -> dict:
+    out_dir = (results or RESULTS) / app["name"]
     if (out_dir / "result.json").exists() and not force:
         return json.loads((out_dir / "result.json").read_text("utf-8"))
     from doppel import cli
@@ -133,9 +195,10 @@ def run_one(app: dict, backend: str, force: bool) -> dict:
     return result
 
 
-def page() -> Path:
+def page(set_name: str = "dev") -> Path:
     from doppel.viewer import CSS
-    rows = [json.loads((RESULTS / a["name"] / "result.json").read_text("utf-8")) for a in APPS
+    RESULTS = results_for(set_name)  # noqa: N806 - the set's folder; the rest of the page reads it by this name
+    rows = [json.loads((RESULTS / a["name"] / "result.json").read_text("utf-8")) for a in apps_for(set_name)
             if (RESULTS / a["name"] / "result.json").exists()]
     counts = {k: sum(r["status"] == k for r in rows) for k in ("works", "noisy", "stopped")}
     cards = []
@@ -156,8 +219,8 @@ def page() -> Path:
 <p class="fw">{html.escape(r['framework'])} · commit {html.escape(r.get('commit', '?'))} · {r.get('seconds', '?')} s</p>
 <p>{facts}</p><p class="sub">{sub}</p>{f'<a href="{link}">Open the check →</a>' if link else ''}</article>""")
     body = f"""<p class="brand">doppel · zero-setup experiment</p>
-<h1>Ten real Python web apps, never seen before</h1>
-<p class="lede">Each app at its latest commit, unmodified, with no configuration. Doppel detected the test command,
+<h1>{SET_TITLES[set_name]}</h1>
+<p class="lede">Each app at {'its latest commit' if set_name == 'dev' else 'the commit pinned when it was chosen'}, unmodified, with no configuration. Doppel detected the test command,
 the install and the Python version on its own, ran the app's own test suite in base, base again and head (the same
 code, so every difference would be a false alarm), and recorded every request. Results are as they came out: no
 fixes during the run.</p>
@@ -180,9 +243,9 @@ fixes during the run.</p>
     out = RESULTS / "index.html"
     RESULTS.mkdir(parents=True, exist_ok=True)
     out.write_text(f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>Doppel: ten real apps, zero setup</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Doppel: {SET_TITLES[set_name]}</title>
 <style>{css}</style></head><body><main>{body}</main></body></html>""", encoding="utf-8")
-    lines = ["# Ten real apps, zero setup", "", f"{counts['works']} work · {counts['noisy']} noisy · "
+    lines = [f"# {SET_TITLES[set_name]}", "", f"{counts['works']} work · {counts['noisy']} noisy · "
              f"{counts['stopped']} stopped", "", "| App | Framework | Result | Tests | Requests | Reason |",
              "|---|---|---|---|---|---|"]
     for r in rows:
@@ -195,7 +258,8 @@ fixes during the run.</p>
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("step", choices=["run", "page"])
-    ap.add_argument("apps", nargs="*", help="app names (default: all ten)")
+    ap.add_argument("apps", nargs="*", help="app names (default: every app in the set)")
+    ap.add_argument("--set", dest="set_name", choices=["dev", "heldout"], default="dev")
     ap.add_argument("--backend", choices=["local", "nebius"], default="nebius")
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args(argv)
@@ -203,15 +267,21 @@ def main(argv=None) -> int:
         if a.backend == "nebius":
             from dotenv import load_dotenv
             load_dotenv()
-        chosen = [x for x in APPS if not a.apps or x["name"] in a.apps]
+        apps = apps_for(a.set_name)
+        unknown = sorted(set(a.apps) - {x["name"] for x in apps})
+        if unknown:   # a mistyped name used to be skipped silently, which looked like a finished run
+            print(f"unknown app name(s) in the {a.set_name} set: {', '.join(unknown)}. "
+                  f"Known: {', '.join(x['name'] for x in apps)}", file=sys.stderr)
+            return 2
+        chosen = [x for x in apps if not a.apps or x["name"] in a.apps]
         for app in chosen:
             print(f"[fresh] {app['name']} ({app['framework']})", file=sys.stderr)
-            r = run_one(app, a.backend, a.force)
+            r = run_one(app, a.backend, a.force, results_for(a.set_name))
             extra = (f"{r.get('tests')} tests, {r.get('requests')} requests, {r.get('false_differences')} false "
                      "differences") if r["status"] != "stopped" else f"{r.get('category')}: " + \
                 (r.get("reason") or "").splitlines()[0][:140]
             print(f"[fresh] {app['name']} -> {r['status']}: {extra}")
-    out = page()
+    out = page(a.set_name)
     print(f"wrote {out}")
     return 0
 
