@@ -34,7 +34,17 @@ GIT = (f"(command -v git >/dev/null 2>&1 || ({APT} update -qq >/dev/null && "
        f"{APT} install -y -qq --no-install-recommends git >/dev/null 2>&1))")
 BUILD_TOOLS = (f"{APT} update -qq >/dev/null && {APT} install -y -qq --no-install-recommends build-essential "
                "pkg-config git libpq-dev libxml2-dev libxslt1-dev libffi-dev libssl-dev libjpeg-dev zlib1g-dev "
-               "default-libmysqlclient-dev >/dev/null 2>&1")
+               "default-libmysqlclient-dev libldap2-dev libsasl2-dev >/dev/null 2>&1")
+# a header a build could not find -> the Debian package that has it (a third try installs these)
+HEADER_PACKAGES = {"lber.h": "libldap2-dev libsasl2-dev", "ldap.h": "libldap2-dev", "sasl/sasl.h": "libsasl2-dev",
+                   "krb5": "libkrb5-dev", "gssapi": "libkrb5-dev", "libpq-fe.h": "libpq-dev",
+                   "mysql.h": "default-libmysqlclient-dev", "ffi.h": "libffi-dev", "openssl/": "libssl-dev",
+                   "jpeglib.h": "libjpeg-dev", "zlib.h": "zlib1g-dev", "libxml/": "libxml2-dev",
+                   "libxslt/": "libxslt1-dev", "xmlsec": "libxmlsec1-dev", "lzma.h": "liblzma-dev",
+                   "bzlib.h": "libbz2-dev", "sqlite3.h": "libsqlite3-dev", "curl/curl.h": "libcurl4-openssl-dev",
+                   "magic.h": "libmagic-dev", "yaml.h": "libyaml-dev", "cairo": "libcairo2-dev",
+                   "png.h": "libpng-dev", "freetype": "libfreetype-dev", "unixodbc": "unixodbc-dev",
+                   "sql.h": "unixodbc-dev", "snappy": "libsnappy-dev", "geos": "libgeos-dev", "gdal": "libgdal-dev"}
 NEEDS_GIT = re.compile(r"git\+|git://|\bgit@[\w.-]+:")
 NEEDS_BUILD = re.compile("|".join([
     r"command '(gcc|cc|x86_64-linux-gnu-gcc)' failed", r"unable to execute '?(gcc|cc)", r"gcc: not found",
@@ -125,6 +135,16 @@ def install_shell(install: str, repo: str | Path) -> str:
     if not install:
         return ""
     return f"{GIT} && {install}" if needs_git(repo, install) else install
+
+
+def header_packages(output: str) -> list[str]:
+    """The Debian packages for the headers a failed build could not find (mealie: python-ldap wanted lber.h)."""
+    out: list[str] = []
+    for header in re.findall(r"fatal error: ([\w./+-]+\.h): No such file", output or ""):
+        for key, packages in HEADER_PACKAGES.items():
+            if key in header:
+                out += [p for p in packages.split() if p not in out]
+    return out
 
 
 def with_build_tools(install: str) -> str:

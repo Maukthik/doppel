@@ -311,9 +311,14 @@ def project_install(repo: Path, groups: list[str] | None = None, extras: list[st
     if project:
         if (repo / "uv.lock").exists():   # the exact versions the project tests with, its groups included
             flags = " ".join([f"--group {g}" for g in pick_groups] + [f"--extra {e}" for e in pick_extras])
+            # uv sync honours the lock's own package indexes (paperless-ngx pins torch==...+cpu from PyTorch's
+            # index, which pip cannot see); into the interpreter the tests use, keeping what is already there.
+            # If it can't, the exported requirements go in with pip.
             export = f"uv export --frozen --no-hashes --no-emit-project {flags}".rstrip()
-            steps.append(f"pip install --quiet uv && {export} -o {REQUIREMENTS_OUT} >/dev/null && "
-                         f"pip install --quiet -r {REQUIREMENTS_OUT}")
+            sync = ("UV_PROJECT_ENVIRONMENT=\"$(python -c 'import sys; print(sys.prefix)')\" uv sync --quiet --frozen "
+                    f"--inexact --no-install-project {flags}").rstrip()
+            steps.append(f"pip install --quiet uv && ({sync} || ({export} -o {REQUIREMENTS_OUT} >/dev/null && "
+                         f"pip install --quiet -r {REQUIREMENTS_OUT}))")
             if can_build:   # the dependencies are in already: the project as a package is a nicety
                 steps.append(f"(pip install --quiet --no-deps -e . || {SELF_INSTALL_NOTE})")
         else:

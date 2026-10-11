@@ -184,3 +184,45 @@ def test_a_setup_cfg_of_tool_settings_does_not_make_an_app_a_package(tmp_path):
     (tmp_path / "setup.cfg").write_text("[metadata]\nname = pkg\n", encoding="utf-8")
     assert setup_plan.installable(tmp_path)
     assert any("--no-deps -e . ||" in s for s in plan(tmp_path).install)   # deps are in; the package is a nicety
+
+
+def test_a_secret_the_tests_refuse_to_start_without_gets_a_placeholder(tmp_path):
+    # redash: every test file failed to import: "You must set the REDASH_COOKIE_SECRET environment variable"
+    guard = ('import os\nif "APP_COOKIE_SECRET" not in os.environ:\n'
+             '    raise Exception("You must set the APP_COOKIE_SECRET environment variable")\n')
+    for side in ("base", "head"):
+        flask_repo(tmp_path / side, FLASK_APP)
+        conftest = tmp_path / side / "conftest.py"
+        conftest.write_text(guard + conftest.read_text(encoding="utf-8"), encoding="utf-8")
+    lines = []
+    r = check(tmp_path / "base", tmp_path / "head", backend="local", log=lines.append)
+    assert r["stats"]["passed"] > 0
+    assert any("the tests need APP_COOKIE_SECRET set: using placeholder values" in m for m in lines)
+
+
+def test_placeholders_are_for_secrets_and_flags_never_for_addresses():
+    from doppel.traffic import PLACEHOLDER, placeholder_settings
+    out = ("Exception: You must set the REDASH_COOKIE_SECRET environment variable\n"
+           "django.core.exceptions.ImproperlyConfigured: Set the SECRET_KEY environment variable\n"
+           "E   DATABASE_URL\nE     Field required [type=missing, input_value={}, input_type=dict]\n"
+           "E   PROJECT_NAME\nE     Field required [type=missing, input_value={}, input_type=dict]\n")
+    got = placeholder_settings(out, {"SECRET_KEY": "set already"})
+    assert got == {"PROJECT_NAME": PLACEHOLDER, "REDASH_COOKIE_SECRET": PLACEHOLDER}   # no DATABASE_URL: a service
+
+
+def test_a_missing_header_names_the_package_to_install():
+    from doppel import sandbox
+    out = ("Modules/common.h:15:10: fatal error: lber.h: No such file or directory\n"
+           "x.c:1:10: fatal error: sasl/sasl.h: No such file or directory\n")
+    assert sandbox.header_packages(out) == ["libldap2-dev", "libsasl2-dev"]
+    assert "libldap2-dev" in sandbox.BUILD_TOOLS                  # mealie's python-ldap: now on the first retry
+    assert sandbox.header_packages("all fine") == []
+
+
+def test_a_locked_project_installs_with_uv_sync_first(tmp_path):
+    # paperless-ngx: uv.lock pins torch==2.14.0+cpu from PyTorch's own index; pip could not find it
+    write(tmp_path, {"pyproject.toml": PYPROJECT_GROUPS.replace("dev = ", "testing = "), "uv.lock": "",
+                     "tests/test_a.py": "def test_a(): pass\n"})
+    step = next(s for s in plan(tmp_path).install if "uv sync" in s)
+    assert "uv sync --quiet --frozen --inexact --no-install-project" in step and "sys.prefix" in step
+    assert "|| (uv export --frozen" in step                       # and the pip route if uv sync can't

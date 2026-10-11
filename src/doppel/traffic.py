@@ -218,6 +218,7 @@ class LocalSession:
                  extra_env: dict | None = None, workdir: str = ""):
         self.extra_env = dict(extra_env or {})
         self.workdir = workdir
+        self.add_env = self.extra_env.update     # a repair between tries (placeholder settings)
         # absolute(), not resolve(): a venv's python is a symlink to the base interpreter, and resolving it
         # would drop the venv (and everything installed in it)
         self.path_prefix = str(Path(python).absolute().parent) if python and Path(python).exists() else ""
@@ -317,6 +318,7 @@ class NebiusSession:
         self.venv = PYTHON_VENV if python and PYTHON_VERSION.match(python) else ""
         activate = f"export VIRTUAL_ENV={self.venv}; export PATH={self.venv}/bin:$PATH; " if self.venv else ""
         self.exports = activate + "".join(f"export {k}={shlex.quote(v)}; " for k, v in sandbox_env.items())
+        self._activate = activate
         provision = (f"pip install --quiet uv && uv python install {python} && "
                      f"uv venv --quiet --seed -p {python} {self.venv} && {activate}") if self.venv else ""
         self.files = {f"doppel/hook/{n}": d for n, d in hook_files().items()}
@@ -339,6 +341,13 @@ class NebiusSession:
                     shell=f"cd {self.app} && {setup}{activate}{sandbox.with_build_tools(shell)}", disposable=False,
                     timeout=TEST_TIMEOUT), what + " (with build tools)", log)
                 text = (out.stdout or "") + (out.stderr or "")
+                if out.exit_code != 0 and (pkgs := sandbox.header_packages(text)):
+                    log(f"[tests] the build needs more system headers: installing {' '.join(pkgs)}, trying again")
+                    extra = f"{sandbox.APT} install -y -qq --no-install-recommends {' '.join(pkgs)} >/dev/null 2>&1"
+                    out = await sandbox.retrying(lambda: img.run(
+                        shell=f"cd {self.app} && {setup}{activate}{sandbox.with_build_tools(extra + ' && ' + shell)}",
+                        disposable=False, timeout=TEST_TIMEOUT), what + " (with more headers)", log)
+                    text = (out.stdout or "") + (out.stderr or "")
             if out.exit_code != 0:
                 raise NotComparable(f"{what} failed:\n" + text[-3000:])
             return out
@@ -388,6 +397,11 @@ class NebiusSession:
             outs = await asyncio.gather(*[one(code, cmd) for code, cmd in jobs])
             return [_untar(o.stdout or "", o.stderr or "") for o in outs]
         return self.loop.run_until_complete(go())
+
+    def add_env(self, more: dict) -> None:
+        """More settings for every later job (a repair between tries)."""
+        import shlex
+        self.exports += "".join(f"export {k}={shlex.quote(v)}; " for k, v in more.items())
 
     def close(self) -> None:
         self.loop.close()
@@ -805,6 +819,25 @@ def _passed_or_failed(world: dict) -> tuple[int, int]:
     return sum(o == "passed" for o in outcomes), sum(o == "failed" for o in outcomes)
 
 
+PLACEHOLDER = "doppel-placeholder-3f9c2b7e8a1d4c6f9b0e5a7d2c8f1b4e"
+SERVICE_SETTING = re.compile(r"(_URL|_URI|_DSN|_HOST|_PORT|_ADDR|_ENDPOINT|_SERVER)$")
+MISSING_SETTING = [re.compile(p) for p in (
+    r"You must set the ([A-Z][A-Z0-9_]{2,}) environment variable",                 # redash
+    r"Set the ([A-Z][A-Z0-9_]{2,}) environment variable",                          # django-environ
+    r"[Ee]nvironment variable ['\"]?([A-Z][A-Z0-9_]{2,})['\"]? (?:is )?(?:not set|missing|required)",
+    r"environ\[['\"]([A-Z][A-Z0-9_]{2,})['\"]\][\s\S]{0,400}?KeyError: ['\"]\1['\"]",
+    r"(?m)^(?:E\s+|\s*)([A-Z][A-Z0-9_]{2,})\s*\n(?:E\s+|\s*)Field required \[type=missing",  # pydantic settings
+)]
+
+
+def placeholder_settings(output: str, have: dict) -> dict:
+    """Settings the tests refused to start without, each set to a placeholder: a secret or a flag can be any
+    value in a test run (redash: 'You must set the REDASH_COOKIE_SECRET environment variable'). An address
+    (..._URL, ..._HOST, ...) is never invented: it names a service, and the stop says so."""
+    names = {m.group(1) for pat in MISSING_SETTING for m in pat.finditer(output or "")}
+    return {n: PLACEHOLDER for n in sorted(names) if n not in have and not SERVICE_SETTING.search(n)}
+
+
 def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str | None = None,
           install: str | None = None, log=lambda m: None, runner=None, python: str = "",
           deselect: list[str] | None = None) -> dict:
@@ -853,12 +886,19 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
         if len(plan) > 1:
             log(f"[tests] {len(test_files(code, test))} test files: split across {len(plan)} sandboxes per world")
         log(f"[tests] running `{test}` in 3 worlds (base, base again, head)")
-        runs = session.run([(code, cmd) for code in ("base", "base", "head") for cmd in plan])
         k = len(plan)
-        worlds = {w: read_world(merge(runs[i * k:(i + 1) * k])) for i, w in enumerate(WORLDS)}
-        a, a2, b = worlds["A"], worlds["A2"], worlds["B"]
+        for attempt in range(3):
+            runs = session.run([(code, cmd) for code in ("base", "base", "head") for cmd in plan])
+            worlds = {w: read_world(merge(runs[i * k:(i + 1) * k])) for i, w in enumerate(WORLDS)}
+            a, a2, b = worlds["A"], worlds["A2"], worlds["B"]
+            passed, failed = _passed_or_failed(a)
+            wanted = {} if passed or attempt == 2 else placeholder_settings(a["output"], extra_env)
+            if not wanted or not hasattr(session, "add_env"):
+                break
+            log(f"[tests] the tests need {', '.join(wanted)} set: using placeholder values, running again")
+            extra_env.update(wanted)
+            session.add_env(wanted)
         # S1: the base has to have run
-        passed, failed = _passed_or_failed(a)
         if passed + failed == 0:
             raise NotComparable(f"the test command ran no test on the unchanged code (exit {a['exit']}).{unmet} "
                                 "Its output:\n" + a["output"][-3000:])
