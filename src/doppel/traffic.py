@@ -346,6 +346,9 @@ class NebiusSession:
         async def build():
             client = make_client()
             img = await sandbox.retrying(lambda: client.images.use(image or IMAGE), "starting the sandbox", log)
+            from doppel.backends.nebius import left_out_summary
+            if skipped := left_out_summary(base):
+                log(f"[sandbox] left out of the upload: {skipped}")
             img = await sandbox.upload(img, code_files(base), "uploading the code", log)
             if provision:
                 log(f"[tests] installing Python {python} in the sandbox (uv)")

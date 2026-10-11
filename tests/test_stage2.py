@@ -65,9 +65,11 @@ class FakeImage:
         shell, disposable, files = self.req
         self.log.append(("run", shell, disposable, sorted(files), self.history))
         files = dict(files)
-        if sandbox.UPLOAD_PATH in files:   # the code as one archive: unpack it like `tar xzf ... -C /` would
-            self.log.append(("apply", sorted(_unpack(files.pop(sandbox.UPLOAD_PATH)))))
-            held = self._lay(self.files, _unpack(self.req[2][sandbox.UPLOAD_PATH]))
+        parts = sorted(k for k in files if k.startswith(sandbox.UPLOAD_PATH + "."))
+        if parts:   # the code as one archive in parts: join and unpack them like `cat ... && tar xzf ...` would
+            unpacked = _unpack(b"".join(files[k] for k in parts))
+            self.log.append(("apply", sorted(unpacked)))
+            held = self._lay(self.files, unpacked)
         else:
             held = {**self.files, **files}
         out = type(self)(self.log, held, self.history + ((shell,) if not disposable else ()))
@@ -213,3 +215,19 @@ def test_parse_json_survives_reasoning_before_the_answer():
     assert [p["name"] for p in gen.parse_json(reply)["personas"]] == ["a", "b"]
     assert gen.parse_json("<think>{\"personas\": 1}</think>{\"personas\": []}") == {"personas": []}
     assert gen.parse_json("no json at all") is None
+
+
+
+def test_documentation_media_and_huge_files_stay_out_of_the_sandbox(tmp_path, monkeypatch):
+    # label-studio: 418 MB of gifs and videos in docs/ made a 504 MB upload
+    (tmp_path / "docs" / "img").mkdir(parents=True)
+    (tmp_path / "docs" / "img" / "demo.gif").write_bytes(b"GIF89a" + b"x" * 100)
+    (tmp_path / "docs" / "conf.py").write_text("x = 1\n")
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "logo.png").write_bytes(b"png")          # not in docs: kept (a test may serve it)
+    (tmp_path / "app" / "big.bin").write_bytes(b"0" * 2000)
+    monkeypatch.setattr(nebius, "HUGE_FILE", 1000)
+    kept = set(nebius.code_files(tmp_path))
+    assert kept == {"app/docs/conf.py", "app/app/logo.png"}
+    assert set(nebius.left_out_summary(tmp_path).split(", ")) == {"1 documentation media (0.0 MB)",
+                                                                  "1 files over 25 MB (0.0 MB)"}

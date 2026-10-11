@@ -44,11 +44,45 @@ def removed_files(base_dir: str | Path, head_dir: str | Path) -> list[str]:
     return sorted(base - head)
 
 
+DOC_FOLDERS = {"docs", "doc"}
+DOC_MEDIA = {".gif", ".mp4", ".mov", ".webm", ".avi", ".mkv", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif",
+             ".tiff", ".ico", ".psd", ".pdf", ".zip", ".gz", ".tgz", ".7z", ".mp3", ".wav", ".ogg", ".ttf", ".otf",
+             ".woff", ".woff2", ".eot"}
+HUGE_FILE = 25 * 1024 * 1024
+
+
+def left_out(rel: Path, path: Path) -> str:
+    """Why a file stays out of the sandbox, or "": pictures and videos in a docs folder (label-studio's docs/ was
+    418 MB of them) and any single file over 25 MB. Tests don't read either; the log says what was left out."""
+    if DOC_FOLDERS & set(rel.parts[:-1]) and path.suffix.lower() in DOC_MEDIA:
+        return "documentation media"
+    if path.stat().st_size > HUGE_FILE:
+        return "files over 25 MB"
+    return ""
+
+
+def _candidates(root: Path):
+    for p in sorted(root.rglob("*")):
+        rel = p.relative_to(root)
+        if p.is_file() and not SKIP_PARTS & set(rel.parts):
+            yield rel, p
+
+
 def code_files(root: str | Path) -> dict[str, Path]:
-    """{"app/relative/path": local path} for every file outside caches, venvs and .git."""
+    """{"app/relative/path": local path} for every file outside caches, venvs and .git (and see left_out)."""
     root = Path(root).resolve()
-    return {f"{APP[1:]}/{p.relative_to(root).as_posix()}": p for p in sorted(root.rglob("*"))
-            if p.is_file() and not SKIP_PARTS & set(p.relative_to(root).parts)}
+    return {f"{APP[1:]}/{rel.as_posix()}": p for rel, p in _candidates(root) if not left_out(rel, p)}
+
+
+def left_out_summary(root: str | Path) -> str:
+    """'312 documentation media (401.2 MB)' for the log, or "" when nothing was left out."""
+    counts: dict[str, list[int]] = {}
+    for rel, p in _candidates(Path(root).resolve()):
+        if why := left_out(rel, p):
+            c = counts.setdefault(why, [0, 0])
+            c[0] += 1
+            c[1] += p.stat().st_size
+    return ", ".join(f"{n} {why} ({size / 1e6:.1f} MB)" for why, (n, size) in counts.items())
 
 
 from doppel.runner import APP_LOG_LINES, APP_LOG_MARKER, attach_app_log  # noqa: E402

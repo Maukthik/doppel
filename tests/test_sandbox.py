@@ -1,5 +1,6 @@
 """Sandbox reliability: throttle, retries, infrastructure errors, git and build tools on demand."""
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -213,7 +214,47 @@ def test_upload_is_one_request_and_one_unpack_whatever_the_file_count(tmp_path, 
             return Image()
     files = {f"app/m{i}.py": tmp_path / f"m{i}.py" for i in range(300)}
     asyncio.run(sandbox.upload(Image(), files, "uploading the code"))
-    assert calls == [(f"tar xzf {sandbox.UPLOAD_PATH} -C / && rm -f {sandbox.UPLOAD_PATH}", [sandbox.UPLOAD_PATH])]
+    assert len(calls) == 1 and calls[0][1] == [f"{sandbox.UPLOAD_PATH}.0000"]     # small: one part, one run
+    assert calls[0][0].startswith(f"cat {sandbox.UPLOAD_PATH}.* > {sandbox.UPLOAD_PATH} && tar xzf")
+
+
+def test_a_big_archive_goes_up_in_parts_a_few_at_a_time_and_joins_back(tmp_path, fast, monkeypatch):
+    # 8.7 MB and up failed as one request every time; parts of 2 MB, three at once, each retried alone
+    import io
+    import os
+    import tarfile
+    monkeypatch.setattr(sandbox, "UPLOAD_PART", 64 * 1024)
+    for i in range(6):
+        (tmp_path / f"blob{i}.bin").write_bytes(os.urandom(50_000))   # random: gzip can't shrink it
+    files = {f"app/blob{i}.bin": tmp_path / f"blob{i}.bin" for i in range(6)}
+    sent, running, peak, failed_once = [], [0], [0], set()
+
+    class Files:
+        async def _upload_bytes_file(self, data):
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+            await asyncio.sleep(0.01)
+            running[0] -= 1
+            if len(data) and data[:8] not in failed_once:     # every part drops once, then goes through
+                failed_once.add(data[:8])
+                raise ContreeTransportError("ReadError")
+            sent.append(data)
+
+    runs = []
+
+    class Image:
+        _client = SimpleNamespace(files=Files())
+        exit_code, stdout, stderr = 0, "", ""
+
+        async def run(self, shell, files=None, **kw):
+            runs.append(files)
+            return Image()
+    asyncio.run(sandbox.upload(Image(), files, "uploading the code"))
+    parts = runs[0]
+    assert len(parts) > 3 and len(sent) == len(parts) and peak[0] <= sandbox.UPLOAD_PARALLEL
+    whole = b"".join(parts[k] for k in sorted(parts))
+    with tarfile.open(fileobj=io.BytesIO(whole), mode="r:gz") as tar:
+        assert sorted(tar.getnames()) == sorted(files)
 
 
 def test_a_dropped_upload_is_retried_and_a_failed_unpack_is_an_infra_error(tmp_path, fast):

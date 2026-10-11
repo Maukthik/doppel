@@ -47,6 +47,8 @@ REQUIREMENT_FILES = ("requirements*.txt", "requirements/*.txt", "*requirements*.
 
 
 UPLOAD_PATH = "/tmp/.doppel-upload.tgz"
+UPLOAD_PART = 2 * 1024 * 1024   # every upload up to 5.3 MB went through; every one from 8.7 MB failed
+UPLOAD_PARALLEL = 3
 UNPACK_TIMEOUT = 900
 
 
@@ -137,15 +139,30 @@ def archive(files: dict[str, Path]) -> bytes:
 
 
 async def upload(img, files: dict[str, Path], what: str, log=lambda m: None):
-    """Lay files into an image with one upload and one unpack; returns the new image. A failed unpack is an
-    error about the upload, never a result about the app."""
+    """Lay files into an image: one archive, sent in parts of at most UPLOAD_PART bytes, joined and unpacked in
+    the sandbox; returns the new image. One large request failed every time (8.7 MB and up: ReadError and
+    timeouts on all three attempts; 5.3 MB and below went through), and one request per file broke the
+    connection pool. The parts go up a few at a time, each retried on its own; a failed unpack is an
+    InfraError, never a result about the app."""
     if not files:
         return img
     data = archive(files)
-    log(f"[sandbox] {what}: {len(files)} files as one archive ({len(data) / 1e6:.1f} MB)")
-    out = await retrying(lambda: img.run(shell=f"tar xzf {UPLOAD_PATH} -C / && rm -f {UPLOAD_PATH}",
-                                         files={UPLOAD_PATH: data}, disposable=False, timeout=UNPACK_TIMEOUT),
-                         what, log)
+    parts = [data[i:i + UPLOAD_PART] for i in range(0, len(data), UPLOAD_PART)] or [b""]
+    names = [f"{UPLOAD_PATH}.{n:04d}" for n in range(len(parts))]
+    log(f"[sandbox] {what}: {len(files)} files as one archive ({len(data) / 1e6:.1f} MB"
+        + (f", {len(parts)} parts)" if len(parts) > 1 else ")"))
+    send = getattr(getattr(getattr(img, "_client", None), "files", None), "_upload_bytes_file", None)
+    if send is not None and len(parts) > 1:   # content-addressed: the run below finds the parts already there
+        gate = asyncio.Semaphore(UPLOAD_PARALLEL)
+
+        async def one(n: int, part: bytes):
+            async with gate:
+                await retrying(lambda: send(part), f"{what} (part {n + 1} of {len(parts)})", log)
+        await asyncio.gather(*(one(n, part) for n, part in enumerate(parts)))
+    shell = (f"cat {UPLOAD_PATH}.* > {UPLOAD_PATH} && tar xzf {UPLOAD_PATH} -C / && "
+             f"rm -f {UPLOAD_PATH} {UPLOAD_PATH}.*")
+    out = await retrying(lambda: img.run(shell=shell, files=dict(zip(names, parts, strict=True)), disposable=False,
+                                         timeout=UNPACK_TIMEOUT), what, log)
     if getattr(out, "exit_code", 0) not in (0, None):
         raise InfraError(f"{what}: unpacking the code in the sandbox failed (exit {out.exit_code}): "
                          f"{((out.stderr or '') + (out.stdout or ''))[-400:]}. Nothing was learned about the app.")
