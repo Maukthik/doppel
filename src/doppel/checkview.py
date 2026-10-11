@@ -87,7 +87,7 @@ def _modes(data: dict) -> str:
 WORLDS = """<section class="worlds3" aria-label="How Doppel decides">
 <div class="ws"><div class="w"><b>Base</b><span>the code before the PR</span></div>
 <div class="w"><b>Base again</b><span>the same code, run again</span></div>
-<div class="w head"><b>Head</b><span>the code with the PR</span></div></div>
+<div class="w after"><b>Head</b><span>the code with the PR</span></div></div>
 <div class="wcap"><p><b>Base vs base again:</b> whatever differs between two runs of the same code is noise, and is
 ignored.</p><p><b>Base vs head:</b> every other difference is a behavior change. It is re-checked by running it
 again, then judged by Nemotron against the PR description.</p></div></section>"""
@@ -216,13 +216,16 @@ def render_check(data: dict, public: bool = False, nav: str = "") -> str:
                         "(after ignoring what differs between two runs of the same code).</p>")
     body = f"""{nav}<p class="brand">doppel check · {_e(data.get('app', ''))}</p>
 <h1>{_e(pr.get('title') or 'Behavior check')}</h1>
+<p class="what">Doppel ran this app's code from before and after the pull request side by side, compared every
+response, and had NVIDIA Nemotron judge each difference against what the pull request says it does.</p>
 <div class="banner {tone}">{_e(verdict)}</div>
 {_modes(data)}
 {WORLDS}
 {''.join(sections)}
 {_suspicions(data, clean)}
 <footer>Each change above comes from real runs of the code before and after the PR, in Nebius sandboxes; the
-verdicts are NVIDIA Nemotron's, judged against the PR description. Seconds: {_e(data.get('seconds', '?'))}.</footer>"""
+verdicts are NVIDIA Nemotron's, judged against the PR description. Seconds: {_e(data.get('seconds', '?'))}.
+<br><a href="https://github.com/Maukthik/doppel">What is Doppel? Add it to your repo in one file →</a></footer>"""
     title = f"doppel check: {pr.get('title') or data.get('app', '')}"
     return PAGE.replace("__TITLE__", _e(title)).replace("__CSS__", CSS + CHECK_CSS).replace("__BODY__", body)
 
@@ -237,6 +240,8 @@ def write_check_view(path: Path, out: Path | None = None, public: bool = False) 
 
 CHECK_CSS = r"""
 .brand{color:var(--quiet);font-size:.85rem;letter-spacing:.04em;text-transform:uppercase;margin:0 0 8px}
+.what{color:var(--quiet);margin:4px 0 0;max-width:72ch}
+footer a{color:var(--free);font-weight:500}
 .banner{font-size:1.25rem;font-weight:600;padding:14px 20px;border-radius:12px;margin:18px 0 26px;color:#fff}
 .banner.red{background:var(--stop)}.banner.green{background:var(--pass)}.banner.grey{background:var(--quiet)}
 .modes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;margin:0 0 22px}
@@ -248,7 +253,7 @@ CHECK_CSS = r"""
 .ws{display:flex;gap:10px;margin:0 0 10px}
 .ws .w{flex:1 1 0;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:10px 14px;text-align:center}
 .ws .w b{display:block;font-weight:600}.ws .w span{display:block;color:var(--quiet);font-size:.85rem}
-.ws .w.head{border:2px solid var(--free)}
+.ws .w.after{border:2px solid var(--free)}   /* not "head": the viewer's base CSS styles .head as a grid row */
 .wcap{display:flex;gap:14px;color:var(--quiet);font-size:.88rem}.wcap p{flex:1 1 0;margin:0}
 h2{font-size:1.15rem;font-weight:600;margin:34px 0 12px}
 .sub{color:var(--quiet);margin:-6px 0 12px;font-size:.92rem}

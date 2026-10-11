@@ -138,3 +138,9 @@ def test_masking_twice_changes_nothing():
     assert sanitize(once) == once
     text = '{"password_hash": "' + HASH + '"}'
     assert _scrub_text(_scrub_text(text)) == _scrub_text(text)
+
+
+def test_the_head_box_does_not_inherit_the_viewers_head_row_grid():
+    page = render_check(DATA)
+    assert 'class="w after"' in page and 'class="w head"' not in page   # the viewer's CSS styles .head as a grid row
+    assert "What is Doppel?" in page and 'class="what"' in page
