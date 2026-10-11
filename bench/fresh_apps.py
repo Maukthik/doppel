@@ -161,6 +161,7 @@ def run_one(app: dict, backend: str, force: bool, results: Path | None = None) -
         return json.loads((out_dir / "result.json").read_text("utf-8"))
     from doppel import cli
     from doppel.checkview import write_check_view
+    from doppel.errors import head_and_tail
     out_dir.mkdir(parents=True, exist_ok=True)
     t0 = time.perf_counter()
     result = {**app, "backend": backend, "date": str(date.today())}
@@ -185,11 +186,11 @@ def run_one(app: dict, backend: str, force: bool, results: Path | None = None) -
                           source=tests.get("source"))
         else:
             reason = tests.get("reason", "")
-            result.update(status="stopped", category=category(reason), reason=reason[:3000])
+            result.update(status="stopped", category=category(reason), reason=head_and_tail(reason, 4000))
         write_check_view(out_dir / "check.json", out_dir / "doppel-check.html", public=True)
     except Exception as e:  # noqa: BLE001 - one app's failure must not stop the others
         reason = f"{type(e).__name__}: {e}"
-        result.update(status="stopped", category=category(reason), reason=reason[:3000])
+        result.update(status="stopped", category=category(reason), reason=head_and_tail(reason, 4000))
     result["seconds"] = round(time.perf_counter() - t0, 1)
     (out_dir / "result.json").write_text(json.dumps(result, indent=1, default=str) + "\n", encoding="utf-8")
     return result

@@ -25,3 +25,15 @@ def failure_text(stdout: str, stderr: str, limit: int = 2000) -> str:
     if own and not all(f in tail for f in own):
         frames = "Your doppel_seed.py, where it failed:\n" + "\n".join(own[-6:]) + "\n...\n"
     return f"{kept_out[-limit:]}\n{frames}{tail}".lstrip("\n")
+
+
+def head_and_tail(text: str, limit: int = 2500) -> str:
+    """A stop reason short enough to show: its first line (what happened) and the END of the rest (where the
+    real error is). Keeping the start cut off the final exception line: wger's report ended mid-traceback at
+    'File "<froze', the ModuleNotFoundError or ImproperlyConfigured below it lost."""
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    first, _, rest = text.partition("\n")
+    room = max(limit - len(first) - 6, 200)
+    return f"{first[:limit]}\n...\n{rest[-room:]}"

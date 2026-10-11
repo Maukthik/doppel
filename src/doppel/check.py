@@ -267,7 +267,8 @@ def report(tests: dict, twin: dict) -> str:
         if foot.startswith("<sub>"):
             lines += ["", foot]
     if not tests.get("ran") and not twin.get("ran"):
-        lines += ["", "> " + tests["reason"].replace("\n", "\n> ")[:2500]]
+        from doppel.errors import head_and_tail
+        lines += ["", "> " + head_and_tail(tests["reason"], 2500).replace("\n", "\n> ")]
     lines += ["", "<sub>Each change is proven by real runs of the code before and after the PR; the verdicts are "
                   "Nemotron's, against the PR description.</sub>"] if (regressions or human or intended) and \
         not unjudged else []

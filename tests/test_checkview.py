@@ -159,3 +159,16 @@ def test_the_page_commit_does_not_reference_the_pr():
     action = yaml.safe_load((Path(__file__).parent.parent / "action.yml").read_text(encoding="utf-8"))
     step = next(s for s in action["runs"]["steps"] if s.get("name") == "Publish the check page")
     assert 'PR #' not in step["run"].replace('"#N"', "")   # "#1" in a commit message adds a PR timeline entry
+
+
+def test_a_stopped_test_mode_shows_the_end_of_its_output_folded(tmp_path):
+    from doppel.checkview import write_check_view
+    reason = "the test command ran no test on the unchanged code (exit 4). Its output:\n" + \
+        "noise\n" * 900 + "E   ModuleNotFoundError: No module named 'responses'"
+    (tmp_path / "check.json").write_text(json.dumps({"tests": {"ran": False, "reason": reason},
+                                                     "twin": {"ran": False, "reason": "turned off (--no-twin)"},
+                                                     "rows": []}))
+    write_check_view(tmp_path / "check.json", tmp_path / "p.html")
+    page = (tmp_path / "p.html").read_text(encoding="utf-8")
+    assert "The end of the output" in page
+    assert "ModuleNotFoundError: No module named" in page and "responses" in page.split("ModuleNotFoundError")[1][:40]

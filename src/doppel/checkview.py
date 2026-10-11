@@ -69,9 +69,13 @@ def _modes(data: dict) -> str:
         body = "".join(f"<li>{f}</li>" for f in facts)
         cards.append(f'<div class="mode on"><h3>Your tests <span>test mode · no setup</span></h3><ul>{body}</ul></div>')
     else:
-        reason = (tests.get("reason") or "did not run").splitlines()[0].split(" Use the HTTP twin")[0]
+        full = tests.get("reason") or "did not run"
+        reason = full.splitlines()[0].split(" Use the HTTP twin")[0]
+        rest = full.partition("\n")[2].strip()
+        output = (f'<details><summary>The end of the output</summary><pre>{_e(rest[-2500:])}</pre></details>'
+                  if rest else "")   # where the real error is: the last lines, not the first
         cards.append(f'<div class="mode off"><h3>Your tests <span>test mode</span></h3><p>Couldn\'t compare: '
-                     f'{_e(reason[:400])}</p></div>')
+                     f'{_e(reason[:400])}</p>{output}</div>')
     if twin.get("ran"):
         cov = twin.get("coverage") or {}
         served = f"; the app served <b>{cov['served']}</b> of {cov['requests']} requests" if cov.get("requests") else ""

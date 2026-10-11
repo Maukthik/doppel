@@ -237,3 +237,12 @@ def test_a_dropped_upload_is_retried_and_a_failed_unpack_is_an_infra_error(tmp_p
 def test_nothing_to_upload_leaves_the_image_as_it_is():
     marker = object()
     assert asyncio.run(sandbox.upload(marker, {}, "uploading the PR's code")) is marker
+
+
+def test_a_missing_pkg_config_calls_for_the_build_tools():
+    # healthchecks, 11 Oct: mysqlclient's build looked for pkg-config; the build tools have it, the trigger missed it
+    out = ("error: subprocess-exited-with-error\n  Getting requirements to build wheel did not run successfully.\n"
+           "      /bin/sh: 1: pkg-config: not found\n      Trying pkg-config --exists mysqlclient\n"
+           "      Command 'pkg-config --exists mysqlclient' returned non-zero exit status 127.\n")
+    assert sandbox.needs_build_tools(out)
+    assert "pkg-config" in sandbox.BUILD_TOOLS and "default-libmysqlclient-dev" in sandbox.BUILD_TOOLS

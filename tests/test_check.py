@@ -84,3 +84,23 @@ def test_the_report_groups_requests_into_distinct_changes():
     assert "| 1 | Status 400 -> 201 | `POST /orders` | 6 requests from 6 users |" in md
     assert "`POST /orders`<br>`GET /orders/{id}` | 3 requests from 1 user |" in md   # ids folded into a route
     assert "All 9 requests behind these" in md
+
+
+def test_a_long_stop_reason_keeps_its_first_line_and_its_end():
+    from doppel.errors import head_and_tail
+    frames = "\n".join(f'  File "/usr/lib/python3.12/x{i}.py", line {i}, in f' for i in range(300))
+    reason = ("the test command ran no test on the unchanged code (exit 1). Its output:\n" + frames +
+              "\nModuleNotFoundError: No module named 'environ'")
+    kept = head_and_tail(reason, 2500)
+    assert len(kept) <= 2500
+    assert kept.startswith("the test command ran no test") and kept.endswith("No module named 'environ'")
+    assert head_and_tail("short", 2500) == "short"
+
+
+def test_the_report_of_a_stopped_check_shows_the_final_error():
+    from doppel.check import report
+    frames = "\n".join(f'  File "/x{i}.py", line {i}' for i in range(300))
+    reason = "the test command ran no test on the unchanged code (exit 1). Its output:\n" + frames + \
+        "\ndjango.core.exceptions.ImproperlyConfigured: Set the SECRET_KEY environment variable"
+    text = report({"ran": False, "reason": reason}, {"ran": False, "reason": "turned off (--no-twin)"})
+    assert "ImproperlyConfigured: Set the SECRET_KEY" in text
