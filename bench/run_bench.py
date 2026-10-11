@@ -327,8 +327,10 @@ def main(argv=None) -> int:
     ap.add_argument("--arms", default="tests,doppel,review")
     ap.add_argument("--backend", choices=["local", "nebius"], default="nebius")
     ap.add_argument("--only", help="comma-separated PR ids")
-    ap.add_argument("--set", choices=["main", "heldout", "all"], default="main",
-                    help="main: the 30 PRs; heldout: 10 PRs written after the main results were in")
+    ap.add_argument("--set", choices=["main", "heldout", "consequence", "all"], default="main",
+                    help="main: the 30 PRs; heldout: 10 PRs written after the main results were in; consequence: "
+                         "8 PRs written before the judge learned about side effects (5 safe changes with side "
+                         "effects, 3 regressions disguised as side effects)")
     ap.add_argument("-n", type=int, default=12, help="personas per PR")
     ap.add_argument("--personas", help="use this persona file for every PR instead of generating")
     ap.add_argument("--guided", action="store_true",
