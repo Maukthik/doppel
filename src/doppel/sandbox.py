@@ -44,7 +44,11 @@ HEADER_PACKAGES = {"lber.h": "libldap2-dev libsasl2-dev", "ldap.h": "libldap2-de
                    "bzlib.h": "libbz2-dev", "sqlite3.h": "libsqlite3-dev", "curl/curl.h": "libcurl4-openssl-dev",
                    "magic.h": "libmagic-dev", "yaml.h": "libyaml-dev", "cairo": "libcairo2-dev",
                    "png.h": "libpng-dev", "freetype": "libfreetype-dev", "unixodbc": "unixodbc-dev",
-                   "sql.h": "unixodbc-dev", "snappy": "libsnappy-dev", "geos": "libgeos-dev", "gdal": "libgdal-dev"}
+                   "sql.h": "unixodbc-dev", "snappy": "libsnappy-dev", "geos": "libgeos-dev", "gdal": "libgdal-dev",
+                   # borgbackup (weblate): its setup.py names BORG_LIBLZ4_PREFIX etc.; it wants all of these
+                   "BORG_LIB": "liblz4-dev libzstd-dev libxxhash-dev libacl1-dev",
+                   "liblz4": "liblz4-dev", "libzstd": "libzstd-dev", "xxhash": "libxxhash-dev",
+                   "acl/libacl.h": "libacl1-dev"}
 NEEDS_GIT = re.compile(r"git\+|git://|\bgit@[\w.-]+:")
 NEEDS_BUILD = re.compile("|".join([
     r"command '(gcc|cc|x86_64-linux-gnu-gcc)' failed", r"unable to execute '?(gcc|cc)", r"gcc: not found",
@@ -169,12 +173,23 @@ def runtime_packages(output: str) -> list[str]:
     return out
 
 
+# what a failed build says when a library is missing: a compiler error naming a header, a pkg-config miss
+# (xmlsec1, liblz4.pc), a setup.py's own words ("Could not find lz4 lib/headers"), borgbackup's BORG_LIB*_PREFIX
+LIBRARY_MISS = re.compile(r"fatal error: ([\w./+-]+\.h): No such file"
+                          r"|Package '?([\w.+-]+?)'? was not found in the pkg-config search path"
+                          r"|([\w.+-]+)\.pc\b"
+                          r"|Could not find ([\w.+-]+) lib"
+                          r"|BORG_LIB\w*")
+
+
 def header_packages(output: str) -> list[str]:
-    """The Debian packages for the headers a failed build could not find (mealie: python-ldap wanted lber.h)."""
+    """The Debian packages for the libraries a failed build could not find (mealie: python-ldap wanted lber.h;
+    weblate: borgbackup wanted liblz4)."""
     out: list[str] = []
-    for header in re.findall(r"fatal error: ([\w./+-]+\.h): No such file", output or ""):
+    for m in LIBRARY_MISS.finditer(output or ""):
+        name = next((g for g in m.groups() if g), m.group(0))
         for key, packages in HEADER_PACKAGES.items():
-            if key in header:
+            if key in name:
                 out += [p for p in packages.split() if p not in out]
     return out
 
