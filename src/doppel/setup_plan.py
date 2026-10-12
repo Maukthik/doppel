@@ -40,7 +40,8 @@ TOOLING = {"black", "ruff", "flake8", "mypy", "pre-commit", "isort", "pylint", "
            "pyright", "types-requests", "pip-tools", "uv", "poetry", "pipenv", "hatch", "pdm"}
 SKIP_WORDS = ("lint", "format", "style", "docs", "doc ", "typecheck", "type-check", "mypy", "pre-commit", "precommit",
               "release", "deploy", "publish", "codeql", "security", "e2e", "playwright", "frontend", "docker",
-              "label", "stale", "bump", "translation", "i18n", "smokeshow", "zizmor", "issue", "conflict")
+              "label", "stale", "bump", "translation", "i18n", "smokeshow", "zizmor", "issue", "conflict",
+              "pyppeteer", "puppeteer", "selenium", "browser", "packaging", "benchmark", "jmeter", "regtest")
 RUNNERS = ({"uv", "run"}, {"poetry", "run"}, {"pdm", "run"}, {"hatch", "run"}, {"pipenv", "run"}, {"rye", "run"})
 VALUED_FLAGS = {"--group", "--extra", "--with", "--python", "-p", "--env-file", "--directory", "--project",
                 "--package", "--only-group", "--source", "--rcfile", "--include", "--omit", "--concurrency",
@@ -91,8 +92,10 @@ def clean_test_command(cmd: str) -> str:
             continue
         if p.startswith(("--cov", "--junitxml", "--html", "--numprocesses", "--dist", "--durations", "--parallel=")):
             continue
-        if p in ("-n", "--maxprocesses"):
-            skip_next = True
+        if p in ("-n", "--maxprocesses", "--splits", "--group", "--durations-path", "--splitting-algorithm"):
+            skip_next = True    # the CI's own sharding (pytest-split): Doppel splits the suite itself
+            continue
+        if p == "--store-durations" or p.startswith(("--splits=", "--group=", "--durations-path=")):
             continue
         if p == "--parallel":   # Django's runner: `--parallel`, `--parallel auto`, `--parallel 4`
             nxt = parts[i + 1] if i + 1 < len(parts) else ""
@@ -340,11 +343,29 @@ def project_install(repo: Path, groups: list[str] | None = None, extras: list[st
         with_groups = [g for g in (groups or TEST_GROUPS) if g in have]
         steps.append("pip install --quiet poetry && poetry config virtualenvs.create false && "
                      "poetry install --no-interaction" + (f" --with {','.join(with_groups)}" if with_groups else ""))
-    elif (repo / "Pipfile").exists():
-        steps.append("pip install --quiet pipenv && pipenv install --system --dev")
+    elif (repo / "Pipfile").exists() and not reqs:   # babybuddy has both: its requirements are enough
+        steps.append("pip install --quiet pipenv && ([ -f Pipfile.lock ] || pipenv lock) && "
+                     "pipenv install --system --dev --ignore-pipfile")
     elif can_build and not reqs:
         steps.append("pip install --quiet -e .")
+    if not steps and (sub := _requirements_below(repo)):   # inventree: src/backend/requirements*.txt
+        steps.append("pip install --quiet " + " ".join(
+            f"-r {sub}/{n}" for n in ("requirements.txt", *DEV_REQUIREMENTS) if (repo / sub / n).exists()))
     return steps
+
+
+def _requirements_below(repo: Path) -> str:
+    """The subfolder holding the app's requirements when the root has none: the one with the code under test
+    (manage.py below it), else the shallowest; never docs, examples or tooling folders."""
+    skip = {"docs", "doc", "contrib", "examples", "example", "scripts", "tools", ".github", "node_modules", "venv",
+            ".venv", "site-packages", "build", "dist"}
+    found = sorted({f.parent for f in repo.glob("*/requirements.txt")} | {f.parent for f in repo.glob(
+        "*/*/requirements.txt")} | {f.parent for f in repo.glob("*/*/*/requirements.txt")},
+        key=lambda d: (len(d.relative_to(repo).parts), str(d)))
+    found = [d for d in found if not skip & set(d.relative_to(repo).parts)]
+    with_app = [d for d in found if any(d.glob("manage.py")) or any(d.glob("*/manage.py"))]
+    pick = (with_app or found or [None])[0]
+    return pick.relative_to(repo).as_posix() if pick else ""
 
 
 def covers_project(steps: list[str]) -> bool:
@@ -441,6 +462,9 @@ def _runs(step_if, matrix: dict) -> bool:
     cond = re.sub(r"^\$\{\{\s*|\s*\}\}$", "", cond)
     if not cond:
         return True
+    lit = re.fullmatch(r"['\"]([^'\"]*)['\"]\s*(==|!=)\s*['\"]([^'\"]*)['\"]", cond)
+    if lit:   # an input already filled in: `'' != ''` (lnbits' database step, off by default)
+        return (lit.group(1) == lit.group(3)) == (lit.group(2) == "==")
     m = re.fullmatch(r"(matrix\.[\w-]+|runner\.os)\s*(==|!=)\s*['\"]([^'\"]*)['\"]", cond)
     if not m:
         return True
@@ -450,13 +474,28 @@ def _runs(step_if, matrix: dict) -> bool:
     return (left == m.group(3)) == (m.group(2) == "==")
 
 
+def _unwrap_container(line: str) -> str:
+    """The command inside `docker run [options] IMAGE bash -c '...'` (or docker exec): the project's tests run
+    in its own image there (changedetection); outside a shell -c, a container line is not run here at all."""
+    if not re.match(r"^\s*(sudo\s+)?docker\s+(run|exec)\b", line):
+        return line
+    try:
+        words = shlex.split(line)
+    except ValueError:
+        return ""
+    for i, w in enumerate(words[:-2]):
+        if w in ("bash", "sh", "/bin/bash", "/bin/sh") and words[i + 1] == "-c":
+            return words[i + 2]
+    return ""
+
+
 def _segments(run: str) -> list[str]:
     out = []
     for line in _joined_lines(run):
-        line = line.strip()
+        line = _unwrap_container(line.strip())
         if not line or line.startswith("#"):
             continue
-        out += [s.strip() for s in re.split(r"\s&&\s|;\s", line) if s.strip()]
+        out += [s.strip() for s in re.split(r"\s*&&\s*|\s*;\s*", line) if s.strip()]
     return out
 
 
@@ -464,6 +503,8 @@ def _env_values(*maps) -> dict:
     env = {}
     for m in maps:
         for k, v in (m or {}).items() if isinstance(m, dict) else ():
+            if v is None or v == "None":   # an empty input (lnbits' db-url ""): unset, not the word None
+                continue
             v = ("true" if v else "false") if isinstance(v, bool) else str(v)
             if "${{" in v or k.startswith("GITHUB_"):
                 continue
@@ -473,6 +514,9 @@ def _env_values(*maps) -> dict:
 
 def _scan_job(job: dict, wf_env: dict, repo: Path) -> SetupPlan | None:
     matrix = _pick_matrix(job)
+    runs_on = _sub(str(job.get("runs-on", "")), matrix, {}).lower()
+    if "macos" in runs_on or "windows" in runs_on:   # lnbits: a macOS packaging check was taken for its tests
+        return None
     base_env = _env_values({k: _sub(str(v), matrix, {}) for k, v in (wf_env or {}).items()},
                            {k: _sub(str(v), matrix, {}) for k, v in (job.get("env") or {}).items()})
     workdir = str((((job.get("defaults") or {}).get("run") or {}).get("working-directory")) or "")
@@ -486,6 +530,15 @@ def _scan_job(job: dict, wf_env: dict, repo: Path) -> SetupPlan | None:
             continue
         uses = str(step.get("uses") or "")
         given = (step.get("with") or {}).get("packages")
+        if "pytest-action" in uses and not plan.test:   # lnbits: pytest run by an action, its arguments as input
+            w = step.get("with") or {}
+            cmd = _sub(str(w.get("custom-pytest") or ("pytest " + str(w.get("custom-arguments") or ""))),
+                       matrix, base_env)
+            if "${{" not in cmd and (test := normalize_test(cmd)):
+                plan.test = test
+                plan.env.update(_env_values({k: _sub(str(v), matrix, base_env)
+                                             for k, v in (step.get("env") or {}).items()}))
+                break
         if "apt" in uses.lower() and isinstance(given, str):   # paperless-ngx: uses: ./.github/actions/apt-install
             plan.system += [w for w in _sub(given, matrix, base_env).split() if "${{" not in w]
         if "setup-python" in uses:
@@ -496,8 +549,12 @@ def _scan_job(job: dict, wf_env: dict, repo: Path) -> SetupPlan | None:
         if not isinstance(run, str):
             continue
         run = _sub(run, matrix, base_env)
+        moved = ""
         for seg in _segments(run):
             low = seg.lower()
+            if (cd := re.match(r"^cd\s+([\w./-]+)$", seg)):   # `cd app; pytest ...` inside one step
+                moved = cd.group(1).strip("./") if cd.group(1) not in (".", "./") else ""
+                continue
             apt = re.match(r"^(?:sudo\s+)?apt(?:-get)?\s+install\s+(.*)$", seg)
             if apt:
                 plan.system += [w for w in apt.group(1).split() if not w.startswith("-") and "${{" not in w]
@@ -512,6 +569,8 @@ def _scan_job(job: dict, wf_env: dict, repo: Path) -> SetupPlan | None:
                 wd = str(step.get("working-directory") or "")
                 if wd and wd not in (".", "./"):
                     plan.workdir = wd.strip("./")
+                if moved:
+                    plan.workdir = "/".join(x for x in (plan.workdir, moved) if x)
                 break
             if (steps := convert_install(seg, repo / plan.workdir if plan.workdir else repo)) is not None:
                 installs += steps
@@ -528,6 +587,41 @@ def _scan_job(job: dict, wf_env: dict, repo: Path) -> SetupPlan | None:
 def _score(names: str) -> int:
     low = names.lower()
     return 3 * ("test" in low) - 8 * sum(w in low for w in SKIP_WORDS) - ("coverage" in low)
+
+
+def _jobs_of(job: dict, folder: Path, yaml) -> list[tuple[str, dict]]:
+    """A job as is, or for `uses: ./.github/workflows/x.yml` the called workflow's jobs, its ${{ inputs.* }}
+    filled from the caller's `with:` (or the input's default)."""
+    uses = str(job.get("uses") or "")
+    if not uses:
+        return [("", job)]
+    if not uses.startswith("./.github/workflows/"):
+        return []
+    target = folder / uses.split("/")[-1].split("@")[0]
+    try:
+        text = target.read_text("utf-8", errors="replace")
+        doc = yaml.safe_load(text)
+    except (OSError, yaml.YAMLError):
+        return []
+    trigger = (doc.get("on") or doc.get(True) or {}) if isinstance(doc, dict) else {}
+    declared = ((trigger.get("workflow_call") or {}).get("inputs") or {}) if isinstance(trigger, dict) else {}
+    values = {k: (v or {}).get("default", "") for k, v in declared.items() if isinstance(v, dict)}
+    caller = _pick_matrix(job)   # the caller's own matrix fills what it passes (lnbits: db-url: "" first)
+    values.update({k: _sub(str(v), caller, {}) for k, v in (job.get("with") or {}).items()})
+
+    def fill(m):          # ${{ inputs.x }} alone: the value itself
+        return str(values.get(m.group(1), m.group(0)))
+
+    def quote(m):         # inputs.x inside a larger expression: a quoted literal (`'' != ''`)
+        return re.sub(r"\binputs\.([\w-]+)", lambda i: f"'{values[i.group(1)]}'" if i.group(1) in values
+                      else i.group(0), m.group(0))
+    filled = re.sub(r"\$\{\{\s*inputs\.([\w-]+)\s*\}\}", fill, text)
+    filled = re.sub(r"\$\{\{[^}]*\binputs\.[^}]*\}\}", quote, filled)
+    try:
+        doc = yaml.safe_load(filled)
+    except yaml.YAMLError:
+        return []
+    return [(f"{target.name}:{jid}", j) for jid, j in ((doc or {}).get("jobs") or {}).items() if isinstance(j, dict)]
 
 
 def ci_plan(repo: Path) -> SetupPlan | None:
@@ -548,15 +642,17 @@ def ci_plan(repo: Path) -> SetupPlan | None:
         if not isinstance(doc, dict):
             continue
         for job_id, job in (doc.get("jobs") or {}).items():
-            if not isinstance(job, dict) or "uses" in job:
+            if not isinstance(job, dict):
                 continue
-            plan = _scan_job(job, doc.get("env") or {}, repo)
-            if plan is None:
-                continue
-            score = 10 + _score(f"{f.stem} {doc.get('name', '')} {job_id} {job.get('name', '')}")
-            plan.source = {"test": f"CI workflow ({f.name}, job {job_id})"}
-            if best is None or score > best[0]:
-                best = (score, plan)
+            names = f"{f.stem} {doc.get('name', '')} {job_id} {job.get('name', '')}"
+            for where, called in _jobs_of(job, folder, yaml):
+                plan = _scan_job(called, doc.get("env") or {}, repo)
+                if plan is None:
+                    continue
+                score = 10 + _score(names + " " + where)
+                plan.source = {"test": f"CI workflow ({f.name}, job {job_id}{where and ' -> ' + where})"}
+                if best is None or score > best[0]:
+                    best = (score, plan)
     return best[1] if best else None
 
 
@@ -604,8 +700,8 @@ def plan(repo: str | Path) -> SetupPlan:
         root = repo / p.workdir if p.workdir else repo
         if covers_project(p.install):
             p.source["install"] = "the same CI job"
-        else:
-            own = project_install(root)
+        else:   # the dependencies of the folder the tests run in, else of the repo (changedetection: cd app)
+            own = project_install(root) or (project_install(repo) if root != repo else [])
             p.notes += ["the CI job installs only tools: the project's own dependencies first"] if p.install else []
             p.install = own + p.install
             p.source["install"] = "the project's dependencies" + (" + the same CI job" if ci.install else "")

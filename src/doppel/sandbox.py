@@ -141,6 +141,7 @@ def install_shell(install: str, repo: str | Path) -> str:
 # many of these preinstalled; a slim image does not). paperless-ngx: "failed to find libmagic".
 RUNTIME_PACKAGES = [
     (r"failed to find libmagic|libmagic\.so", "libmagic1"),
+    (r"No such file or directory: 'git'|git: not found|git: command not found", "git"),   # searxng
     (r"libzbar\.so|Unable to find zbar shared library", "libzbar0"),
     (r"libGL\.so\.1", "libgl1"),
     (r"lib(glib|gthread|gobject)-2\.0\.so", "libglib2.0-0"),

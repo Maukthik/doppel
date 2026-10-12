@@ -259,3 +259,101 @@ def test_later_jobs_install_the_repaired_system_packages():
     NebiusSession.add_system(fake, ["libmagic1"])
     assert fake.exports.startswith("export A=1; (") and "install -y -qq --no-install-recommends libmagic1" in \
         fake.exports and fake.exports.endswith("; ")
+
+
+# --- round one's gaps (held-out, 12 Oct) --------------------------------------------------------------------
+
+def test_a_macos_job_is_never_the_test_job(tmp_path):
+    # lnbits: a macOS packaging check (unittest discover -s .github/packaging) was taken for the app's tests
+    write(tmp_path, {".github/workflows/macos.yml": """\
+        jobs:
+          build:
+            runs-on: macos-14
+            steps:
+              - run: python -m unittest discover -s .github/packaging -v
+        """, "tests/test_a.py": "def test_a(): pass\n"})
+    assert plan(tmp_path).source["test"] == "tests found in the repo"
+
+
+def test_a_reusable_workflow_runs_with_the_callers_inputs_and_matrix(tmp_path):
+    # lnbits: ci.yml calls tests.yml with custom-pytest, which runs pytest through pytest-action
+    write(tmp_path, {".github/workflows/ci.yml": """\
+        jobs:
+          test-api:
+            strategy:
+              matrix:
+                db-url: ["", "postgres://u:p@0.0.0.0:5432/db"]
+            uses: ./.github/workflows/tests.yml
+            with:
+              custom-pytest: "uv run pytest tests/api"
+              db-url: ${{ matrix.db-url }}
+        """, ".github/workflows/tests.yml": """\
+        on:
+          workflow_call:
+            inputs:
+              custom-pytest:
+                type: string
+              db-url:
+                type: string
+                default: ""
+        jobs:
+          tests:
+            runs-on: ubuntu-24.04
+            steps:
+              - if: ${{ inputs.db-url != '' }}
+                run: sudo apt-get install -y postgresql-client
+              - uses: pavelzw/pytest-action@v2
+                env:
+                  DB_URL: ${{ inputs.db-url }}
+                  WALLET: FakeWallet
+                with:
+                  custom-pytest: ${{ inputs.custom-pytest }}
+        """})
+    p = plan(tmp_path)
+    assert p.test == "python -m pytest tests/api" and p.system == [] and p.env == {"WALLET": "FakeWallet"}
+    assert p.source["test"] == "CI workflow (ci.yml, job test-api -> tests.yml:tests)"
+
+
+def test_tests_run_inside_the_projects_container_are_unwrapped_and_browser_jobs_score_down(tmp_path):
+    # changedetection: every test line is `docker run IMAGE bash -c 'cd app; pytest ...'`; a browser job won
+    write(tmp_path, {".github/workflows/t.yml": """\
+        jobs:
+          pyppeteer-tests:
+            steps:
+              - run: docker run --rm img bash -c "cd app;pytest --live-server-port=5004 tests/test_request.py"
+          unit-tests:
+            steps:
+              - run: docker run img bash -c 'cd app;pytest tests/unit/'
+        """, "requirements.txt": "flask\n"})
+    p = plan(tmp_path)
+    assert p.test == "python -m pytest tests/unit/" and p.workdir == "app"
+    assert p.install[0] == "pip install --quiet -r requirements.txt"     # the repo's, the app folder has none
+
+
+def test_requirements_next_to_the_code_when_the_root_has_none(tmp_path):
+    # inventree: src/backend/requirements*.txt; only pytest was installed, so pytest-django was missing
+    write(tmp_path, {"src/backend/requirements.txt": "django\n", "src/backend/requirements-dev.txt": "pytest-django\n",
+                     "src/backend/InvenTree/manage.py": "", "docs/requirements.txt": "mkdocs\n",
+                     "tests/test_a.py": "def test_a(): pass\n"})
+    assert plan(tmp_path).install[0] == \
+        "pip install --quiet -r src/backend/requirements.txt -r src/backend/requirements-dev.txt"
+
+
+def test_a_pipfile_is_used_only_without_requirements_and_locked_first(tmp_path):
+    # babybuddy: requirements.txt and a Pipfile without its lock; pipenv refused --system without a lock
+    write(tmp_path, {"requirements.txt": "django\n", "Pipfile": "[packages]\ndjango = '*'\n", "manage.py": ""})
+    assert not any("pipenv" in s for s in plan(tmp_path).install)
+    (tmp_path / "requirements.txt").unlink()
+    step = next(s for s in plan(tmp_path).install if "pipenv" in s)
+    assert "([ -f Pipfile.lock ] || pipenv lock)" in step and "--ignore-pipfile" in step
+
+
+def test_the_cis_own_sharding_flags_are_dropped():
+    # polar: --splits 4 --group 1 would have run a quarter of the suite
+    assert setup_plan.clean_test_command("pytest --splits 4 --group 1 --no-cov --store-durations") == \
+        "python -m pytest --no-cov"
+
+
+def test_git_missing_at_run_time_is_installed():
+    from doppel import sandbox
+    assert sandbox.runtime_packages("E   FileNotFoundError: [Errno 2] No such file or directory: 'git'") == ["git"]

@@ -929,8 +929,10 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
         # S4: something to compare
         requests = sum(len(t["requests"]) for t in a["tests"].values())
         if requests == 0:
+            failing = (f" {failed} tests failed on the unchanged code here; the ones that send requests are often "
+                       f"among them (a missing service or setting).{unmet}" if failed else unmet)
             raise NotComparable(f"the tests ran ({passed} passed) but sent no request through a test client Doppel "
-                                "records, so there is no traffic to compare. " + why_nothing_recorded(code) +
+                                f"records, so there is no traffic to compare.{failing} " + why_nothing_recorded(code) +
                                 " The tests' own pass/fail still applies; for behavior checks use the HTTP twin.")
         findings, stats = compare_worlds(a, b, nz, failing_on_base)
         # S5: a difference counts only if it happens again
