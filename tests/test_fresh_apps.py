@@ -51,3 +51,14 @@ def test_the_heldout_page_has_its_own_folder_and_title(tmp_path, monkeypatch):
          "category": "missing dependency", "reason": "No module named 'x'"}))
     page = fresh_apps.page("heldout").read_text(encoding="utf-8")
     assert "held-out" in page and "pinned" in page and "babybuddy" in page and "missing dependency" in page
+
+
+
+def test_round_two_is_pinned_and_shares_no_app_with_the_earlier_sets():
+    earlier = {a["name"] for a in fresh_apps.APPS + fresh_apps.HELDOUT}
+    earlier_repos = {a["repo"] for a in fresh_apps.APPS + fresh_apps.HELDOUT}
+    round2 = fresh_apps.ROUND2
+    assert len(round2) == 10 and not earlier & {a["name"] for a in round2}
+    assert not earlier_repos & {a["repo"] for a in round2}
+    assert all(len(a["sha"]) == 40 and "subdir" not in a for a in round2)
+    assert fresh_apps.results_for("round2").name == "round2"

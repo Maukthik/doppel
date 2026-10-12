@@ -85,9 +85,37 @@ HELDOUT = [
     {"name": "fastapi-best-architecture", "repo": "https://github.com/fastapi-practices/fastapi_best_architecture",
      "framework": "FastAPI", "sha": "e90b6f266cc545136a59cd3faf60610958dda44f"},
 ]
+ROUND2_RULE = """Chosen on 13 Oct 2026, after round one (heldout) was run and reported and BEFORE the fixes for its five
+Doppel gaps, by the same rule as HELDOUT_RULE; not one of the dev or round-one apps, and no two apps from the same
+organisation as a round-one app (pretix, pretalx's sibling, left out). Rejected by the rule: gitingest (last
+commit Aug 2025). Run once, after the fixes, with no fixes for these apps."""
+ROUND2 = [
+    {"name": "fava", "repo": "https://github.com/beancount/fava", "framework": "Flask",
+     "sha": "fa7be27ffcd4f8b75e07b2af7dcccbe9edd1c298"},
+    {"name": "isso", "repo": "https://github.com/isso-comments/isso", "framework": "Flask",
+     "sha": "413d447a46437d0e9ccf206c8525119355e291d4"},
+    {"name": "privacyidea", "repo": "https://github.com/privacyidea/privacyidea", "framework": "Flask",
+     "sha": "87a647a60c02651e6b813406ca47b25035472a2b"},
+    {"name": "weblate", "repo": "https://github.com/WeblateOrg/weblate", "framework": "Django",
+     "sha": "fc0b45cfb5ef496fc0999e27a1bf99ae50352eb2"},
+    {"name": "netbox", "repo": "https://github.com/netbox-community/netbox", "framework": "Django",
+     "sha": "383a2296d34954b550f4b02b37ead7545b5efbfc"},
+    {"name": "kiwi", "repo": "https://github.com/kiwitcms/Kiwi", "framework": "Django",
+     "sha": "c39dd2b4a64bac4215d75a3b4e39a27253010ba1"},
+    {"name": "defectdojo", "repo": "https://github.com/DefectDojo/django-DefectDojo", "framework": "Django",
+     "sha": "258344266af19de33d721e511f2fc34834f67bdb"},
+    {"name": "litellm", "repo": "https://github.com/BerriAI/litellm", "framework": "FastAPI",
+     "sha": "7efce7f8e05e58fb86e006a6427ab39b6db467fb"},
+    {"name": "prefect", "repo": "https://github.com/PrefectHQ/prefect", "framework": "FastAPI",
+     "sha": "3a9b40f635a2d53730f7311e2f2eb520245e76bb"},
+    {"name": "langflow", "repo": "https://github.com/langflow-ai/langflow", "framework": "FastAPI",
+     "sha": "504c02fc47e76087b82b0e7cbe4186e9cdd916d4"},
+]
 HELDOUT_RESULTS = HERE / "results" / "heldout"
+ROUND2_RESULTS = HERE / "results" / "round2"
 SET_TITLES = {"dev": "Ten real Python web apps, never seen before",
-              "heldout": "Ten held-out apps, chosen before the setup layer was rebuilt"}
+              "heldout": "Ten held-out apps, chosen before the setup layer was rebuilt",
+              "round2": "Ten more held-out apps, chosen before round one's gaps were fixed"}
 
 # What a stopped run's reason says, in words a reader can act on
 CATEGORIES = [
@@ -151,12 +179,12 @@ def category(reason: str) -> str:
     return next((name for name, signs in CATEGORIES if any(s.lower() in low for s in signs)), "other")
 
 
-def results_for(set_name: str) -> Path:
-    return RESULTS if set_name == "dev" else HELDOUT_RESULTS   # looked up at call time (tests patch RESULTS)
+def results_for(set_name: str) -> Path:   # looked up at call time (tests patch these)
+    return {"dev": RESULTS, "heldout": HELDOUT_RESULTS, "round2": ROUND2_RESULTS}[set_name]
 
 
 def apps_for(set_name: str) -> list[dict]:
-    return APPS if set_name == "dev" else HELDOUT
+    return {"dev": APPS, "heldout": HELDOUT, "round2": ROUND2}[set_name]
 
 
 def run_one(app: dict, backend: str, force: bool, results: Path | None = None) -> dict:
@@ -264,7 +292,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("step", choices=["run", "page"])
     ap.add_argument("apps", nargs="*", help="app names (default: every app in the set)")
-    ap.add_argument("--set", dest="set_name", choices=["dev", "heldout"], default="dev")
+    ap.add_argument("--set", dest="set_name", choices=["dev", "heldout", "round2"], default="dev")
     ap.add_argument("--backend", choices=["local", "nebius"], default="nebius")
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args(argv)
