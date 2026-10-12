@@ -48,9 +48,12 @@ HEADER_PACKAGES = {"lber.h": "libldap2-dev libsasl2-dev", "ldap.h": "libldap2-de
 NEEDS_GIT = re.compile(r"git\+|git://|\bgit@[\w.-]+:")
 NEEDS_BUILD = re.compile("|".join([
     r"command '(gcc|cc|x86_64-linux-gnu-gcc)' failed", r"unable to execute '?(gcc|cc)", r"gcc: not found",
-    r"No such file or directory: '(gcc|cc)'", r"Python\.h: No such file", r"pg_config executable not found",
+    # a build program missing outright: psycopg_c asks for pg_config, python-xmlsec for pkg-config, ...
+    r"No such file or directory: '(gcc|cc|pg_config|pkg-config|mysql_config|xml2-config|xslt-config|xmlsec1-config)'",
+    r"Python\.h: No such file", r"pg_config executable not found", r"pg_config: not found",
     r"mysql_config not found", r"libxml/\w+\.h: No such file", r"Failed building wheel",
     r"pkg-config: not found", r"Command 'pkg-config [^']*' returned non-zero", r"pkg-config: command not found",
+    r"pkg-config probably not installed",   # the pkgconfig PyPI package's wording (python-xmlsec: weblate)
     r"Package \S+ was not found in the pkg-config search path",
     r"error: subprocess-exited-with-error[\s\S]{0,4000}(gcc|compil|\.h)"]), re.I)
 GIT_MISSING = re.compile(r"No such file or directory: 'git'|Cannot find command 'git'|git: not found", re.I)
