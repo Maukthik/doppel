@@ -485,6 +485,9 @@ def _scan_job(job: dict, wf_env: dict, repo: Path) -> SetupPlan | None:
         if not isinstance(step, dict) or not _runs(step.get("if"), matrix):
             continue
         uses = str(step.get("uses") or "")
+        given = (step.get("with") or {}).get("packages")
+        if "apt" in uses.lower() and isinstance(given, str):   # paperless-ngx: uses: ./.github/actions/apt-install
+            plan.system += [w for w in _sub(given, matrix, base_env).split() if "${{" not in w]
         if "setup-python" in uses:
             v = _sub(str((step.get("with") or {}).get("python-version", "")), matrix, base_env)
             if v and "${{" not in v:

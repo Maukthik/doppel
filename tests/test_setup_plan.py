@@ -226,3 +226,36 @@ def test_a_locked_project_installs_with_uv_sync_first(tmp_path):
     step = next(s for s in plan(tmp_path).install if "uv sync" in s)
     assert "uv sync --quiet --frozen --inexact --no-install-project" in step and "sys.prefix" in step
     assert "|| (uv export --frozen" in step                       # and the pip route if uv sync can't
+
+
+def test_apt_packages_given_to_an_action_are_system_packages(tmp_path):
+    # paperless-ngx installs its system packages through its own action, not an apt-get line
+    write(tmp_path, {".github/workflows/ci.yml": """\
+        jobs:
+          test:
+            steps:
+              - uses: ./.github/actions/apt-install
+                with:
+                  packages: unpaper tesseract-ocr poppler-utils
+              - run: pytest
+        """})
+    assert plan(tmp_path).system == ["unpaper", "tesseract-ocr", "poppler-utils"]
+
+
+def test_a_library_the_tests_cannot_load_names_its_package():
+    from doppel import sandbox
+    out = "  File \"magic/loader.py\", line 49\nImportError: failed to find libmagic.  Check your installation\n"
+    assert sandbox.runtime_packages(out) == ["libmagic1"]
+    assert sandbox.runtime_packages("OSError: libGL.so.1: cannot open shared object file") == ["libgl1"]
+    assert sandbox.runtime_packages("all good") == []
+
+
+def test_later_jobs_install_the_repaired_system_packages():
+    from types import SimpleNamespace
+
+    from doppel import sandbox
+    from doppel.traffic import NebiusSession
+    fake = SimpleNamespace(exports="export A=1; ", sandbox=sandbox)
+    NebiusSession.add_system(fake, ["libmagic1"])
+    assert fake.exports.startswith("export A=1; (") and "install -y -qq --no-install-recommends libmagic1" in \
+        fake.exports and fake.exports.endswith("; ")

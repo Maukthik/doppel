@@ -137,6 +137,34 @@ def install_shell(install: str, repo: str | Path) -> str:
     return f"{GIT} && {install}" if needs_git(repo, install) else install
 
 
+# a shared library or program the tests could not find at run time -> the Debian package (GitHub's runners have
+# many of these preinstalled; a slim image does not). paperless-ngx: "failed to find libmagic".
+RUNTIME_PACKAGES = [
+    (r"failed to find libmagic|libmagic\.so", "libmagic1"),
+    (r"libzbar\.so|Unable to find zbar shared library", "libzbar0"),
+    (r"libGL\.so\.1", "libgl1"),
+    (r"lib(glib|gthread|gobject)-2\.0\.so", "libglib2.0-0"),
+    (r"libcairo[\w.-]*\.so|no library called \"cairo", "libcairo2"),
+    (r"libpango[\w.-]*\.so", "libpango-1.0-0 libpangoft2-1.0-0"),
+    (r"libgomp\.so", "libgomp1"),
+    (r"libsndfile[\w.-]*\.so|sndfile library not found", "libsndfile1"),
+    (r"libpq\.so", "libpq5"),
+    (r"libxmlsec1[\w.-]*\.so", "libxmlsec1-openssl"),
+    (r"TesseractNotFoundError|tesseract is not installed", "tesseract-ocr"),
+    (r"pdftotext: not found|Unable to get page count. Is poppler installed", "poppler-utils"),
+    (r"ghostscript.*not found|\bgs: not found", "ghostscript"),
+]
+
+
+def runtime_packages(output: str) -> list[str]:
+    """The Debian packages for libraries or programs a test run could not find."""
+    out: list[str] = []
+    for pattern, packages in RUNTIME_PACKAGES:
+        if re.search(pattern, output or ""):
+            out += [p for p in packages.split() if p not in out]
+    return out
+
+
 def header_packages(output: str) -> list[str]:
     """The Debian packages for the headers a failed build could not find (mealie: python-ldap wanted lber.h)."""
     out: list[str] = []

@@ -398,6 +398,12 @@ class NebiusSession:
             return [_untar(o.stdout or "", o.stderr or "") for o in outs]
         return self.loop.run_until_complete(go())
 
+    def add_system(self, packages: list[str]) -> None:
+        """System packages every later job installs before its tests (a repair between tries)."""
+        apt = self.sandbox.APT
+        self.exports += (f"({apt} update -qq >/dev/null 2>&1; {apt} install -y -qq --no-install-recommends "
+                         f"{' '.join(packages)} >/dev/null 2>&1); ")
+
     def add_env(self, more: dict) -> None:
         """More settings for every later job (a repair between tries)."""
         import shlex
@@ -887,17 +893,28 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
             log(f"[tests] {len(test_files(code, test))} test files: split across {len(plan)} sandboxes per world")
         log(f"[tests] running `{test}` in 3 worlds (base, base again, head)")
         k = len(plan)
+        installed: list[str] = []
         for attempt in range(3):
             runs = session.run([(code, cmd) for code in ("base", "base", "head") for cmd in plan])
             worlds = {w: read_world(merge(runs[i * k:(i + 1) * k])) for i, w in enumerate(WORLDS)}
             a, a2, b = worlds["A"], worlds["A2"], worlds["B"]
             passed, failed = _passed_or_failed(a)
-            wanted = {} if passed or attempt == 2 else placeholder_settings(a["output"], extra_env)
-            if not wanted or not hasattr(session, "add_env"):
+            if passed or attempt == 2:
                 break
-            log(f"[tests] the tests need {', '.join(wanted)} set: using placeholder values, running again")
-            extra_env.update(wanted)
-            session.add_env(wanted)
+            wanted = placeholder_settings(a["output"], extra_env) if hasattr(session, "add_env") else {}
+            from doppel import sandbox as _sb
+            libs = [x for x in _sb.runtime_packages(a["output"]) if x not in installed] \
+                if hasattr(session, "add_system") else []
+            if not wanted and not libs:
+                break
+            if wanted:
+                log(f"[tests] the tests need {', '.join(wanted)} set: using placeholder values, running again")
+                extra_env.update(wanted)
+                session.add_env(wanted)
+            if libs:
+                log(f"[tests] the tests need system packages: installing {' '.join(libs)}, running again")
+                installed += libs
+                session.add_system(libs)
         # S1: the base has to have run
         if passed + failed == 0:
             raise NotComparable(f"the test command ran no test on the unchanged code (exit {a['exit']}).{unmet} "
