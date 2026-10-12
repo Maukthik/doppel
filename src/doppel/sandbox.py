@@ -48,7 +48,7 @@ HEADER_PACKAGES = {"lber.h": "libldap2-dev libsasl2-dev", "ldap.h": "libldap2-de
                    # borgbackup (weblate): its setup.py names BORG_LIBLZ4_PREFIX etc.; it wants all of these
                    "BORG_LIB": "liblz4-dev libzstd-dev libxxhash-dev libacl1-dev",
                    "liblz4": "liblz4-dev", "libzstd": "libzstd-dev", "xxhash": "libxxhash-dev",
-                   "acl/libacl.h": "libacl1-dev"}
+                   "acl/libacl.h": "libacl1-dev", "icu-": "libicu-dev"}
 NEEDS_GIT = re.compile(r"git\+|git://|\bgit@[\w.-]+:")
 NEEDS_BUILD = re.compile("|".join([
     r"command '(gcc|cc|x86_64-linux-gnu-gcc)' failed", r"unable to execute '?(gcc|cc)", r"gcc: not found",
@@ -179,6 +179,7 @@ LIBRARY_MISS = re.compile(r"fatal error: ([\w./+-]+\.h): No such file"
                           r"|Package '?([\w.+-]+?)'? was not found in the pkg-config search path"
                           r"|([\w.+-]+)\.pc\b"
                           r"|Could not find ([\w.+-]+) lib"
+                          r"|pkg-config'?(?:[,\s]+'?--[\w-]+'?)+[,\s]+'?([\w.+-]+)"   # ('pkg-config', '--modversion', 'icu-i18n')
                           r"|BORG_LIB\w*")
 
 

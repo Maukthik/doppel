@@ -341,9 +341,16 @@ class NebiusSession:
                     shell=f"cd {self.app} && {setup}{activate}{sandbox.with_build_tools(shell)}", disposable=False,
                     timeout=TEST_TIMEOUT), what + " (with build tools)", log)
                 text = (out.stdout or "") + (out.stderr or "")
-                if out.exit_code != 0 and (pkgs := sandbox.header_packages(text)):
+                # a build may name one missing library at a time (weblate: lz4, then ICU): up to 4 rounds, each
+                # installing everything found so far, since every retry starts from the uploaded image again
+                installed: list[str] = []
+                for _ in range(4):
+                    pkgs = [p for p in sandbox.header_packages(text) if p not in installed] if out.exit_code != 0 else []
+                    if not pkgs:
+                        break
+                    installed += pkgs
                     log(f"[tests] the build needs more system headers: installing {' '.join(pkgs)}, trying again")
-                    extra = f"{sandbox.APT} install -y -qq --no-install-recommends {' '.join(pkgs)} >/dev/null 2>&1"
+                    extra = f"{sandbox.APT} install -y -qq --no-install-recommends {' '.join(installed)} >/dev/null 2>&1"
                     out = await sandbox.retrying(lambda: img.run(
                         shell=f"cd {self.app} && {setup}{activate}{sandbox.with_build_tools(extra + ' && ' + shell)}",
                         disposable=False, timeout=TEST_TIMEOUT), what + " (with more headers)", log)

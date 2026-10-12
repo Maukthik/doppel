@@ -23,3 +23,10 @@ def test_borgbackup_gets_its_libraries():
 
 def test_unrelated_output_installs_nothing():
     assert header_packages("ERROR: The --python option must be placed before the pip subcommand name") == []
+
+
+ICU = "subprocess.CalledProcessError: Command '('pkg-config', '--modversion', 'icu-i18n')' returned non-zero exit status 1."
+
+
+def test_pyicu_gets_libicu():
+    assert "libicu-dev" in header_packages(ICU)
