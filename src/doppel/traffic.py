@@ -684,11 +684,21 @@ def _clean(path: str) -> str:
     return re.sub(r"\s*\((added|removed)\)$", "", path)
 
 
+def _canon(value):
+    """The same JSON with every list in one fixed order: for responses whose list order varies between runs of
+    the same code (prefect's filter endpoints)."""
+    if isinstance(value, dict):
+        return {k: _canon(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return sorted((_canon(v) for v in value), key=lambda v: json.dumps(v, sort_keys=True, default=str))
+    return value
+
+
 def noise(a: dict, a2: dict) -> dict:
     """S2: what differs between two runs of the same code. {"flaky": tests whose outcome differed,
     "unstable": tests whose requests differed, "paths": {(test, i): noisy paths}, "status": {(test, i)},
-    "keys": leaf names noisy anywhere}."""
-    out = {"flaky": set(), "unstable": set(), "paths": {}, "status": set(), "keys": set()}
+    "keys": leaf names noisy anywhere, "order": {(test, i) whose lists came back in another order}}."""
+    out = {"flaky": set(), "unstable": set(), "paths": {}, "status": set(), "keys": set(), "order": set()}
     for test, ta in a["tests"].items():
         tb = a2["tests"].get(test)
         if tb is None or ta["outcome"] != tb["outcome"]:
@@ -701,6 +711,9 @@ def noise(a: dict, a2: dict) -> dict:
             if ra["status"] != rb["status"]:
                 out["status"].add((test, i))
             paths = changed_paths(ra["body"], rb["body"], limit=10_000)
+            if paths and not changed_paths(_canon(ra["body"]), _canon(rb["body"]), limit=1):
+                out["order"].add((test, i))   # the same items in another order: compare without order
+                continue
             if paths:
                 out["paths"][(test, i)] = {_clean(p) for p in paths}
                 out["keys"] |= {_leaf(p) for p in paths if _leaf(p) and not _leaf(p).isdigit()}
@@ -758,6 +771,8 @@ def compare_worlds(a: dict, b: dict, nz: dict, excluded: set[str]) -> tuple[list
                 continue
             noisy = nz["paths"].get((test, i), set())
             ba, bb = _mask(ra["body"], noisy, nz["keys"]), _mask(rb["body"], noisy, nz["keys"])
+            if (test, i) in nz.get("order", ()):   # its list order varies between runs of the same code
+                ba, bb = _canon(ba), _canon(bb)
             paths = changed_paths(ba, bb, limit=50)
             if paths:
                 from doppel.diff import _at
@@ -823,7 +838,8 @@ def _merge_noise(*parts: dict) -> dict:
     return {"flaky": set().union(*(p["flaky"] for p in parts)),
             "unstable": set().union(*(p["unstable"] for p in parts)),
             "status": set().union(*(p["status"] for p in parts)),
-            "keys": set().union(*(p["keys"] for p in parts)), "paths": paths}
+            "keys": set().union(*(p["keys"] for p in parts)), "paths": paths,
+            "order": set().union(*(p.get("order", set()) for p in parts))}
 
 
 def confirm(session, base: Path, test: str, findings: list[Finding], a: dict, b: dict, nz: dict,
