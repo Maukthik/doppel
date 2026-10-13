@@ -790,9 +790,21 @@ def _key(f: Finding) -> tuple:
     return f.kind, f.persona, f.request, f.detail.replace(" (the base branch's test fails on this)", "")
 
 
+def _merge_noise(*parts: dict) -> dict:
+    """What varied between any two runs of the same code: the union of several noise() results."""
+    paths: dict = {}
+    for p in parts:
+        for k, v in p["paths"].items():
+            paths[k] = paths.get(k, set()) | set(v)
+    return {"flaky": set().union(*(p["flaky"] for p in parts)),
+            "unstable": set().union(*(p["unstable"] for p in parts)),
+            "status": set().union(*(p["status"] for p in parts)),
+            "keys": set().union(*(p["keys"] for p in parts)), "paths": paths}
+
+
 def confirm(session, base: Path, test: str, findings: list[Finding], a: dict, b: dict, nz: dict,
             excluded: set[str], log=lambda m: None) -> tuple[list[Finding], dict]:
-    """S5: run only the tests that showed a difference again, on base and on head, and keep a difference only
+    """S5: run only the tests that showed a difference again, twice on base and on head, and keep a difference only
     if it shows up the same way again. A difference that came from rare nondeterminism the A/A run happened to
     miss does not survive two independent runs."""
     tests = sorted({f.persona for f in findings})
@@ -804,18 +816,19 @@ def confirm(session, base: Path, test: str, findings: list[Finding], a: dict, b:
                else "the test runner can't select single tests")
         log(f"[tests] differences not re-checked: {why}")
         return findings, {"ran": False, "reason": why}
-    log(f"[tests] confirming {len(findings)} difference(s): rerunning {len(tests)} test(s) on base and head")
-    again_a, again_b = (read_world(r) for r in session.run([("base", cmd), ("head", cmd)]))
+    log(f"[tests] confirming {len(findings)} difference(s): rerunning {len(tests)} test(s) twice on base and head")
+    again_a, again_b, again_a2, again_b2 = (read_world(r) for r in session.run(
+        [("base", cmd), ("head", cmd), ("base", cmd), ("head", cmd)]))
     if not again_a["tests"]:
         log("[tests] the confirmation run selected no tests; keeping the differences unconfirmed")
         return findings, {"ran": False, "reason": "the confirmation run selected no tests"}
     # base, base again and the confirmation base together say what varies; then compare the reruns
-    nz2 = noise(a, again_a)
-    merged = {"flaky": nz["flaky"] | nz2["flaky"], "unstable": nz["unstable"] | nz2["unstable"],
-              "status": nz["status"] | nz2["status"], "keys": nz["keys"] | nz2["keys"],
-              "paths": {k: nz["paths"].get(k, set()) | nz2["paths"].get(k, set())
-                        for k in set(nz["paths"]) | set(nz2["paths"])}}
-    seen_again = {_key(f) for f in compare_worlds(again_a, again_b, merged, excluded)[0]}
+    # ...and so does every other pair of runs of the same code, head included (prefect: a list whose order
+    # is not fixed shows up as head vs head too)
+    merged = _merge_noise(nz, noise(a, again_a), noise(again_a, again_a2), noise(b, again_b),
+                          noise(again_b, again_b2))
+    seen_again = ({_key(f) for f in compare_worlds(again_a, again_b, merged, excluded)[0]}
+                  & {_key(f) for f in compare_worlds(again_a2, again_b2, merged, excluded)[0]})   # both rounds
     kept = [f for f in findings if _key(f) in seen_again and f.persona not in merged["flaky"]]
     gone = [f for f in findings if f not in kept]
     if gone:
