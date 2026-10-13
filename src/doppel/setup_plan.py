@@ -590,11 +590,12 @@ def _score(names: str) -> int:
 
 
 # a CI job whose tests check the repo's tooling, not the app (weblate: rundev.yml tests the devcontainer)
-TOOLING_DIRS = re.compile(r"(?:^|[\s=/'\"])\.(?:devcontainer|github|circleci|gitlab|vscode)\b")
+TOOLING_DIRS = re.compile(r"(?:^|[\s=/'\"])\.(?:devcontainer|github|circleci|gitlab|vscode)\b"
+                          r"|(?:^|[\s='\"])(?:\./)?docs?/")   # weblate: docs.yml runs pytest docs/_ext
 
 
 def _tests_tooling(test: str) -> bool:
-    """Does this test command check a devcontainer or CI config rather than the app itself?"""
+    """Does this test command check a devcontainer, CI config or the docs tooling rather than the app?"""
     return bool(TOOLING_DIRS.search(test or ""))
 
 

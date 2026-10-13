@@ -32,3 +32,10 @@ jobs:
 """)
     picked = ci_plan(tmp_path)
     assert picked is None or ".devcontainer" not in picked.test
+
+
+def test_docs_tooling_is_not_the_app():
+    assert _tests_tooling("python -m pytest --no-cov docs/_ext")        # weblate docs.yml
+    assert _tests_tooling("pytest ./doc/conf_test.py")
+    for cmd in ("pytest tests/docs/test_render.py", "pytest weblate/docs_utils", "pytest --docs-check"):
+        assert not _tests_tooling(cmd), cmd
