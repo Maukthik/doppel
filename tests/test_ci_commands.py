@@ -40,3 +40,13 @@ def test_artifacts_built_by_earlier_ci_steps_are_dropped(tmp_path):
     (tmp_path / "wheels" / "x-1.0-py3-none-any.whl").write_text("")
     assert convert_install("pip install wheels/*.whl", tmp_path) == ["pip install --quiet wheels/*.whl"]
     assert convert_install("pip install -e .[dev]", tmp_path) == ["pip install --quiet -e .[dev]"]
+
+
+def test_ci_shell_variables_are_dropped():
+    from doppel.setup_plan import clean_test_command as clean
+    litellm = ("pytest '${pytest_args[@]}' --tb=short -vv '--maxfail=${MAX_FAILURES}' '${xdist_args[@]}' "
+               "--reruns '${RERUNS}' --reruns-delay 1 '--timeout=${TEST_TIMEOUT_SECONDS}' "
+               "--rerun-except 'from pytest-timeout'")
+    assert clean(litellm) == "python -m pytest --tb=short -vv --reruns-delay 1 --rerun-except 'from pytest-timeout'"
+    assert clean("pytest -x $EXTRA tests/") == "python -m pytest -x tests/"     # -x is not waiting for a value
+    assert clean("pytest tests/ -k smoke") == "python -m pytest tests/ -k smoke"

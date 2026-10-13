@@ -90,6 +90,10 @@ def clean_test_command(cmd: str) -> str:
         if skip_next:
             skip_next = False
             continue
+        if SHELL_VAR.match(p):   # the CI script's own variables: `${pytest_args[@]}`, `--maxfail=${MAX}`
+            if not p.lstrip("'\"").startswith("-") and out and _takes_value(out[-1]):
+                out.pop()        # `--reruns ${RERUNS}`: the flag goes with its value
+            continue
         if p in ("--numprocesses", "--dist", "--durations", "--durations-min", "--junitxml", "--junit-xml",
                  "--html", "--cov-report", "--cov-config", "--cov-fail-under") \
                 and i + 1 < len(parts) and not parts[i + 1].startswith("-"):
@@ -109,6 +113,15 @@ def clean_test_command(cmd: str) -> str:
         out.append(p)
     text = " ".join(out)
     return re.sub(r"^pytest\b", "python -m pytest", text)
+
+
+# a word that is only a shell variable (quoted or not), or `--flag=` one: the CI script set it, Doppel can't
+SHELL_VAR = re.compile(r"""^['"]?(--?[\w-]+=)?\$\{?[A-Za-z_]\w*(\[[@*]\])?\}?['"]?$""")
+
+
+def _takes_value(flag: str) -> bool:
+    """Was this word a flag waiting for its value? `--reruns`, `-k`; not `-x` or `--flag=value`."""
+    return (flag.startswith("--") and "=" not in flag) or flag in ("-k", "-m", "-p", "-c", "-n", "-o")
 
 
 def _skip_flags(words: list[str], i: int) -> int:
