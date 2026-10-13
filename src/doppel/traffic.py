@@ -416,6 +416,34 @@ class NebiusSession:
         import shlex
         self.exports += "".join(f"export {k}={shlex.quote(v)}; " for k, v in more.items())
 
+    def add_postgres(self) -> bool:
+        """PostgreSQL for every later job (a repair between tries): installed once into both images, started
+        before each job. False when the install failed (the log says why)."""
+        import asyncio
+
+        from doppel import services
+        setup = services.postgres_setup(self.sandbox.APT, self._activate)
+
+        async def one(img):
+            return await self.sandbox.retrying(lambda: img.run(shell=setup, disposable=False, timeout=TEST_TIMEOUT),
+                                               "installing PostgreSQL", self.log)
+
+        async def go():
+            return await asyncio.gather(one(self.images["base"]), one(self.images["head"]))
+        outs = self.loop.run_until_complete(go())
+        if any(o.exit_code != 0 for o in outs):
+            bad = next(o for o in outs if o.exit_code != 0)
+            self.log("[tests] installing PostgreSQL failed:\n" + ((bad.stdout or "") + (bad.stderr or ""))[-1500:])
+            return False
+        self.images = {**self.images, "base": outs[0], "head": outs[1]}
+        self.exports += services.postgres_start()
+        return True
+
+    def add_postgres_names(self, names: list[str]) -> None:
+        """Roles/databases the tests' connection asked for, created before every later job."""
+        from doppel import services
+        self.exports += services.postgres_create(names)
+
     def close(self) -> None:
         self.loop.close()
 
@@ -900,19 +928,25 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
             log(f"[tests] {len(test_files(code, test))} test files: split across {len(plan)} sandboxes per world")
         log(f"[tests] running `{test}` in 3 worlds (base, base again, head)")
         k = len(plan)
+        from doppel import services as _services
+        pg = {"tried": False, "on": False, "names": set()}   # PostgreSQL repairs so far
         installed: list[str] = []
-        for attempt in range(3):
+        for attempt in range(5):   # repairs: env, libraries, PostgreSQL, roles
             runs = session.run([(code, cmd) for code in ("base", "base", "head") for cmd in plan])
             worlds = {w: read_world(merge(runs[i * k:(i + 1) * k])) for i, w in enumerate(WORLDS)}
             a, a2, b = worlds["A"], worlds["A2"], worlds["B"]
             passed, failed = _passed_or_failed(a)
-            if passed or attempt == 2:
+            if passed or attempt == 4:
                 break
             wanted = placeholder_settings(a["output"], extra_env) if hasattr(session, "add_env") else {}
             from doppel import sandbox as _sb
             libs = [x for x in _sb.runtime_packages(a["output"]) if x not in installed] \
                 if hasattr(session, "add_system") else []
-            if not wanted and not libs:
+            pg_install = not pg["tried"] and hasattr(session, "add_postgres") \
+                and _services.postgres_needed(a["output"])
+            pg_names = [n for n in _services.missing_names(a["output"]) if n not in pg["names"]] \
+                if pg["on"] else []
+            if not wanted and not libs and not pg_install and not pg_names:
                 break
             if wanted:
                 log(f"[tests] the tests need {', '.join(wanted)} set: using placeholder values, running again")
@@ -922,6 +956,14 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
                 log(f"[tests] the tests need system packages: installing {' '.join(libs)}, running again")
                 installed += libs
                 session.add_system(libs)
+            if pg_install:
+                log("[tests] the tests need PostgreSQL: installing and starting it in every sandbox, running again")
+                pg["tried"] = True
+                pg["on"] = session.add_postgres()
+            if pg_names:
+                log(f"[tests] PostgreSQL has no {', '.join(pg_names)}: creating it, running again")
+                pg["names"].update(pg_names)
+                session.add_postgres_names(pg_names)
         # S1: the base has to have run
         if passed + failed == 0:
             raise NotComparable(f"the test command ran no test on the unchanged code (exit {a['exit']}).{unmet} "
