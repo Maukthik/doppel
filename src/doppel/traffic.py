@@ -433,6 +433,7 @@ class NebiusSession:
         outs = self.loop.run_until_complete(go())
         if any(o.exit_code != 0 for o in outs):
             bad = next(o for o in outs if o.exit_code != 0)
+            self.pg_failure = (bad.stdout or "") + (bad.stderr or "")
             self.log("[tests] installing PostgreSQL failed:\n" + ((bad.stdout or "") + (bad.stderr or ""))[-1500:])
             return False
         self.images = {**self.images, "base": outs[0], "head": outs[1]}
@@ -960,6 +961,11 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
                 log("[tests] the tests need PostgreSQL: installing and starting it in every sandbox, running again")
                 pg["tried"] = True
                 pg["on"] = session.add_postgres()
+                if not pg["on"]:   # e.g. Nebius sandboxes: no System V shared memory
+                    why = getattr(session, "pg_failure", "")
+                    unmet = (" The tests need PostgreSQL, which can't run in this sandbox"
+                             + (" (no System V shared memory: shmget is not implemented)" if "shmget" in why else "")
+                             + ". Run them where PostgreSQL can start, such as the local backend.")
             if pg_names:
                 log(f"[tests] PostgreSQL has no {', '.join(pg_names)}: creating it, running again")
                 pg["names"].update(pg_names)

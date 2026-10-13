@@ -119,6 +119,7 @@ SET_TITLES = {"dev": "Ten real Python web apps, never seen before",
 
 # What a stopped run's reason says, in words a reader can act on
 CATEGORIES = [
+    ("needs PostgreSQL (the sandbox can't run it)", ("PostgreSQL, which can't run in this sandbox",)),   # checked first
     ("install", ("install command failed", "No matching distribution", "Failed building wheel")),
     ("missing dependency", ("ModuleNotFoundError", "No module named")),   # before services: "No module named 'redis'"
     ("needs a service", ("fail on the unchanged code", "Connection refused", "could not connect", "OperationalError",
