@@ -586,7 +586,16 @@ def _scan_job(job: dict, wf_env: dict, repo: Path) -> SetupPlan | None:
 
 def _score(names: str) -> int:
     low = names.lower()
-    return 3 * ("test" in low) - 8 * sum(w in low for w in SKIP_WORDS) - ("coverage" in low)
+    return 3 * ("test" in low) - 8 * sum(w in low for w in SKIP_WORDS) - ("coverage" in low) - 4 * ("smoke" in low)
+
+
+# a CI job whose tests check the repo's tooling, not the app (weblate: rundev.yml tests the devcontainer)
+TOOLING_DIRS = re.compile(r"(?:^|[\s=/'\"])\.(?:devcontainer|github|circleci|gitlab|vscode)\b")
+
+
+def _tests_tooling(test: str) -> bool:
+    """Does this test command check a devcontainer or CI config rather than the app itself?"""
+    return bool(TOOLING_DIRS.search(test or ""))
 
 
 def _jobs_of(job: dict, folder: Path, yaml) -> list[tuple[str, dict]]:
@@ -648,6 +657,8 @@ def ci_plan(repo: Path) -> SetupPlan | None:
             for where, called in _jobs_of(job, folder, yaml):
                 plan = _scan_job(called, doc.get("env") or {}, repo)
                 if plan is None:
+                    continue
+                if _tests_tooling(plan.test):   # a devcontainer or CI check, not the app's tests
                     continue
                 score = 10 + _score(names + " " + where)
                 plan.source = {"test": f"CI workflow ({f.name}, job {job_id}{where and ' -> ' + where})"}
