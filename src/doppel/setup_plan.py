@@ -418,6 +418,20 @@ def _install_args(words: list[str]) -> list[str]:
     return out
 
 
+def _missing_artifact(arg: str, repo: Path) -> bool:
+    """Is this install argument a file an earlier CI step builds, absent here? A wheel or archive, or a glob,
+    that matches nothing in the repo (litellm: `rust-bridge-dist/*.whl`). Extras like `.[dev]` are not globs."""
+    if arg.startswith("-") or "://" in arg or re.fullmatch(r"[\w.-]*\[[\w,.-]+\]", arg):
+        return False
+    looks_built = arg.endswith((".whl", ".tar.gz", ".zip")) or "*" in arg or "?" in arg
+    if not looks_built:
+        return False
+    try:
+        return not any(Path(repo).glob(arg.removeprefix("./")))
+    except (ValueError, NotImplementedError, OSError):
+        return False
+
+
 def convert_install(segment: str, repo: Path) -> list[str] | None:
     """A CI install line as install steps for the sandbox, [] for a tools-only install, None if it isn't one."""
     seg = re.sub(r"^\s*sudo\s+(-H\s+)?", "", segment).strip()
@@ -439,6 +453,9 @@ def convert_install(segment: str, repo: Path) -> list[str] | None:
         return None
     after = words.index("install") + 1 if "install" in words else len(words)
     args = _install_args(words[after:])
+    args = [a for a in args if not _missing_artifact(a, repo)]   # built by an earlier CI step (litellm)
+    if args and all(a.startswith("-") for a in args):
+        return []
     names = [re.split(r"[<>=!~\[;@ ]", a, maxsplit=1)[0].lower() for a in args if not a.startswith("-")]
     flags_with_files = any(a in ("-r", "-e", "-c", "--requirement", "--editable") or a.startswith(("-r", "-e"))
                            for a in args)
@@ -446,7 +463,7 @@ def convert_install(segment: str, repo: Path) -> list[str] | None:
         return []
     if not args:
         return []
-    shell_special = re.compile(r"[\s<>|&;()$`'\"\\*?]")    # `pydantic>=2.4,<3` is not two redirections
+    shell_special = re.compile(r"[\s<>|&;()$`'\"\\]")    # `pydantic>=2.4,<3` is not two redirections
     return ["pip install --quiet " + " ".join(shlex.quote(a) if shell_special.search(a) else a for a in args)]
 
 

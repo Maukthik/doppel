@@ -31,3 +31,12 @@ def test_uv_pip_install_drops_the_ci_python(tmp_path):
 def test_version_ranges_are_quoted(tmp_path):
     (step,) = convert_install("pip install --upgrade -e .[dev] pydantic>=2.4,<3", tmp_path)
     assert "'pydantic>=2.4,<3'" in step
+
+
+def test_artifacts_built_by_earlier_ci_steps_are_dropped(tmp_path):
+    assert convert_install("pip install rust-bridge-dist/*.whl", tmp_path) == []          # litellm
+    assert convert_install("pip install --no-deps dist/*.whl", tmp_path) == []
+    (tmp_path / "wheels").mkdir()
+    (tmp_path / "wheels" / "x-1.0-py3-none-any.whl").write_text("")
+    assert convert_install("pip install wheels/*.whl", tmp_path) == ["pip install --quiet wheels/*.whl"]
+    assert convert_install("pip install -e .[dev]", tmp_path) == ["pip install --quiet -e .[dev]"]
