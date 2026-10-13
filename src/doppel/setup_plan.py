@@ -604,6 +604,25 @@ def _tests_tooling(test: str) -> bool:
     return bool(TOOLING_DIRS.search(test or ""))
 
 
+def _unfetched_submodule(repo: Path, workdir: str) -> bool:
+    """Is the CI job's folder a git submodule this clone doesn't have? (prefect: compat-tests/, empty in a plain
+    clone.) A folder that is missing altogether is left alone: it can be a path inside the job's container
+    (changedetection: `docker run IMG bash -c 'cd app; pytest'`)."""
+    folder = repo / workdir
+    try:
+        has_files = folder.is_dir() and any(folder.iterdir())
+    except OSError:
+        has_files = False
+    if has_files:
+        return False
+    try:
+        modules = (repo / ".gitmodules").read_text("utf-8", errors="replace")
+    except OSError:
+        modules = ""
+    listed = re.search(rf"(?m)^\s*path\s*=\s*{re.escape(workdir.strip('/'))}\s*$", modules) is not None
+    return folder.is_dir() or listed
+
+
 def _jobs_of(job: dict, folder: Path, yaml) -> list[tuple[str, dict]]:
     """A job as is, or for `uses: ./.github/workflows/x.yml` the called workflow's jobs, its ${{ inputs.* }}
     filled from the caller's `with:` (or the input's default)."""
@@ -665,6 +684,8 @@ def ci_plan(repo: Path) -> SetupPlan | None:
                 if plan is None:
                     continue
                 if _tests_tooling(plan.test):   # a devcontainer or CI check, not the app's tests
+                    continue
+                if plan.workdir and _unfetched_submodule(repo, plan.workdir):   # e.g. a submodule not checked out
                     continue
                 score = 10 + _score(names + " " + where)
                 plan.source = {"test": f"CI workflow ({f.name}, job {job_id}{where and ' -> ' + where})"}

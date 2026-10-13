@@ -39,3 +39,36 @@ def test_docs_tooling_is_not_the_app():
     assert _tests_tooling("pytest ./doc/conf_test.py")
     for cmd in ("pytest tests/docs/test_render.py", "pytest weblate/docs_utils", "pytest --docs-check"):
         assert not _tests_tooling(cmd), cmd
+
+
+def test_only_unfetched_submodules_are_skipped(tmp_path):
+    from doppel.setup_plan import _unfetched_submodule
+    (tmp_path / "compat-tests").mkdir()                       # how git leaves an unfetched submodule
+    (tmp_path / "full").mkdir()
+    (tmp_path / "full" / "test_x.py").write_text("")
+    (tmp_path / ".gitmodules").write_text('[submodule "vendored"]\n\tpath = vendored\n\turl = x\n')
+    assert _unfetched_submodule(tmp_path, "compat-tests")
+    assert _unfetched_submodule(tmp_path, "vendored")          # listed, not there
+    assert not _unfetched_submodule(tmp_path, "full")
+    assert not _unfetched_submodule(tmp_path, "app")           # a path inside the job's container
+
+
+def test_ci_plan_skips_a_job_in_an_empty_submodule(tmp_path):
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (tmp_path / "compat-tests").mkdir()          # the submodule, not checked out
+    (wf / "api-compatibility-tests.yaml").write_text("""name: API compatibility
+on: push
+jobs:
+  compatibility-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: compat-tests
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install pytest
+      - run: python -m pytest -vv
+""")
+    picked = ci_plan(tmp_path)
+    assert picked is None or picked.workdir != "compat-tests"
