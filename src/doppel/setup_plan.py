@@ -84,11 +84,16 @@ def apt_step(packages: list[str]) -> str:
 def clean_test_command(cmd: str) -> str:
     """The project's test command, minus what would make worlds differ or slow them for nothing: coverage,
     parallel workers (their split order varies), reports written to files."""
-    parts = cmd.strip().split()
+    parts = re.sub(r"\$\{\{.*?\}\}", " ", cmd).strip().split()   # what the planner couldn't fill: never pytest args
     out, skip_next = [], False
     for i, p in enumerate(parts):
         if skip_next:
             skip_next = False
+            continue
+        if p in ("--numprocesses", "--dist", "--durations", "--durations-min", "--junitxml", "--junit-xml",
+                 "--html", "--cov-report", "--cov-config", "--cov-fail-under") \
+                and i + 1 < len(parts) and not parts[i + 1].startswith("-"):
+            skip_next = True    # `--dist worksteal`, `--durations 26`: the value goes too (prefect)
             continue
         if p.startswith(("--cov", "--junitxml", "--html", "--numprocesses", "--dist", "--durations", "--parallel=")):
             continue
@@ -396,6 +401,23 @@ def _uv_sync(words: list[str], repo: Path) -> list[str]:
     return project_install(repo, groups or None, extras or None, all_g, all_e)
 
 
+def _install_args(words: list[str]) -> list[str]:
+    """An install line's arguments without what only fits the CI machine: --user, --system,
+    --break-system-packages, and uv's --python/-p (the sandbox chooses the interpreter: litellm)."""
+    out, skip = [], False
+    for w in words:
+        if skip:
+            skip = False
+            continue
+        if w in ("--python", "-p"):
+            skip = True
+            continue
+        if w in ("--user", "--system", "--break-system-packages") or w.startswith("--python="):
+            continue
+        out.append(w)
+    return out
+
+
 def convert_install(segment: str, repo: Path) -> list[str] | None:
     """A CI install line as install steps for the sandbox, [] for a tools-only install, None if it isn't one."""
     seg = re.sub(r"^\s*sudo\s+(-H\s+)?", "", segment).strip()
@@ -416,7 +438,7 @@ def convert_install(segment: str, repo: Path) -> list[str] | None:
     if not m:
         return None
     after = words.index("install") + 1 if "install" in words else len(words)
-    args = [w for w in words[after:] if w not in ("--user", "--system", "--break-system-packages")]
+    args = _install_args(words[after:])
     names = [re.split(r"[<>=!~\[;@ ]", a, maxsplit=1)[0].lower() for a in args if not a.startswith("-")]
     flags_with_files = any(a in ("-r", "-e", "-c", "--requirement", "--editable") or a.startswith(("-r", "-e"))
                            for a in args)
@@ -424,16 +446,34 @@ def convert_install(segment: str, repo: Path) -> list[str] | None:
         return []
     if not args:
         return []
-    return ["pip install --quiet " + " ".join(shlex.quote(a) if " " in a else a for a in args)]
+    shell_special = re.compile(r"[\s<>|&;()$`'\"\\*?]")    # `pydantic>=2.4,<3` is not two redirections
+    return ["pip install --quiet " + " ".join(shlex.quote(a) if shell_special.search(a) else a for a in args)]
 
 
 # ---------------------------------------------------------------- the CI job that runs the tests
 
+def _matrix_value(matrix: dict, path: str):
+    """`test-type.modules` in a chosen matrix: a plain key, or a field of an entry that is itself a mapping
+    (prefect: test-type is a list of {name, modules}). None when there is no plain value to put in."""
+    if path in matrix:
+        value = matrix[path]
+    else:
+        head, _, rest = path.partition(".")
+        value = matrix.get(head)
+        while rest and isinstance(value, dict):
+            key, _, rest = rest.partition(".")
+            value = value.get(key)
+        if rest:
+            return None
+    return None if value is None or isinstance(value, (dict, list)) else value
+
+
 def _sub(text: str, matrix: dict, env: dict) -> str:
     def one(m):
         expr = m.group(1).strip()
-        if expr.startswith("matrix.") and expr[7:] in matrix:
-            return str(matrix[expr[7:]])
+        value = _matrix_value(matrix, expr[7:]) if expr.startswith("matrix.") else None
+        if value is not None:
+            return str(value)
         if expr.startswith("env.") and expr[4:] in env:
             return str(env[expr[4:]])
         return m.group(0)
