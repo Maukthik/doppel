@@ -591,7 +591,8 @@ def _scan_job(job: dict, wf_env: dict, repo: Path) -> SetupPlan | None:
 
 def _score(names: str) -> int:
     low = names.lower()
-    return 3 * ("test" in low) - 8 * sum(w in low for w in SKIP_WORDS) - ("coverage" in low) - 4 * ("smoke" in low)
+    return (3 * ("test" in low) - 8 * sum(w in low for w in SKIP_WORDS) - ("coverage" in low)
+            - 4 * ("smoke" in low) - 4 * ("integration" in low))
 
 
 # a CI job whose tests check the repo's tooling, not the app (weblate: rundev.yml tests the devcontainer)
@@ -687,7 +688,8 @@ def ci_plan(repo: Path) -> SetupPlan | None:
                     continue
                 if plan.workdir and _unfetched_submodule(repo, plan.workdir):   # e.g. a submodule not checked out
                     continue
-                score = 10 + _score(names + " " + where)
+                score = 10 + _score(names + " " + where) - 2 * bool(plan.workdir) \
+                    - 4 * ("integration" in plan.test)   # prefect: a sub-package's integration job
                 plan.source = {"test": f"CI workflow ({f.name}, job {job_id}{where and ' -> ' + where})"}
                 if best is None or score > best[0]:
                     best = (score, plan)

@@ -72,3 +72,9 @@ jobs:
 """)
     picked = ci_plan(tmp_path)
     assert picked is None or picked.workdir != "compat-tests"
+
+
+def test_integration_jobs_rank_below_the_main_suite():
+    main = _score("python-tests Python tests run-tests")
+    integration = _score("integration-package-tests Integration run-prefect-dbt-integration-tests")
+    assert integration < main
