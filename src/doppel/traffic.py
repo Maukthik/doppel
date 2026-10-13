@@ -497,16 +497,40 @@ def test_files(repo: Path, cmd: str) -> list[str]:
     except ValueError:
         return []
     after = words[words.index("pytest") + 1:] if "pytest" in words else []
-    roots = [w for w in after if not w.startswith("-") and (repo / w.split("::")[0]).exists()]
+    ignored = [w.split("=", 1)[1] for w in after if w.startswith("--ignore=")] + \
+        [after[i + 1] for i, w in enumerate(after[:-1]) if w == "--ignore"]
+    ignored = [x.removeprefix("./").rstrip("/") for x in ignored if x]
+    roots = [w for i, w in enumerate(after) if not w.startswith("-") and (repo / w.split("::")[0]).exists()
+             and not (i and after[i - 1] in VALUE_OPTIONS)]
     out = set()
     for root in roots or ["."]:
         start = repo / root
         files = [start] if start.is_file() else [*start.rglob("test_*.py"), *start.rglob("*_test.py")]
         for f in files:
             rel = f.relative_to(repo)
-            if not {".venv", "venv", "node_modules", ".tox", "site-packages", ".git"} & set(rel.parts):
+            if not {".venv", "venv", "node_modules", ".tox", "site-packages", ".git"} & set(rel.parts) and \
+                    not any(rel.as_posix() == x or rel.as_posix().startswith(x + "/") for x in ignored):
                 out.add(rel.as_posix())
     return sorted(out)
+
+
+def broken_conftests(output: str, code: Path) -> list[str]:
+    """Folders whose conftest.py could not be imported, relative to where the tests run: a dependency the
+    sandbox lacks, or two conftests with one module name. pytest stops the whole run at the first of them
+    (litellm: tests/e2e/llm_translation needs websockets; langflow: src/langflow-stepflow/tests)."""
+    import re
+    from pathlib import PurePosixPath
+    out: list[str] = []
+    for path in re.findall(r"ImportError while loading conftest '([^']+)'", output or ""):
+        parts = PurePosixPath(path.replace("\\", "/")).parts
+        for i in range(1, len(parts)):              # the sandbox's /app/... or a local path: find it in the code
+            rel = PurePosixPath(*parts[i:])
+            if (Path(code) / rel).is_file():
+                folder = rel.parent.as_posix()
+                if folder not in (".", "") and folder not in out:
+                    out.append(folder)
+                break
+    return out
 
 
 def shards(repo: Path, cmd: str) -> list[str]:
@@ -944,6 +968,7 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
         k = len(plan)
         from doppel import services as _services
         pg = {"tried": False, "on": False, "names": set()}   # PostgreSQL repairs so far
+        ignored: list[str] = []   # folders left out: their conftest.py could not be imported
         installed: list[str] = []
         for attempt in range(5):   # repairs: env, libraries, PostgreSQL, roles
             runs = session.run([(code, cmd) for code in ("base", "base", "head") for cmd in plan])
@@ -960,7 +985,8 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
                 and _services.postgres_needed(a["output"])
             pg_names = [n for n in _services.missing_names(a["output"]) if n not in pg["names"]] \
                 if pg["on"] else []
-            if not wanted and not libs and not pg_install and not pg_names:
+            broken = [d for d in broken_conftests(a["output"], code) if d not in ignored]
+            if not wanted and not libs and not pg_install and not pg_names and not broken:
                 break
             if wanted:
                 log(f"[tests] the tests need {', '.join(wanted)} set: using placeholder values, running again")
@@ -983,6 +1009,13 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
                 log(f"[tests] PostgreSQL has no {', '.join(pg_names)}: creating it, running again")
                 pg["names"].update(pg_names)
                 session.add_postgres_names(pg_names)
+            if broken:
+                log(f"[tests] collection stopped at a conftest.py that can't be imported: leaving out "
+                    f"{', '.join(broken)}, running again")
+                ignored += broken
+                test = test + " " + " ".join(f"--ignore={d}" for d in broken)
+                plan = shards(code, test)
+                k = len(plan)
         # S1: the base has to have run
         if passed + failed == 0:
             raise NotComparable(f"the test command ran no test on the unchanged code (exit {a['exit']}).{unmet} "
@@ -1006,6 +1039,7 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
         # S5: a difference counts only if it happens again
         findings, confirmed = confirm(session, code, test, findings, a, b, nz, failing_on_base, log)
         stats["confirmation"] = confirmed
+        stats["left_out_folders"] = ignored
     finally:
         session.close()
     stats.update(passed=passed, failing_on_base=len(failing_on_base), flaky=len(nz["flaky"]),
