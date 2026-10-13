@@ -281,6 +281,11 @@ def installable(repo: Path) -> bool:
 SELF_INSTALL_NOTE = ("echo '[doppel] the project itself did not install as a package; its dependencies did, "
                      "and its tests run from its folder'")
 
+# when the project won't install as a package, its tests can still import it: its source on sys.path (fava)
+SRC_ON_PATH = ('python -c "import os, site; d = os.path.abspath(\'src\' if os.path.isdir(\'src\') else \'.\'); '
+               'open(os.path.join(site.getsitepackages()[0], \'doppel-src.pth\'), \'w\').write(d + chr(10))"')
+SELF_INSTALL_NOTE = f"({SRC_ON_PATH}; {SELF_INSTALL_NOTE})"
+
 
 def project_install(repo: Path, groups: list[str] | None = None, extras: list[str] | None = None,
                     all_groups: bool = False, all_extras: bool = False) -> list[str]:

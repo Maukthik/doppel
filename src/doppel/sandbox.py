@@ -141,7 +141,32 @@ def install_shell(install: str, repo: str | Path) -> str:
     """The install command, with git provided first when the dependencies need it."""
     if not install:
         return ""
-    return f"{GIT} && {install}" if needs_git(repo, install) else install
+    shell = f"{GIT} && {install}" if needs_git(repo, install) else install
+    return scm_version_env(repo) + shell
+
+SCM_BACKENDS = re.compile(r"setuptools[_-]scm|hatch[_-]vcs|setuptools-git-versioning", re.I)
+
+
+def scm_version_env(repo: str | Path) -> str:
+    """`export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_<NAME>=0.0.0; ` when the project takes its version from git:
+    the sandbox gets the code without .git, so setuptools_scm / hatch-vcs would fail (fava). Only for the
+    project itself: its dependencies built from git keep their real versions."""
+    root = Path(repo)
+    text = ""
+    for name in ("pyproject.toml", "setup.cfg", "setup.py"):
+        try:
+            text += (root / name).read_text("utf-8", errors="replace")
+        except OSError:
+            continue
+    if not SCM_BACKENDS.search(text):
+        return ""
+    m = re.search(r'(?m)^\[project\][^\[]*?^name\s*=\s*["\']([^"\']+)', text) or \
+        re.search(r'(?m)^name\s*=\s*([\w.-]+)\s*$', text) or \
+        re.search(r'name\s*=\s*["\']([\w.-]+)["\']', text)
+    if not m:
+        return ""
+    dist = re.sub(r"[^A-Za-z0-9]+", "_", m.group(1)).upper()
+    return f"export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_{dist}=0.0.0; "
 
 
 # a shared library or program the tests could not find at run time -> the Debian package (GitHub's runners have
