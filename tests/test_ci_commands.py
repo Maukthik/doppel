@@ -1,4 +1,5 @@
-from doppel.setup_plan import clean_test_command as clean, _sub, convert_install
+from doppel.setup_plan import _sub, convert_install
+from doppel.setup_plan import clean_test_command as clean
 
 PREFECT = ("pytest ${{ matrix.test-type.modules }} -m 'not windows' --numprocesses auto --dist worksteal "
            "--disable-docker-image-builds --durations 26")

@@ -1,7 +1,3 @@
-import os
-import subprocess
-import sys
-
 from doppel.sandbox import install_shell, scm_version_env
 from doppel.setup_plan import SELF_INSTALL_NOTE, SRC_ON_PATH
 

@@ -204,7 +204,7 @@ LIBRARY_MISS = re.compile(r"fatal error: ([\w./+-]+\.h): No such file"
                           r"|Package '?([\w.+-]+?)'? was not found in the pkg-config search path"
                           r"|([\w.+-]+)\.pc\b"
                           r"|Could not find ([\w.+-]+) lib"
-                          r"|pkg-config'?(?:[,\s]+'?--[\w-]+'?)+[,\s]+'?([\w.+-]+)"   # ('pkg-config', '--modversion', 'icu-i18n')
+                          r"|pkg-config'?(?:[,\s]+'?--[\w-]+'?)+[,\s]+'?([\w.+-]+)"   # e.g. icu-i18n via pkg-config
                           r"|BORG_LIB\w*")
 
 

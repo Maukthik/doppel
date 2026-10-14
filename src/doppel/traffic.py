@@ -345,13 +345,15 @@ class NebiusSession:
                 # installing everything found so far, since every retry starts from the uploaded image again
                 installed: list[str] = []
                 for _ in range(4):
-                    pkgs = [p for p in sandbox.header_packages(text) if p not in installed] if out.exit_code != 0 else []
+                    pkgs = [] if out.exit_code == 0 else [
+                        p for p in sandbox.header_packages(text) if p not in installed]
                     if not pkgs:
                         break
                     installed += pkgs
                     log(f"[tests] the build needs more system headers: installing {' '.join(pkgs)}, trying again")
-                    extra = f"{sandbox.APT} install -y -qq --no-install-recommends {' '.join(installed)} >/dev/null 2>&1"
-                    out = await sandbox.retrying(lambda: img.run(
+                    extra = (f"{sandbox.APT} install -y -qq --no-install-recommends "
+                             f"{' '.join(installed)} >/dev/null 2>&1")
+                    out = await sandbox.retrying(lambda extra=extra: img.run(
                         shell=f"cd {self.app} && {setup}{activate}{sandbox.with_build_tools(extra + ' && ' + shell)}",
                         disposable=False, timeout=TEST_TIMEOUT), what + " (with more headers)", log)
                     text = (out.stdout or "") + (out.stderr or "")

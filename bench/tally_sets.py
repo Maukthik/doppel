@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+
 prs = json.loads(Path("bench/microblog/prs/index.json").read_text())
 for name in ("main", "heldout", "consequence"):
     rows = [p for p in prs if p.get("set", "main") == name]
