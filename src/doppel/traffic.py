@@ -743,7 +743,7 @@ def _mask(value, paths: set[str], keys: set[str], prefix: str = ""):
 def compare_worlds(a: dict, b: dict, nz: dict, excluded: set[str]) -> tuple[list[Finding], dict]:
     """Findings between base (a) and head (b), with noise and excluded tests left out."""
     findings: list[Finding] = []
-    stats = {"tests": 0, "requests": 0, "new_tests": 0, "removed_tests": 0}
+    stats = {"tests": 0, "requests": 0, "new_tests": 0, "removed_tests": 0, "order_only": 0}
     for test, ta in sorted(a["tests"].items()):
         if test in excluded or test in nz["flaky"]:
             continue
@@ -782,6 +782,13 @@ def compare_worlds(a: dict, b: dict, nz: dict, excluded: set[str]) -> tuple[list
             if (test, i) in nz.get("order", ()):   # its list order varies between runs of the same code
                 ba, bb = _canon(ba), _canon(bb)
             paths = changed_paths(ba, bb, limit=50)
+            if paths and ta["outcome"] == tb["outcome"] == "passed" \
+                    and not changed_paths(_canon(ba), _canon(bb), limit=1):
+                # the same items in another order, and the test that asked passed on both: a tie in the sort
+                # order (prefect's filter endpoints), not a change the test or a user can rely on. Counted in
+                # the report, not flagged. A reordering a test notices still is (it fails on head: h02).
+                stats["order_only"] += 1
+                continue
             if paths:
                 from doppel.diff import _at
                 shown = [_clean(p) for p in paths[:4]]
@@ -1106,7 +1113,10 @@ def report(result: dict, judged: dict | None = None) -> str:
              + (f"Ignored as noise (they differ between two runs of the same code): "
                 f"{', '.join(f'`{k}`' for k in result['noise_keys'][:12])}. " if result["noise_keys"] else "")
              + (f"{st['new_tests']} test(s) the PR adds have no baseline and are not compared. " if st["new_tests"]
-                else "") + _confirmation_line(st.get("confirmation") or {}) + "</sub>"]
+                else "")
+             + (f"{st['order_only']} response(s) had the same items in another order while their tests passed on "
+                "both: counted, not flagged. " if st.get("order_only") else "")
+             + _confirmation_line(st.get("confirmation") or {}) + "</sub>"]
     return "\n".join(lines) + "\n"
 
 
