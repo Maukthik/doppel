@@ -1,0 +1,59 @@
+# Real fixes (bench/real_fixes.py) on a GitHub runner: each fix in fava, isso, privacyidea and prefect becomes the PR
+# that brings its bug back, and Doppel's test mode runs it on Nebius with the Nemotron judge.
+# Start it from the Actions tab (Run workflow). Needs the repository secrets NEBIUS_API_KEY and NEBIUS_PROJECT_ID.
+name: bench-fixes
+
+on:
+  workflow_dispatch:
+    inputs:
+      fixes:
+        description: "fix ids or app names, space-separated (empty: all 14)"
+        default: ""
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Doppel
+        run: pip install --quiet -e ".[nebius,dev]"
+      - name: Run the fixes
+        env:
+          NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
+          NEBIUS_PROJECT_ID: ${{ secrets.NEBIUS_PROJECT_ID }}
+          FIXES: ${{ inputs.fixes }}
+        run: |
+          NEBIUS_API_KEY="$(printf '%s' "$NEBIUS_API_KEY" | tr -d '[:space:]')"
+          NEBIUS_PROJECT_ID="$(printf '%s' "$NEBIUS_PROJECT_ID" | tr -d '[:space:]')"
+          export NEBIUS_API_KEY NEBIUS_PROJECT_ID
+          if [ -z "$NEBIUS_API_KEY" ] || [ -z "$NEBIUS_PROJECT_ID" ]; then
+            echo "::error::set the repository secrets NEBIUS_API_KEY and NEBIUS_PROJECT_ID"; exit 2
+          fi
+          mkdir -p bench/screen-logs
+          # shellcheck disable=SC2086 - FIXES is a space-separated list on purpose
+          python bench/real_fixes.py run --backend nebius --force $FIXES 2>&1 | tee bench/screen-logs/fixes.log
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Real fixes"
+            echo '```'
+            grep -E '^\[fixes\] .* -> ' bench/screen-logs/fixes.log || echo "no results"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-fixes
+          path: |
+            bench/results/fixes/
+            bench/screen-logs/fixes.log
