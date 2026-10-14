@@ -251,7 +251,8 @@ def arm_review(base: Path, head: Path, pr: dict) -> dict:
 
 # ---------------------------------------------------------------- main
 
-def arm_testmode(base: Path, head: Path, pr: dict, backend: str, use_judge: bool = True) -> dict:
+def arm_testmode(base: Path, head: Path, pr: dict, backend: str, use_judge: bool = True,
+                 python: str = "") -> dict:
     """Test mode (doppel tests): the app's own suite in base, base again and head; every response compared.
     A finding is on target when its request matches the PR's expected route, or when a test's outcome
     changed (the suite itself noticed). "caught_by_traffic" counts only response differences: the part the
@@ -260,7 +261,7 @@ def arm_testmode(base: Path, head: Path, pr: dict, backend: str, use_judge: bool
     from doppel.personas import code_diff
     from doppel.traffic import check
     t0 = time.perf_counter()
-    r = check(base, head, backend=backend)
+    r = check(base, head, backend=backend, python=python)   # locally: the venv with the app's requirements
     findings = r["findings"]
     t1 = time.perf_counter()
     if findings and use_judge:
@@ -385,7 +386,7 @@ def main(argv=None) -> int:
                 elif arm == "review":
                     result[key] = arm_review(base, head, pr)
                 elif arm == "testmode":
-                    result[key] = arm_testmode(base, head, pr, a.backend, not a.no_judge)
+                    result[key] = arm_testmode(base, head, pr, a.backend, not a.no_judge, a.app_python)
                 elif arm == "check":
                     result[key] = arm_check(base, head, pr, a.backend, not a.no_judge)
             except Exception as e:  # noqa: BLE001 - record and keep going; rerun picks it up
