@@ -413,6 +413,12 @@ class NebiusSession:
         self.exports += (f"({apt} update -qq >/dev/null 2>&1; {apt} install -y -qq --no-install-recommends "
                          f"{' '.join(packages)} >/dev/null 2>&1); ")
 
+    def add_pip(self, packages: list[str]) -> None:
+        """Python packages every later job installs before its tests (a repair between tries)."""
+        import shlex
+        wanted = " ".join(shlex.quote(p) for p in packages)
+        self.exports += f"(python -m pip install --quiet {wanted} >/dev/null 2>&1); "
+
     def add_env(self, more: dict) -> None:
         """More settings for every later job (a repair between tries)."""
         import shlex
@@ -999,12 +1005,14 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
             from doppel import sandbox as _sb
             libs = [x for x in _sb.runtime_packages(a["output"]) if x not in installed] \
                 if hasattr(session, "add_system") else []
+            pips = [x for x in _sb.runtime_pip(a["output"]) if x not in installed] \
+                if hasattr(session, "add_pip") else []
             pg_install = not pg["tried"] and hasattr(session, "add_postgres") \
                 and _services.postgres_needed(a["output"])
             pg_names = [n for n in _services.missing_names(a["output"]) if n not in pg["names"]] \
                 if pg["on"] else []
             broken = [d for d in broken_conftests(a["output"], code) if d not in ignored]
-            if not wanted and not libs and not pg_install and not pg_names and not broken:
+            if not wanted and not libs and not pips and not pg_install and not pg_names and not broken:
                 break
             if wanted:
                 log(f"[tests] the tests need {', '.join(wanted)} set: using placeholder values, running again")
@@ -1014,6 +1022,10 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
                 log(f"[tests] the tests need system packages: installing {' '.join(libs)}, running again")
                 installed += libs
                 session.add_system(libs)
+            if pips:
+                log(f"[tests] the tests import a module nothing installed: installing {' '.join(pips)}, running again")
+                installed += pips
+                session.add_pip(pips)
             if pg_install:
                 log("[tests] the tests need PostgreSQL: installing and starting it in every sandbox, running again")
                 pg["tried"] = True

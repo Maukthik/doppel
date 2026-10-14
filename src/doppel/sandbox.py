@@ -173,7 +173,8 @@ def scm_version_env(repo: str | Path) -> str:
 # many of these preinstalled; a slim image does not). paperless-ngx: "failed to find libmagic".
 RUNTIME_PACKAGES = [
     (r"failed to find libmagic|libmagic\.so", "libmagic1"),
-    (r"No such file or directory: 'git'|git: not found|git: command not found", "git"),   # searxng
+    (r"No such file or directory: 'git'|git: not found|git: command not found"
+     r"|Bad git executable", "git"),                     # searxng; langflow (GitPython)
     (r"libzbar\.so|Unable to find zbar shared library", "libzbar0"),
     (r"libGL\.so\.1", "libgl1"),
     (r"lib(glib|gthread|gobject)-2\.0\.so", "libglib2.0-0"),
@@ -187,6 +188,19 @@ RUNTIME_PACKAGES = [
     (r"pdftotext: not found|Unable to get page count. Is poppler installed", "poppler-utils"),
     (r"ghostscript.*not found|\bgs: not found", "ghostscript"),
 ]
+
+
+# Python modules a test run could not import that one known PyPI package provides. Never a guess from the module's
+# name: only modules whose package is unambiguous. pkg_resources comes with setuptools, which Python 3.12 images no
+# longer ship (isso before April 2026 imports it); setuptools 81 drops it, hence the pin.
+RUNTIME_PIP = [
+    (r"No module named '?pkg_resources'?", "setuptools<81"),
+]
+
+
+def runtime_pip(output: str) -> list[str]:
+    """The PyPI packages for modules a test run could not import (see RUNTIME_PIP)."""
+    return [pkg for pattern, pkg in RUNTIME_PIP if re.search(pattern, output or "")]
 
 
 def runtime_packages(output: str) -> list[str]:
