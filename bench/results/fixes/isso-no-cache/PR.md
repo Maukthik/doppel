@@ -1,0 +1,1 @@
+Change in CHANGES.rst, isso/isso.cfg, isso/utils/__init__.py, isso/views/comments.py

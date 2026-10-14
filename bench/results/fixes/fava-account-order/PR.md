@@ -1,0 +1,1 @@
+Change in src/fava/core/__init__.py, src/fava/templates/_journal_table.html

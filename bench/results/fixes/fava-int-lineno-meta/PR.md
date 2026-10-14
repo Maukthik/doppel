@@ -1,0 +1,1 @@
+Change in src/fava/_structs.py, src/fava/serialisation.py

@@ -1,0 +1,1 @@
+Change in src/fava/core/fava_options.py, src/fava/help/options.md
