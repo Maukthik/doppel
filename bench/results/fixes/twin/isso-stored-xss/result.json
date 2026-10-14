@@ -1,0 +1,182 @@
+{
+ "id": "isso-stored-xss",
+ "app": "isso",
+ "sha": "2e588895b6374be4d4b1d8cec8e2e263a35daaef",
+ "date": "2026-02-19",
+ "title": "Fix stored XSS in website and author fields",
+ "bug": "Single quotes in website aren't escaped, and edits don't escape website or author at all (stored XSS).",
+ "expect": "POST /new|PUT /id/|/edit/",
+ "framework": "Flask",
+ "backend": "nebius",
+ "ran_on": "2026-10-14",
+ "mode": "test mode + guided twin",
+ "hidden_tests": [
+  "isso/tests/test_comments.py"
+ ],
+ "twin_setup_by": "hand-written: bench/twin-setups/isso/",
+ "twin_setup": [
+  "doppel.toml",
+  "doppel_isso.py",
+  "doppel_seed.json",
+  "isso-doppel.cfg"
+ ],
+ "modes": {
+  "tests": {
+   "ran": true,
+   "reason": ""
+  },
+  "twin": {
+   "ran": true,
+   "reason": null,
+   "coverage": {
+    "requests": 44,
+    "served": 32,
+    "blocked": 7,
+    "stuck_personas": [],
+    "personas": 19,
+    "repaired": [
+     "eve_negative_id"
+    ],
+    "reach": [
+     {
+      "id": "c1",
+      "file": "isso/views/comments.py",
+      "where": "API.new",
+      "base_lines": [
+       338,
+       342,
+       343
+      ],
+      "head_lines": [
+       338
+      ],
+      "reached_by": [
+       "alice_hello",
+       "bob_second",
+       "carol_reply",
+       "dave_bad_input",
+       "eve_negative_id",
+       "frank_dup_website",
+       "grace_patch_edit",
+       "heidi_website_normalize",
+       "judy_missing_fields",
+       "probe s1: typical-user",
+       "probe s2: power-user",
+       "probe s3: careless-user",
+       "probe-s1",
+       "probe-s2",
+       "probe-s3",
+       "probe-s4",
+       "probe-s5",
+       "probe-s6"
+      ],
+      "reached_in": [
+       "base",
+       "head"
+      ]
+     },
+     {
+      "id": "c2",
+      "file": "isso/views/comments.py",
+      "where": "API.edit",
+      "base_lines": [
+       554,
+       555,
+       556,
+       558,
+       559
+      ],
+      "head_lines": [],
+      "reached_by": [],
+      "reached_in": []
+     },
+     {
+      "id": "c3",
+      "file": "isso/views/comments.py",
+      "where": "API.moderate",
+      "base_lines": [
+       805,
+       808,
+       809,
+       811,
+       812,
+       813,
+       815,
+       816,
+       817,
+       819,
+       820
+      ],
+      "head_lines": [],
+      "reached_by": [],
+      "reached_in": []
+     }
+    ]
+   },
+   "personas": 19,
+   "source": "written by Nemotron for this PR"
+  }
+ },
+ "suspicions": [
+  {
+   "id": "s1",
+   "claim": "Website field is now escaped with quote=False instead of quote=True, changing how special characters are encoded in stored comments.",
+   "route": "POST /new?uri=<path>",
+   "trigger": "Send JSON with website containing special chars like '&' or '\"': {\"text\": \"test\", \"author\": \"A\", \"email\": \"a@b.c\", \"website\": \"https://ex.com?a=1&b=2\"}. Read back the created comment's website field and observe if & is stored as &amp; (quote=True) or & (quote=False).",
+   "status": "untested",
+   "evidence": "Probe probe-s1 sent POST /new?uri=/blog/hello-world with website containing special chars; base and head both returned 201 with truncated website field, and GET /id/4 showed identical truncated website values, so no difference in escaping was observed.",
+   "changes": []
+  },
+  {
+   "id": "s2",
+   "claim": "Email field is now escaped on comment creation (previously it was not), altering stored email values.",
+   "route": "POST /new?uri=<path>",
+   "trigger": "Send JSON with email containing special chars like '\"': {\"text\": \"test\", \"author\": \"A\", \"email\": \"a\\\"@b.c\", \"website\": null}. Read back the created comment's email field and check if quotes are escaped.",
+   "status": "untested",
+   "evidence": "Probe probe-s2 sent POST /new?uri=/blog/hello-world with email containing a quote; base and head both returned 201 with website null and GET /id/4 showed identical responses, so no difference in email escaping was observed.",
+   "changes": []
+  },
+  {
+   "id": "s3",
+   "claim": "Edit action no longer validates incoming data via API.verify, allowing invalid fields or missing required fields to be saved.",
+   "route": "PUT /id/<id>/edit/<hash>",
+   "trigger": "Send JSON with missing required text field: {\"author\": \"A\", \"email\": \"a@b.c\"}. Observe if request succeeds (200) instead of returning BadRequest.",
+   "status": "untested",
+   "evidence": "Probe probe-s3 attempted PUT /id/4/edit/e929563f93d9 with missing text field but received 405 Method Not Allowed in both base and head, so the edit route was not reached and validation behavior could not be tested.",
+   "changes": []
+  },
+  {
+   "id": "s4",
+   "claim": "Edit action no longer escapes author, email, website fields before saving, so special characters are stored raw.",
+   "route": "PUT /id/<id>/edit/<hash>",
+   "trigger": "First create a comment, then PUT with {\"text\": \"new\", \"author\": \"A&B\", \"email\": \"a@b.c\", \"website\": \"https://ex.com?x=1&y=2\"}. Read back the comment and check if & is stored as & or &amp;.",
+   "status": "untested",
+   "evidence": "Probe probe-s4 attempted PUT /id/4/edit/e929563f93d9 with special chars in author and website but received 405 Method Not Allowed in both base and head, so the edit route was not reached and escaping behavior could not be tested.",
+   "changes": []
+  },
+  {
+   "id": "s5",
+   "claim": "Edit action no longer strips unknown fields from request data; extra fields like 'parent' or 'mode' may be persisted.",
+   "route": "PUT /id/<id>/edit/<hash>",
+   "trigger": "Send JSON with extra field: {\"text\": \"new\", \"author\": \"A\", \"email\": \"a@b.c\", \"parent\": 999}. Read back the comment and check if parent field changed.",
+   "status": "untested",
+   "evidence": "Probe probe-s5 attempted PUT /id/4/edit/e929563f93d9 with extra parent field but received 405 Method Not Allowed in both base and head, so the edit route was not reached and unknown-field stripping could not be tested.",
+   "changes": []
+  },
+  {
+   "id": "s6",
+   "claim": "Edit action no longer sets notification field from request, potentially leaving it at old value or default.",
+   "route": "PUT /id/<id>/edit/<hash>",
+   "trigger": "Create a comment with notification=1, then edit with {\"text\": \"new\", \"author\": \"A\", \"email\": \"a@b.c\", \"notification\": 0}. Read back comment's notification field.",
+   "status": "untested",
+   "evidence": "Probe probe-s6 attempted PUT /id/4/edit/e929563f93d9 with notification field but received 405 Method Not Allowed in both base and head, so the edit route was not reached and notification handling could not be tested.",
+   "changes": []
+  }
+ ],
+ "status": "invisible",
+ "differences": 0,
+ "caught_by": [],
+ "on_route": [],
+ "other": [],
+ "seconds": 130.0
+}

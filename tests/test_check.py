@@ -104,3 +104,18 @@ def test_the_report_of_a_stopped_check_shows_the_final_error():
         "\ndjango.core.exceptions.ImproperlyConfigured: Set the SECRET_KEY environment variable"
     text = report({"ran": False, "reason": reason}, {"ran": False, "reason": "turned off (--no-twin)"})
     assert "ImproperlyConfigured: Set the SECRET_KEY" in text
+
+
+def test_untested_suspicions_keep_no_regressions_from_reading_as_a_pass():
+    from doppel.check import report, untested
+    tests = {"ran": False, "reason": "no test suite found"}
+    twin = {"ran": True, "rows": [], "personas": 19, "source": "written by Nemotron for this PR",
+            "suspicions": [{"id": "s1", "claim": "website escaped with quote=False", "status": "untested"},
+                           {"id": "s2", "claim": "edit no longer escapes", "status": "untested"},
+                           {"id": "s3", "claim": "total rounded", "status": "refuted"}]}
+    assert untested(twin) == (2, 3)
+    md = report(tests, twin)
+    assert md.startswith("## Doppel: no regressions found, but 2 of the reviewer's 3 suspicions couldn't be tested")
+    every = {**twin, "suspicions": [{**s, "status": "refuted"} for s in twin["suspicions"]]}
+    assert report(tests, every).startswith("## Doppel: no regressions\n")
+    assert untested({"ran": False, "suspicions": twin["suspicions"]}) == (0, 0)   # no twin, nothing claimed

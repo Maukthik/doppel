@@ -172,3 +172,10 @@ def test_a_stopped_test_mode_shows_the_end_of_its_output_folded(tmp_path):
     page = (tmp_path / "p.html").read_text(encoding="utf-8")
     assert "The end of the output" in page
     assert "ModuleNotFoundError: No module named" in page and "responses" in page.split("ModuleNotFoundError")[1][:40]
+
+
+def test_untested_suspicions_turn_the_banner_grey():
+    sus = [{"id": "s1", "claim": "website escaped with quote=False", "status": "untested"}]
+    page = render_check({**DATA, "rows": [], "twin": {"ran": True, "suspicions": sus, "personas": 19}})
+    assert 'class="banner grey"' in page
+    assert "No regressions found, but 1 of the reviewer&#x27;s 1 suspicion couldn&#x27;t be tested" in page

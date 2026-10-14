@@ -202,7 +202,10 @@ def render_check(data: dict, public: bool = False, nav: str = "") -> str:
                    + f", seen in {_plural(n_req, 'request')}")
         tone = "red"
     else:
-        verdict, tone = "No regressions", "green"
+        from doppel.check import untested
+        open_, total = untested(twin)
+        verdict, tone = (f"No regressions found, but {open_} of the reviewer's {_plural(total, 'suspicion')} "
+                         "couldn't be tested", "grey") if open_ else ("No regressions", "green")
     pr = data.get("pr") or {}
     sections = []
     if regressions:

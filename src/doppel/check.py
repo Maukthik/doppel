@@ -215,6 +215,14 @@ def _section(title: str, groups: list[dict], why: bool, open_: bool = True) -> l
     return lines
 
 
+def untested(twin: dict) -> tuple[int, int]:
+    """(untested, all) of the reviewer's suspicions: the ones the twin's probes never got to check. "No
+    regressions" next to an untested suspicion would read as a pass it didn't earn (isso's stored XSS: the
+    reviewer named it, the probes missed it)."""
+    sus = [s for s in (twin.get("suspicions") or []) if isinstance(s, dict)] if twin.get("ran") else []
+    return sum(s.get("status", "untested") == "untested" for s in sus), len(sus)
+
+
 def report(tests: dict, twin: dict) -> str:
     from doppel.report import suspicions_section
     rows = tests.get("rows", []) + twin.get("rows", [])
@@ -231,7 +239,9 @@ def report(tests: dict, twin: dict) -> str:
         title = (f"## Doppel: {_n(len(regressions), 'regression')} the PR doesn't mention, "
                  f"seen in {_n(n_requests, 'request')}")
     else:
-        title = "## Doppel: no regressions"
+        open_, total = untested(twin)
+        title = (f"## Doppel: no regressions found, but {open_} of the reviewer's {_n(total, 'suspicion')} "
+                 "couldn't be tested" if open_ else "## Doppel: no regressions")
     lines = [title, ""]
     summary = []
     if tests.get("ran"):
