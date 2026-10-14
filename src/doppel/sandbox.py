@@ -142,7 +142,31 @@ def install_shell(install: str, repo: str | Path) -> str:
     if not install:
         return ""
     shell = f"{GIT} && {install}" if needs_git(repo, install) else install
-    return scm_version_env(repo) + shell
+    return scm_version_env(repo) + shell + pkg_resources_install(repo)
+
+
+USES_PKG_RESOURCES = re.compile(r"^\s*(?:import\s+pkg_resources\b|from\s+pkg_resources\s+import\b)", re.M)
+NOT_APP_CODE = {".git", "node_modules", ".venv", "venv", ".tox", "build", "dist", "docs", "site-packages"}
+
+
+def pkg_resources_install(repo: str | Path, limit: int = 5_000) -> str:
+    """` && pip install 'setuptools<81'` when the app's own code imports pkg_resources (isso before April 2026):
+    it ships with setuptools, which Python 3.12 environments no longer include and setuptools 81 drops. For
+    both modes (test mode and the twin's install), decided from the code before anything runs."""
+    root = Path(repo)
+    seen = 0
+    for path in root.rglob("*.py"):
+        if NOT_APP_CODE & set(path.relative_to(root).parts[:-1]):
+            continue
+        seen += 1
+        if seen > limit:
+            break
+        try:
+            if USES_PKG_RESOURCES.search(path.read_text("utf-8", errors="replace")):
+                return " && python -m pip install --quiet 'setuptools<81'"
+        except OSError:
+            continue
+    return ""
 
 SCM_BACKENDS = re.compile(r"setuptools[_-]scm|hatch[_-]vcs|setuptools-git-versioning", re.I)
 
