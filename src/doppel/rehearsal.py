@@ -7,7 +7,11 @@ look like a clean PR. Rehearsal catches that:
   1. replay every persona once in the base world (in the sandbox, in parallel, about a second)
   2. coverage(): how many of its requests the app actually served
   3. repair(): personas that mostly hit 401/403/404/405 go back to Nemotron together with what
-     the app answered, and come back fixed (deliberately bad input from careless users is kept)
+     the app answered, and come back fixed (deliberately bad input from careless users is kept).
+     A probe (written for one suspicion) goes back as soon as one of its requests could not have
+     reached the code: a 405 (the route exists, not with that method) or a path with an unfilled
+     {placeholder}. Its setup step succeeding doesn't make it useful (isso: every edit probe created a
+     comment, then sent PUT to a POST-only route, and its suspicion stayed untested).
 
 The report always states coverage, so "no regressions" can be told apart from "couldn't test".
 """
@@ -15,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from doppel.personas import cost_usd, nemotron_chat, parse_json, read_source, validate
 from doppel.runner import placeholders
@@ -29,6 +34,9 @@ and the route definitions in the code; do not repeat a path that answered 404. F
 it does what its goal says, using only routes and the
 login flow that exist in the code. Keep each persona's name and goal. Keep deliberate bad input
 (careless users sending invalid data on purpose), but it must reach the route it is testing.
+
+A persona with a "probe" field was written to trigger one suspected change: keep its trigger input
+exactly (the values it sends to test the suspicion) and fix only how it reaches the route.
 
 Persona format reminder: steps may carry "auth": ["username", "password"] for HTTP Basic auth,
 "headers": {{...}} (e.g. {{"Authorization": "Bearer {{token}}"}}), "json": {{...}} for a body, "form": {{...}}
@@ -78,6 +86,15 @@ def is_stuck(recording: dict) -> bool:
     return bool(steps) and blocked * 2 > len(steps) and not any(served(s) for s in steps[1:])
 
 
+UNFILLED = re.compile(r"\{[A-Za-z_]\w*\}")
+
+
+def probe_stuck(recording: dict) -> bool:
+    """A probe request that can't have reached its code: a 405, or a placeholder never filled in."""
+    return any(s.get("status") == 405 or UNFILLED.search(str(s.get("request", "")).split("?")[0])
+               for s in recording["steps"])
+
+
 def unfilled(persona: dict) -> list[str]:
     """Placeholders the persona uses but never presets or saves (auto-capture may still fill some)."""
     used = placeholders({k: persona.get(k) for k in ("headers", "steps")})
@@ -125,8 +142,10 @@ def repair(personas: list[dict], recordings: list[dict], app_dir, guide: str = "
     """Returns {"personas": the full list with stuck ones replaced, "repaired": names, "usd": ...}.
     Personas that simply never logged in get the owner's login step (no model call); the rest of
     the stuck ones go to Nemotron with the app's answers."""
+    from doppel.suspects import is_probe
     by_name = {r["persona"]: r for r in recordings}
-    stuck = [p for p in personas if p["name"] in by_name and is_stuck(by_name[p["name"]])]
+    stuck = [p for p in personas if p["name"] in by_name and
+             (is_stuck(by_name[p["name"]]) or (is_probe(p) and probe_stuck(by_name[p["name"]])))]
     if login and login.get("path"):
         quick = {p["name"] for p in stuck if never_logged_in(p, by_name[p["name"]], login)}
         personas = [with_login(p, login) if p["name"] in quick else p for p in personas]

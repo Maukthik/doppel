@@ -66,7 +66,9 @@ PROBES = """- Probes: {lead} exactly one probe persona per suspicion below (so {
   all). A probe has "probe": "<suspicion id>" and a name starting with "probe". It logs in if the
   route needs it, sends exactly the input that would trigger the suspicion (use ids that exist in
   the seed data or that an earlier step created and saved, never an unfilled placeholder), and then
-  reads back whatever would show the effect. Suspicions:
+  reads back whatever would show the effect. When the trigger names several values, characters or
+  cases, send every one of them (in one request, or one request each): leaving one out can leave the
+  suspicion untested. Use only routes and methods that exist in the code. Suspicions:
 {suspicions}
 """
 

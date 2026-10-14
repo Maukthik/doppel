@@ -1,0 +1,72 @@
+# The Stage 5 benchmark (bench/run_bench.py) on a GitHub runner: the review-guided twin on microblog-api's PRs, on
+# Nebius, with the Nemotron judge. Results go to a new folder (input `out`), so earlier published results stay as
+# they were. Start it from the Actions tab. Needs the repository secrets NEBIUS_API_KEY and NEBIUS_PROJECT_ID.
+name: bench-stage5
+
+on:
+  workflow_dispatch:
+    inputs:
+      set:
+        description: "main (30 PRs), heldout (10), consequence (8) or all"
+        default: all
+        type: choice
+        options: [all, main, heldout, consequence]
+      out:
+        description: "results folder under bench/results/"
+        default: guided-rerun
+        required: true
+      only:
+        description: "PR ids, comma-separated (empty: the whole set)"
+        default: ""
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Doppel
+        run: pip install --quiet -e ".[nebius,dev]"
+      - name: Run the guided arm
+        env:
+          NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
+          NEBIUS_PROJECT_ID: ${{ secrets.NEBIUS_PROJECT_ID }}
+          SET: ${{ inputs.set }}
+          OUT: ${{ inputs.out }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          NEBIUS_API_KEY="$(printf '%s' "$NEBIUS_API_KEY" | tr -d '[:space:]')"
+          NEBIUS_PROJECT_ID="$(printf '%s' "$NEBIUS_PROJECT_ID" | tr -d '[:space:]')"
+          export NEBIUS_API_KEY NEBIUS_PROJECT_ID
+          if [ -z "$NEBIUS_API_KEY" ] || [ -z "$NEBIUS_PROJECT_ID" ]; then
+            echo "::error::set the repository secrets NEBIUS_API_KEY and NEBIUS_PROJECT_ID"; exit 2
+          fi
+          mkdir -p bench/screen-logs
+          if [ -n "$ONLY" ]; then SEL="--only $ONLY"; else SEL="--set $SET"; fi
+          # shellcheck disable=SC2086 - SEL is two words on purpose
+          python bench/run_bench.py --arms doppel --guided --backend nebius $SEL --out "bench/results/$OUT" 2>&1 \
+            | tee bench/screen-logs/stage5.log
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Stage 5, guided twin: ${{ inputs.set }} -> bench/results/${{ inputs.out }}"
+            echo '```'
+            grep -E '^\[bench\] (regression|safe) ' bench/screen-logs/stage5.log || echo "no results"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-stage5-${{ inputs.out }}
+          path: |
+            bench/results/${{ inputs.out }}/
+            bench/screen-logs/stage5.log
