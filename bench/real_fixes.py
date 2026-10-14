@@ -47,6 +47,7 @@ sys.path.insert(0, str(HERE.parent / "src"))
 CACHE = HERE / ".cache" / "fixes"
 RESULTS = HERE / "results" / "fixes"
 TWIN = RESULTS / "twin"
+SETUPS = HERE / "twin-setups"   # hand-written twin setups (<app>/doppel.toml ...), used instead of `doppel init`
 REPOS = {"fava": "https://github.com/beancount/fava", "isso": "https://github.com/isso-comments/isso",
          "privacyidea": "https://github.com/privacyidea/privacyidea", "prefect": "https://github.com/PrefectHQ/prefect"}
 FRAMEWORK = {"fava": "Flask", "isso": "Flask", "privacyidea": "Flask", "prefect": "FastAPI"}
@@ -231,9 +232,10 @@ def score(fix: dict, data: dict) -> dict:
 
 
 def run_twin(fix: dict, backend: str, force: bool) -> dict:
-    """The same PR through `doppel check` with the guided twin as well as test mode. The twin's setup is written
-    by `doppel init` on the base and copied unchanged to the head: it is setup, not part of the PR. Nothing is
-    told about the bug: the reviewer sees the diff and the same neutral description as the judge."""
+    """The same PR through `doppel check` with the guided twin as well as test mode. The twin's setup comes from
+    bench/twin-setups/<app>/ when a maintainer-style one was written by hand, else from `doppel init` on the
+    base; either way it is copied unchanged to the head: setup, not part of the PR. Nothing is told about the
+    bug: the reviewer sees the diff and the same neutral description as the judge."""
     out_dir = TWIN / fix["id"]
     done = out_dir / "result.json"
     if done.exists() and not force:
@@ -249,14 +251,23 @@ def run_twin(fix: dict, backend: str, force: bool) -> dict:
     try:
         base, head, hidden = checkout(fix)
         result["hidden_tests"] = hidden
-        before = {p.relative_to(base) for p in base.rglob("*") if p.is_file()}
-        with contextlib.redirect_stdout(sys.stderr):
-            code = cli.main(["init", str(base), "--backend", backend])
-        after = {p.relative_to(base) for p in base.rglob("*") if p.is_file()}
-        added = sorted(after - before)
-        if code != 0 or not (base / "doppel.toml").exists():
-            raise RuntimeError(f"doppel init could not set up the twin for {fix['app']} (exit {code}); the log "
-                               "above says why")
+        written = SETUPS / fix["app"]
+        if (written / "doppel.toml").exists():
+            added = sorted(p.relative_to(written) for p in written.rglob("*") if p.is_file())
+            for rel in added:
+                (base / rel).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(written / rel, base / rel)
+            result["twin_setup_by"] = f"hand-written: bench/twin-setups/{fix['app']}/"
+        else:
+            before = {p.relative_to(base) for p in base.rglob("*") if p.is_file()}
+            with contextlib.redirect_stdout(sys.stderr):
+                code = cli.main(["init", str(base), "--backend", backend])
+            after = {p.relative_to(base) for p in base.rglob("*") if p.is_file()}
+            added = sorted(after - before)
+            if code != 0 or not (base / "doppel.toml").exists():
+                raise RuntimeError(f"doppel init could not set up the twin for {fix['app']} (exit {code}); the "
+                                   "log above says why")
+            result["twin_setup_by"] = "doppel init"
         for rel in added:
             for target in (head / rel, out_dir / "setup" / rel):
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -289,10 +300,12 @@ def twin_summary() -> Path:
     lines = ["# Real fixes, with the guided twin", "",
              "The same PRs as ../README.md (base = the fix, head = the commit before it, the fix's tests put back), "
              "now through `doppel check` with both modes: the app's own tests, and Nemotron's invented users "
-             "guided by an AI reviewer's suspicions. The twin's setup was written by `doppel init` on the base "
-             "and copied to the head unchanged. The reviewer sees the diff, so a bug whose fix added a guard "
+             "guided by an AI reviewer's suspicions. The twin's setup (by `doppel init`, or written by hand "
+             "the way a maintainer would, in bench/twin-setups/) was copied to the head unchanged. "
+             "The reviewer sees the diff, so a bug whose fix added a guard "
              "shows up in the diff as a removed guard: the twin's part is the proof, a recorded request.", "",
-             "| Fix | Bug | Result | Caught by | Reviewer's suspicions | Detail |", "|---|---|---|---|---|---|"]
+             "| Fix | Bug | Setup by | Result | Caught by | Reviewer's suspicions | Detail |",
+             "|---|---|---|---|---|---|---|"]
     for r in rows:
         sus = r.get("suspicions") or []
         said = "; ".join(f"{s.get('status', '?')}: {str(s.get('claim') or s.get('suspicion') or s)[:60]}"
@@ -301,7 +314,8 @@ def twin_summary() -> Path:
         detail = f"{first.get('request', '')}: {first.get('detail', '')}" if first else ""
         if not detail.strip(": ") and r.get("reason"):
             detail = r["reason"].splitlines()[0]
-        lines.append(f"| [{r['id']}]({r['id']}/doppel-check.html) | {r['bug']} | {r['status']} | "
+        lines.append(f"| [{r['id']}]({r['id']}/doppel-check.html) | {r['bug']} | {r.get('twin_setup_by', '')} | "
+                     f"{r['status']} | "
                      f"{', '.join(r.get('caught_by') or [])} | {said.replace('|', '/')} | "
                      f"{detail[:110].replace('|', '/')} |")
     out = TWIN / "README.md"
