@@ -21,13 +21,15 @@ any of them ran (14 Oct 2026). Each fix ends in one of:
     python bench/real_fixes.py list
     python bench/real_fixes.py run fava isso --backend nebius      # an app, a fix id, or all
     python bench/real_fixes.py summary
+    python bench/real_fixes.py run --twin isso-stored-xss           # test mode and the guided twin together
 
-Results: bench/results/fixes/<id>/ (check.json, report.md, doppel-check.html, result.json) and README.md.
-Finished fixes are skipped (--force redoes them).
+Results: bench/results/fixes/<id>/ (check.json, report.md, doppel-check.html, result.json) and README.md;
+with --twin, bench/results/fixes/twin/<id>/ and twin/README.md. Finished fixes are skipped (--force redoes them).
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import io
 import json
 import re
@@ -44,6 +46,7 @@ sys.path.insert(0, str(HERE.parent / "src"))
 
 CACHE = HERE / ".cache" / "fixes"
 RESULTS = HERE / "results" / "fixes"
+TWIN = RESULTS / "twin"
 REPOS = {"fava": "https://github.com/beancount/fava", "isso": "https://github.com/isso-comments/isso",
          "privacyidea": "https://github.com/privacyidea/privacyidea", "prefect": "https://github.com/PrefectHQ/prefect"}
 FRAMEWORK = {"fava": "Flask", "isso": "Flask", "privacyidea": "Flask", "prefect": "FastAPI"}
@@ -202,17 +205,8 @@ def run_one(fix: dict, backend: str, force: bool) -> dict:
         if not tests.get("ran"):
             result.update(status="not runnable", reason=head_and_tail(tests.get("reason", ""), 4000))
         else:
-            expect = re.compile(fix["expect"])
-            rows = data.get("rows") or []
-            flagged = [r for r in rows if r.get("label") in ("regression", "needs_human", "unjudged")]
-            hit = [r for r in flagged if r.get("kind") == "test" or "test fails on this" in r.get("detail", "")
-                   or expect.search(r.get("request", ""))]
             st = tests.get("stats") or {}
-            result.update(status="caught" if hit else "elsewhere" if flagged else "invisible",
-                          tests=st.get("tests"), requests=st.get("recorded_requests"), differences=len(rows),
-                          on_route=[{k: r.get(k) for k in ("request", "detail", "label", "why")} for r in hit][:10],
-                          other=[{k: r.get(k) for k in ("request", "detail", "label")}
-                                 for r in flagged if r not in hit][:10],
+            result.update(score(fix, data), tests=st.get("tests"), requests=st.get("recorded_requests"),
                           test_command=tests.get("test"))
         write_check_view(out_dir / "check.json", out_dir / "doppel-check.html", public=True)
     except Exception as e:  # noqa: BLE001 - one fix's failure must not stop the others
@@ -220,6 +214,101 @@ def run_one(fix: dict, backend: str, force: bool) -> dict:
     result["seconds"] = round(time.perf_counter() - t0, 1)
     done.write_text(json.dumps(result, indent=1, default=str) + "\n", encoding="utf-8")
     return result
+
+
+def score(fix: dict, data: dict) -> dict:
+    """Caught (on the bug's route, or a test the change breaks), flagged elsewhere, or invisible."""
+    expect = re.compile(fix["expect"])
+    rows = data.get("rows") or []
+    flagged = [r for r in rows if r.get("label") in ("regression", "needs_human", "unjudged")]
+    hit = [r for r in flagged if r.get("kind") == "test" or "test fails on this" in r.get("detail", "")
+           or expect.search(r.get("request", ""))]
+    return {"status": "caught" if hit else "elsewhere" if flagged else "invisible", "differences": len(rows),
+            "caught_by": sorted({r.get("source", "") for r in hit}),
+            "on_route": [{k: r.get(k) for k in ("source", "request", "detail", "label", "why")} for r in hit][:10],
+            "other": [{k: r.get(k) for k in ("source", "request", "detail", "label")}
+                      for r in flagged if r not in hit][:10]}
+
+
+def run_twin(fix: dict, backend: str, force: bool) -> dict:
+    """The same PR through `doppel check` with the guided twin as well as test mode. The twin's setup is written
+    by `doppel init` on the base and copied unchanged to the head: it is setup, not part of the PR. Nothing is
+    told about the bug: the reviewer sees the diff and the same neutral description as the judge."""
+    out_dir = TWIN / fix["id"]
+    done = out_dir / "result.json"
+    if done.exists() and not force:
+        return json.loads(done.read_text("utf-8"))
+    from doppel import cli
+    from doppel.checkview import write_check_view
+    from doppel.errors import head_and_tail
+    shutil.rmtree(out_dir, ignore_errors=True)
+    out_dir.mkdir(parents=True)
+    t0 = time.perf_counter()
+    result = {**fix, "framework": FRAMEWORK[fix["app"]], "backend": backend, "ran_on": str(date.today()),
+              "mode": "test mode + guided twin"}
+    try:
+        base, head, hidden = checkout(fix)
+        result["hidden_tests"] = hidden
+        before = {p.relative_to(base) for p in base.rglob("*") if p.is_file()}
+        with contextlib.redirect_stdout(sys.stderr):
+            code = cli.main(["init", str(base), "--backend", backend])
+        after = {p.relative_to(base) for p in base.rglob("*") if p.is_file()}
+        added = sorted(after - before)
+        if code != 0 or not (base / "doppel.toml").exists():
+            raise RuntimeError(f"doppel init could not set up the twin for {fix['app']} (exit {code}); the log "
+                               "above says why")
+        for rel in added:
+            for target in (head / rel, out_dir / "setup" / rel):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(base / rel, target)
+        result["twin_setup"] = [rel.as_posix() for rel in added]
+        (out_dir / "PR.md").write_text(pr_text(fix, base, head), encoding="utf-8")
+        cli.main(["check", "--base", str(base), "--head", str(head), "--backend", backend, "--app", fix["app"],
+                  "--pr", str(out_dir / "PR.md"), "--json", str(out_dir / "check.json"),
+                  "--out", str(out_dir / "report.md"), "--twin-json", str(out_dir / "twin.json")])
+        data = json.loads((out_dir / "check.json").read_text("utf-8"))
+        tests, twin = data.get("tests") or {}, data.get("twin") or {}
+        result["modes"] = {"tests": {"ran": tests.get("ran"), "reason": (tests.get("reason") or "")[:500]},
+                           "twin": {k: twin.get(k) for k in ("ran", "reason", "coverage", "personas", "source")}}
+        result["suspicions"] = twin.get("suspicions")
+        if not tests.get("ran") and not twin.get("ran"):
+            result.update(status="not runnable", reason="neither mode ran: " + (twin.get("reason") or ""))
+        else:
+            result.update(score(fix, data))
+        write_check_view(out_dir / "check.json", out_dir / "doppel-check.html", public=True)
+    except Exception as e:  # noqa: BLE001 - one fix's failure must not stop the others
+        result.update(status="not runnable", reason=head_and_tail(f"{type(e).__name__}: {e}", 4000))
+    result["seconds"] = round(time.perf_counter() - t0, 1)
+    done.write_text(json.dumps(result, indent=1, default=str) + "\n", encoding="utf-8")
+    return result
+
+
+def twin_summary() -> Path:
+    rows = [json.loads((TWIN / f["id"] / "result.json").read_text("utf-8")) for f in FIXES
+            if (TWIN / f["id"] / "result.json").exists()]
+    lines = ["# Real fixes, with the guided twin", "",
+             "The same PRs as ../README.md (base = the fix, head = the commit before it, the fix's tests put back), "
+             "now through `doppel check` with both modes: the app's own tests, and Nemotron's invented users "
+             "guided by an AI reviewer's suspicions. The twin's setup was written by `doppel init` on the base "
+             "and copied to the head unchanged. The reviewer sees the diff, so a bug whose fix added a guard "
+             "shows up in the diff as a removed guard: the twin's part is the proof, a recorded request.", "",
+             "| Fix | Bug | Result | Caught by | Reviewer's suspicions | Detail |", "|---|---|---|---|---|---|"]
+    for r in rows:
+        sus = r.get("suspicions") or []
+        said = "; ".join(f"{s.get('status', '?')}: {str(s.get('claim') or s.get('suspicion') or s)[:60]}"
+                         for s in sus[:3]) if isinstance(sus, list) else ""
+        first = (r.get("on_route") or r.get("other") or [{}])[0]
+        detail = f"{first.get('request', '')}: {first.get('detail', '')}" if first else ""
+        if not detail.strip(": ") and r.get("reason"):
+            detail = r["reason"].splitlines()[0]
+        lines.append(f"| [{r['id']}]({r['id']}/doppel-check.html) | {r['bug']} | {r['status']} | "
+                     f"{', '.join(r.get('caught_by') or [])} | {said.replace('|', '/')} | "
+                     f"{detail[:110].replace('|', '/')} |")
+    out = TWIN / "README.md"
+    TWIN.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("\n".join(lines))
+    return out
 
 
 def summary() -> Path:
@@ -265,9 +354,10 @@ def main(argv=None) -> int:
     ap.add_argument("fixes", nargs="*", help="fix ids or app names (default: all)")
     ap.add_argument("--backend", choices=["local", "nebius"], default="nebius")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--twin", action="store_true", help="the guided twin as well as test mode (runs doppel init)")
     a = ap.parse_args(argv)
     if a.step == "summary":
-        summary()
+        twin_summary() if a.twin else summary()
         return 0
     for fix in selected(a.fixes):
         if a.step == "list":
@@ -276,12 +366,14 @@ def main(argv=None) -> int:
         if a.backend == "nebius":
             from dotenv import load_dotenv
             load_dotenv()
-        print(f"[fixes] {fix['id']}", file=sys.stderr)
-        r = run_one(fix, a.backend, a.force)
+        label = fix["id"] + (" (twin)" if a.twin else "")
+        print(f"[fixes] {label}", file=sys.stderr)
+        r = run_twin(fix, a.backend, a.force) if a.twin else run_one(fix, a.backend, a.force)
         why = (r.get("reason") or "").splitlines()[0][:140] if r.get("reason") else ""
-        print(f"[fixes] {fix['id']} -> {r['status']}" + (f": {why}" if why else ""))
+        by = f" by {', '.join(r['caught_by'])}" if r.get("caught_by") else ""
+        print(f"[fixes] {label} -> {r['status']}{by}" + (f": {why}" if why else ""))
     if a.step == "run":
-        summary()
+        twin_summary() if a.twin else summary()
     return 0
 
 
