@@ -1,0 +1,159 @@
+{
+ "id": "isso-stored-xss",
+ "app": "isso",
+ "sha": "2e588895b6374be4d4b1d8cec8e2e263a35daaef",
+ "date": "2026-02-19",
+ "title": "Fix stored XSS in website and author fields",
+ "bug": "Single quotes in website aren't escaped, and edits don't escape website or author at all (stored XSS).",
+ "expect": "POST /new|PUT /id/|/edit/",
+ "framework": "Flask",
+ "backend": "nebius",
+ "ran_on": "2026-10-17",
+ "mode": "test mode + guided twin",
+ "hidden_tests": [
+  "isso/tests/test_comments.py"
+ ],
+ "twin_setup_by": "hand-written: bench/twin-setups/isso/",
+ "twin_setup": [
+  "doppel.toml",
+  "doppel_isso.py",
+  "doppel_seed.json",
+  "isso-doppel.cfg"
+ ],
+ "modes": {
+  "tests": {
+   "ran": false,
+   "reason": "the test command ran no test on the unchanged code (exit 2). Its output:\n import URLSafeTimedSerializer\nE   ModuleNotFoundError: No module named 'itsdangerous'\n________________ ERROR collecting isso/tests/test_utils_hash.py ________________\nImportError while importing test module '/app/isso/tests/test_utils_hash.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\n/usr/local/lib/python3.12/importlib/__init__.py:90: in import_module\n    return _bootstrap._gcd_import"
+  },
+  "twin": {
+   "ran": true,
+   "reason": null,
+   "coverage": {
+    "requests": 37,
+    "served": 27,
+    "blocked": 3,
+    "stuck_personas": [],
+    "personas": 17,
+    "repaired": [
+     "probe-s3"
+    ],
+    "reach": [
+     {
+      "id": "c1",
+      "file": "isso/views/comments.py",
+      "where": "API.new",
+      "base_lines": [
+       338,
+       342,
+       343
+      ],
+      "head_lines": [
+       338
+      ],
+      "reached_by": [
+       "alice_normal",
+       "bob_no_email",
+       "carol_website_only",
+       "dave_negative_text",
+       "eve_empty_fields",
+       "frank_duplicate_id",
+       "grace_power_user",
+       "heidi_missing_author",
+       "karl_reply_to_existing",
+       "probe s1: user-basic",
+       "probe s2: user-power",
+       "probe-s2",
+       "probe-s3"
+      ],
+      "reached_in": [
+       "base",
+       "head"
+      ]
+     },
+     {
+      "id": "c2",
+      "file": "isso/views/comments.py",
+      "where": "API.edit",
+      "base_lines": [
+       554,
+       555,
+       556,
+       558,
+       559
+      ],
+      "head_lines": [],
+      "reached_by": [],
+      "reached_in": []
+     },
+     {
+      "id": "c3",
+      "file": "isso/views/comments.py",
+      "where": "API.moderate",
+      "base_lines": [
+       805,
+       808,
+       809,
+       811,
+       812,
+       813,
+       815,
+       816,
+       817,
+       819,
+       820
+      ],
+      "head_lines": [],
+      "reached_by": [],
+      "reached_in": []
+     }
+    ]
+   },
+   "personas": 17,
+   "source": "written by Nemotron for this PR"
+  }
+ },
+ "suspicions": [
+  {
+   "id": "s1",
+   "claim": "Website field is now escaped with quote=False instead of quote=True, so double quotes in website URLs are no longer escaped to &quot;",
+   "route": "POST /new?uri=<page path>",
+   "trigger": "Send JSON with website containing a double quote (e.g., 'https://example.com\"') and check the response body's website field for escaped double quotes Send each of these values: \"https://example.com\\\"\"",
+   "inputs": [
+    "https://example.com\""
+   ],
+   "status": "untested",
+   "evidence": "Probe 'probe s1: user-basic' sent a website without double quotes; probe 'probe-s1' sent a website with a double quote but both base and head returned 400 Bad Request, so the route was not reached with triggering input.",
+   "changes": []
+  },
+  {
+   "id": "s2",
+   "claim": "Email field is now escaped with quote=False instead of quote=True, so double quotes in email addresses are no longer escaped to &quot;",
+   "route": "POST /new?uri=<page path>",
+   "trigger": "Send JSON with email containing a double quote (e.g., 'test\"@example.com') and check the response body's email field for escaped double quotes Send each of these values: \"test\\\"@example.com\"",
+   "inputs": [
+    "test\"@example.com"
+   ],
+   "status": "refuted",
+   "evidence": "Probe 'probe-s2' sent email \"test\\\"@example.com\" to POST /new?uri=/blog/hello-world and both base and head answered 201 with identical response bodies, showing no behavior change.",
+   "changes": []
+  },
+  {
+   "id": "s3",
+   "claim": "Edit comment action no longer escapes author/email/website fields, so double quotes in these fields are no longer escaped to &quot;",
+   "route": "PUT /id/<id>/edit",
+   "trigger": "Send JSON with author, email, or website containing a double quote (e.g., 'author: \"Max Rant\"') and check the response body's edited fields for escaped double quotes Send each of these values: \"author: \\\"Max Rant\\\"\"",
+   "inputs": [
+    "author: \"Max Rant\""
+   ],
+   "status": "untested",
+   "evidence": "Probe 'probe-s3' attempted PUT /id/XSS test with author containing double quotes but both base and head returned 0 InvalidURL due to a space in the URL path, so the edit route was not reached with triggering input.",
+   "changes": []
+  }
+ ],
+ "status": "invisible",
+ "differences": 0,
+ "caught_by": [],
+ "on_route": [],
+ "other": [],
+ "seconds": 105.6
+}

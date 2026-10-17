@@ -20,10 +20,14 @@ and proves each regression with the request, the old answer and the new answer.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/doppel-architecture-dark.svg">
-  <img src="docs/doppel-architecture-light.svg" alt="Doppel architecture: the main branch is seeded once into a twin of the app in Nebius sandboxes, forked into a base world and a head world (with the PR's code); the same users (your tests plus Nemotron-written users) run in both; every response is compared; a Nemotron judge asks whether the PR meant each change, and regressions go to the PR comment and check. On 30 real PRs: tests 12/20, AI review 17/20, Doppel 16/20 with 0 false alarms, tests + Doppel 20/20." width="100%">
+  <img src="docs/doppel-architecture-light.svg" alt="Doppel architecture: the main branch is seeded once into a twin of the app in Nebius sandboxes, forked into a base world and a head world (with the PR's code); the same users (your tests plus Nemotron-written users) run in both; every response is compared; a Nemotron judge asks whether the PR meant each change, and regressions go to the PR comment and check. On 30 PRs to a real app: tests 12/20, AI review 17/20, review-guided Doppel 16/20 with 2/10 false alarms, tests + Doppel 19/20." width="100%">
 </picture>
 
-<!-- 15-second GIF of the red PR comment turning green goes here: docs/demo.gif -->
+<p align="center">
+  <a href="https://github.com/Maukthik/doppel-demo/pull/1"><img src="docs/demo-checks.png" alt="The pull request's checks: tests pass, doppel fails" width="49%"></a>
+  <a href="https://github.com/Maukthik/doppel-demo/pull/1"><img src="docs/demo-comment.png" alt="Doppel's comment: 1 regression the PR doesn't mention, password_hash added on 14 endpoints, seen in 38 requests" width="49%"></a>
+</p>
+<p align="center"><sub>A live pull request on a fresh repo, zero setup: all 44 tests pass, Doppel fails the check and shows the leak in 38 requests. <a href="https://github.com/Maukthik/doppel-demo/pull/1">Open the PR</a></sub></p>
 
 ## One line leaked every password hash
 
@@ -39,6 +43,10 @@ A pull request titled *"Describe has_password in the API schema"* changed one li
 The tests never looked at that field, and the reviewer didn't notice what one schema line does. Doppel
 didn't need to notice anything. It ran both versions, saw the field appear and showed the evidence.
 
+You can open this one: [doppel-demo#1](https://github.com/Maukthik/doppel-demo/pull/1) is that PR on a fresh
+repo with one workflow file and no other setup. Doppel ran the app's own tests on both versions in about a
+minute and flagged the same 38 requests on two runs ([recorded results](bench/results/demo-pr)).
+
 ## Results on 30 pull requests to a real app
 
 20 PRs carry a regression (3 of them are real upstream bug fixes, reverted) and 10 are safe.
@@ -48,19 +56,22 @@ Each PR has a description written the way authors write them: *"simplify the fee
 |---|---|---|---|---|
 | App's own test suite (44 tests) | 12/20 | 0/10 | $0 | 11 s |
 | AI code review (Nemotron 3 Ultra) | 17/20 | 1/10 | $0.03 | 3 s |
-| **Review-guided Doppel** | **16/20** | **0/10** | $0.25 | 147 s |
-| **Tests + Doppel** | **20/20** | 0/10 | | |
-| AI review + Doppel | 19/20 | 1/10 | | |
+| **Review-guided Doppel** | **16/20** | **2/10** | $0.25 | 89 s |
+| **Tests + Doppel** | **19/20** | 2/10 | | |
+| AI review + Doppel | 19/20 | 3/10 | | |
 
-These methods catch **different** bugs. Doppel caught every regression the test suite missed. It also caught
-the two the AI reviewer called safe: the hash leak, and a token-revoke request that crashes with a 500. On the
-one safe PR where the reviewer raised a false alarm, Doppel sent the requests it was worried about
-(`limit=0`, `limit=abc`, `limit=30`) to both versions, got identical answers and cleared the PR.
+These methods catch **different** bugs. Doppel caught 7 of the 8 regressions the test suite missed, including
+the two the AI reviewer called safe: the hash leak, and a token-revoke request that crashes with a 500.
 
-Doppel doesn't beat an AI reviewer on recall alone, and the numbers vary between runs (complete runs scored
-15, 17, 16 and 15 of 20). Its strength is that **every catch comes with proof and it raised no false alarms**.
-A held-out set of 10 PRs written after tuning gave the same result: tests 6/7, AI review 5/7, Doppel 6/7,
-0 false alarms. [Every PR, every verdict, and how the numbers were produced](bench/results/results.md).
+The Doppel row is the latest run (17 Oct), not free of false alarms: 2 of 10 safe PRs were flagged. One (s09) is
+behaviour the description doesn't mention: account creation now accepts the new `location` field. The other
+(s07) is a judge miss on a knock-on effect of the announced change. One more run detail, disclosed: the judge
+got one rule after this run (a route the PR adds can't regress, since it didn't exist before), and the numbers
+are the same recordings judged again; a second change was tried and dropped because it lost a real catch
+([both](bench/results/guided-rerun-fixed)). Complete runs have scored 15 to 17 of 20, so treat each number
+as one sample. What doesn't vary: **every catch and every false alarm comes with the recorded requests**. On a
+held-out set of 10 PRs written after tuning: tests 6/7, AI review 5/7, Doppel 7/7 with 0/3 false alarms.
+[Every PR and verdict](bench/results/results.md) · [the latest run](bench/results/guided-rerun).
 
 ## How it works
 
@@ -178,7 +189,10 @@ and prefect, and replayed each one as the PR that brings its bug back. Test mode
 BugsInPy bugs. It caught 0 of 14 recent real fixes and raised 0 false alarms. In nearly every case, **the
 test suite never sent a request through the buggy code**, so there was nothing to compare. This is test
 mode's ceiling, and it's why the guided twin exists: it writes the requests no test sends
-([BugsInPy](bench/results/bugsinpy), [real fixes](bench/results/fixes)).
+([BugsInPy](bench/results/bugsinpy), [real fixes](bench/results/fixes)). The guided twin, with a setup written
+by hand, **did catch isso's stored-XSS fix**: probes sent `"quoted"` and `<script>` through `POST /new` and
+`PUT /id/<id>`, and the head returned them unescaped. That came on the fourth run of that PR, after fixes the
+earlier runs prompted ([write-up, all four runs](bench/results/fixes/twin)).
 
 **`doppel init` with no hand edits.** It set up microblog-api (Flask) and linkding (Django). On linkding it
 found the same 3 noisy fields as the hand-written answer key ([bench/init](bench/init)).
@@ -259,7 +273,8 @@ Doppel is not a simulation or a forecast. Every finding is a real request answer
 
 - **It only sees what is exercised.** A bug on a path no test or persona reaches stays hidden. Coverage is the main lever (see the real-bug results above).
 - **It compares two versions; it doesn't know the truth.** If old and new are wrong in the same way, there's no difference to find.
-- **The judge can be wrong.** It depends on the PR description, which is why "needs a human" exists and the evidence is always shown.
+- **The judge can be wrong, both ways.** It depends on the PR description. On the benchmark it flagged 2 of 10 safe PRs, and it has let regressions through as "intended". That is why "needs a human" exists and the evidence is always shown.
+- **A probe can test the right code without being able to show the result.** A refutation must name a value a probe really sent, but on isso the email probe sent a quote and was refuted although isso never returns email addresses, so no response could have differed.
 - **It covers HTTP + JSON APIs in Python.** Browser UIs, background jobs and apps that need PostgreSQL or Redis inside the sandbox are not covered yet.
 - **PRs from forks don't get secrets on GitHub**, so the twin runs on branches inside the repo.
 - **The benchmark is one app with PRs we wrote**, plus 3 reverted real fixes. The PR list was frozen before any method ran on it. That's evidence, not proof, and the harness reruns on any app.

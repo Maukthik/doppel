@@ -63,3 +63,37 @@ Rehearsal fixed the route, so it does what it was built for. The input is still 
 **refuted** on a probe that sent only `&`, which escapes the same way in both versions, so it proves nothing about
 quotes. A refutation should need a probe that actually sends the trigger. Doppel doesn't check that yet, and that's
 a known limit.
+
+## Runs 3 and 4 (17 Oct 2026): caught
+
+Between run 2 and these runs, four changes went into Doppel. All are generic and none mentions isso:
+- the reviewer has to name the exact inputs that the code before and after treats differently
+  (quote=False vs quote=True differs on `'` and `"` only), and those values go to the probe writer;
+- a "refuted" verdict has to name the triggering value, and a probe has to have really sent it;
+- a probe answered with status 0 (its URL couldn't even be sent) counts as stuck and is rehearsed;
+- (test mode) a failed package install is no longer hidden. This one fixes run 3, below.
+
+**Run 3** ([isso-stored-xss-run3/](isso-stored-xss-run3/doppel-check.html)) doesn't count. Its test mode broke
+because of a change made earlier that day (a failed `pip install -e .` was let through, so werkzeug was never
+installed), and that change was reverted. Its twin was better than run 2's: the reviewer named double quotes,
+but one probe's `"` made an invalid URL (400 in both versions) and another sent a name where an id belongs
+(status 0), so 2 of 3 suspicions stayed untested.
+
+**Run 4** ([isso-stored-xss-run4/](isso-stored-xss-run4/doppel-check.html)): **caught by invented users**.
+
+| | |
+|---|---|
+| Test mode | 110 tests, 601 requests, 0 differences (same as every run: the suite never sends these inputs) |
+| The twin | 18 users, 25 of 47 requests served; rehearsal repaired all 5 probes before the replay |
+| Regression 1 | `POST /new` with website `https://example.com/"quoted"`: base stores `&quot;quoted&quot;`, head stores `"quoted"` raw |
+| Regression 2 | `PUT /id/4` with author `Test <script>`: base returns `Test &lt;script&gt;`, head returns `Test <script>`, and `GET /id/4` shows it stored that way (stored XSS) |
+| Suspicions | 2 confirmed (the two above), 3 refuted, each refutation naming the value its probe sent |
+
+Disclosure: this PR has now been run four times, and Doppel changed between runs because of what the earlier
+runs showed. Each change has its own tests and also applies to every other app, but the catch came on the
+fourth try at this PR, after it had been seen. One of the three refutations is weak: the email refutation is
+correct that responses are identical, but isso never returns email addresses, so no request could have shown
+an email difference. And as before, the reviewer reads a diff that removes `escape()` calls, so its suspicion
+is no surprise; what the twin adds is the recorded proof.
+
+The 14 test-mode results in [../README.md](../README.md) are unchanged: test mode caught 0 of 14.

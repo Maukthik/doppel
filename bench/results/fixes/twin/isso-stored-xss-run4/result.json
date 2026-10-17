@@ -1,0 +1,233 @@
+{
+ "id": "isso-stored-xss",
+ "app": "isso",
+ "sha": "2e588895b6374be4d4b1d8cec8e2e263a35daaef",
+ "date": "2026-02-19",
+ "title": "Fix stored XSS in website and author fields",
+ "bug": "Single quotes in website aren't escaped, and edits don't escape website or author at all (stored XSS).",
+ "expect": "POST /new|PUT /id/|/edit/",
+ "framework": "Flask",
+ "backend": "nebius",
+ "ran_on": "2026-10-17",
+ "mode": "test mode + guided twin",
+ "hidden_tests": [
+  "isso/tests/test_comments.py"
+ ],
+ "twin_setup_by": "hand-written: bench/twin-setups/isso/",
+ "twin_setup": [
+  "doppel.toml",
+  "doppel_isso.py",
+  "doppel_seed.json",
+  "isso-doppel.cfg"
+ ],
+ "modes": {
+  "tests": {
+   "ran": true,
+   "reason": ""
+  },
+  "twin": {
+   "ran": true,
+   "reason": null,
+   "coverage": {
+    "requests": 47,
+    "served": 25,
+    "blocked": 7,
+    "stuck_personas": [],
+    "personas": 18,
+    "repaired": [
+     "probe_s1_website_quote_false",
+     "probe_s2_email_quote_false",
+     "probe_s3_edit_invalid_text_short",
+     "probe_s4_edit_extra_fields_not_stripped",
+     "probe_s5_edit_author_website_not_escaped"
+    ],
+    "reach": [
+     {
+      "id": "c1",
+      "file": "isso/views/comments.py",
+      "where": "API.new",
+      "base_lines": [
+       338,
+       342,
+       343
+      ],
+      "head_lines": [
+       338
+      ],
+      "reached_by": [
+       "alice_hello",
+       "bob_second",
+       "carol_reply",
+       "dave_edit",
+       "eve_delete",
+       "frank_bad_input",
+       "heidi_dup_email",
+       "ivan_website_escaped",
+       "judy_like",
+       "karl_dislike",
+       "mike_admin",
+       "probe_s1_website_quote_false",
+       "probe_s2_email_quote_false",
+       "probe_s3_edit_invalid_text_short",
+       "probe_s4_edit_extra_fields_not_stripped",
+       "probe_s5_edit_author_website_not_escaped"
+      ],
+      "reached_in": [
+       "base",
+       "head"
+      ]
+     },
+     {
+      "id": "c2",
+      "file": "isso/views/comments.py",
+      "where": "API.edit",
+      "base_lines": [
+       554,
+       555,
+       556,
+       558,
+       559
+      ],
+      "head_lines": [],
+      "reached_by": [
+       "probe_s4_edit_extra_fields_not_stripped",
+       "probe_s5_edit_author_website_not_escaped"
+      ],
+      "reached_in": [
+       "base"
+      ]
+     },
+     {
+      "id": "c3",
+      "file": "isso/views/comments.py",
+      "where": "API.moderate",
+      "base_lines": [
+       805,
+       808,
+       809,
+       811,
+       812,
+       813,
+       815,
+       816,
+       817,
+       819,
+       820
+      ],
+      "head_lines": [],
+      "reached_by": [],
+      "reached_in": []
+     }
+    ]
+   },
+   "personas": 18,
+   "source": "written by Nemotron for this PR"
+  }
+ },
+ "suspicions": [
+  {
+   "id": "s1",
+   "claim": "Website field is now escaped with quote=False instead of quote=True, so double quotes in website URLs are no longer escaped to &quot;.",
+   "route": "POST /new?uri=/test",
+   "trigger": "POST /new?uri=/test with JSON {\"text\": \"test comment\", \"author\": \"Test\", \"email\": \"test@test.com\", \"website\": \"https://example.com/\\\"quoted\\\"\"} and read back the created comment's website field Send each of these values: \"https://example.com/\\\"quoted\\\"\"",
+   "inputs": [
+    "https://example.com/\"quoted\""
+   ],
+   "status": "confirmed",
+   "evidence": "probe_s1_website_quote_false: POST /new?uri=/blog/hello-world changed: website ({\"website\": \"https://example.com/&quot;quoted&quot;\"} \u2192 {\"website\": \"https://example.com/\\\"quoted\\\"\"}); probe_s1_website_quote_false: GET /id/4 changed: website ({\"website\": \"https://example.com/&quot;quoted&quot;\"} \u2192 {\"website\": \"https://example.com/\\\"quoted\\\"\"})",
+   "changes": [
+    "f1",
+    "f2"
+   ]
+  },
+  {
+   "id": "s2",
+   "claim": "Email field is now escaped with quote=False (was not escaped before), so single and double quotes in email addresses are now escaped to &#39; and &quot;.",
+   "route": "POST /new?uri=/test",
+   "trigger": "POST /new?uri=/test with JSON {\"text\": \"test comment\", \"author\": \"Test\", \"email\": \"test'quoted@test.com\", \"website\": null} and read back the created comment's email field Send each of these values: \"test'quoted@test.com\", \"test\\\\\\\"quoted@test.com\"",
+   "inputs": [
+    "test'quoted@test.com",
+    "test\\\"quoted@test.com"
+   ],
+   "status": "refuted",
+   "evidence": "Probe probe_s2_email_quote_false sent email with single quote; base and head both returned identical responses, showing no escaping change.",
+   "changes": []
+  },
+  {
+   "id": "s3",
+   "claim": "Edit comment endpoint no longer validates input data via API.verify, so invalid comments (e.g. text < 3 chars) can now be saved via edit.",
+   "route": "PUT /id/1/edit/<hash>",
+   "trigger": "Create a valid comment, then PUT /id/<id>/edit/<hash> with JSON {\"text\": \"ab\", \"author\": \"Test\", \"email\": \"test@test.com\", \"website\": null} and observe 200 OK with the too-short text saved Send each of these values: \"ab\"",
+   "inputs": [
+    "ab"
+   ],
+   "status": "refuted",
+   "evidence": "Probe probe_s3_edit_invalid_text_short sent too-short text; both base and head rejected with 400, so validation still runs.",
+   "changes": []
+  },
+  {
+   "id": "s4",
+   "claim": "Edit comment endpoint no longer strips unknown fields from request JSON, so extra fields like 'parent' or 'notification' sent in edit request are now passed to DB update instead of being stripped.",
+   "route": "PUT /id/1/edit/<hash>",
+   "trigger": "Create a comment, then PUT /id/<id>/edit/<hash> with JSON {\"text\": \"updated\", \"author\": \"Test\", \"email\": \"test@test.com\", \"website\": null, \"parent\": 999, \"notification\": 1} and check if parent field was updated in DB (should be null before, 999 after) Send each of these values: \"999\"",
+   "inputs": [
+    "999"
+   ],
+   "status": "refuted",
+   "evidence": "Probe probe_s4_edit_extra_fields_not_stripped sent parent=999; base and head both returned parent=null, so extra fields were still stripped.",
+   "changes": []
+  },
+  {
+   "id": "s5",
+   "claim": "Edit comment endpoint no longer escapes author and website fields, so HTML special characters in author/website during edit are stored raw instead of escaped.",
+   "route": "PUT /id/1/edit/<hash>",
+   "trigger": "Create a comment, then PUT /id/<id>/edit/<hash> with JSON {\"text\": \"updated\", \"author\": \"Test <script>\", \"email\": \"test@test.com\", \"website\": \"https://example.com/<script>\"} and read back the comment's author and website fields Send each of these values: \"Test <script>\", \"https://example.com/<script>\"",
+   "inputs": [
+    "Test <script>",
+    "https://example.com/<script>"
+   ],
+   "status": "confirmed",
+   "evidence": "probe_s5_edit_author_website_not_escaped: PUT /id/4 changed: author, website ({\"author\": \"Test &lt;script&gt;\", \"website\": \"https://example.com/&lt\u2026 \u2192 {\"author\": \"Test <script>\", \"website\": \"https://example.com/<script>\"}); probe_s5_edit_author_website_not_escaped: GET /id/4 changed: author, website ({\"author\": \"Test &lt;script&gt;\", \"website\": \"https://example.com/&lt\u2026 \u2192 {\"author\": \"Test <script>\", \"website\": \"https://example.com/<script>\"})",
+   "changes": [
+    "f3",
+    "f4"
+   ]
+  }
+ ],
+ "status": "caught",
+ "differences": 4,
+ "caught_by": [
+  "invented users"
+ ],
+ "on_route": [
+  {
+   "source": "invented users",
+   "request": "POST /new?uri=/blog/hello-world",
+   "detail": "changed: website",
+   "label": "regression",
+   "why": "The diff removes the separate escape call for website with quote=True, causing website to be escaped with quote=False instead, changing the output from &quot;quoted&quot; to \"quoted\"."
+  },
+  {
+   "source": "invented users",
+   "request": "PUT /id/4",
+   "detail": "changed: author, website",
+   "label": "regression",
+   "why": "The diff removes the escape calls for author and website in the edit action, causing HTML characters like <script> to be returned unescaped instead of being escaped as &lt;script&gt;."
+  }
+ ],
+ "other": [
+  {
+   "source": "invented users",
+   "request": "GET /id/4",
+   "detail": "changed: website",
+   "label": "regression"
+  },
+  {
+   "source": "invented users",
+   "request": "GET /id/4",
+   "detail": "changed: author, website",
+   "label": "regression"
+  }
+ ],
+ "seconds": 120.5
+}

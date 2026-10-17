@@ -1,5 +1,7 @@
 # Stage 5 benchmark: microblog-api
 
+> **Latest run (17 Oct 2026), with today's code:** review-guided Doppel caught 16/20 with 2/10 false alarms (heldout 7/7, 0/3), judged on the recordings in [guided-rerun/](guided-rerun/) with the rule added after that run ([guided-rerun-fixed/](guided-rerun-fixed/)). The tables below are the earlier run, kept as it was.
+
 30 pull requests against [miguelgrinberg/microblog-api](https://github.com/miguelgrinberg/microblog-api) (20 with a regression, 10 safe). How the PRs were made and scored: [bench/README.md](../README.md).
 
 ![results](chart.svg)
