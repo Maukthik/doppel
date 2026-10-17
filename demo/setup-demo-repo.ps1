@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: { contents: write, pull-requests: write }   # write: to publish the check page
     steps:
-      - uses: Maukthik/doppel@main
+      - uses: Maukthik/doppel@v1
         with:
           nebius-api-key: ${{ secrets.NEBIUS_API_KEY }}
           nebius-project-id: ${{ secrets.NEBIUS_PROJECT_ID }}

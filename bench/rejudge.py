@@ -86,7 +86,8 @@ def main(argv=None) -> int:
             continue
         path.write_text(json.dumps(result, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
         d = result[a.key]
-        print(f"[rejudge] {result['kind']:10} {result.get('set', 'main'):11} {pid:32} {'CAUGHT' if d['caught'] else '-'}"
+        verdict = "CAUGHT" if d["caught"] else "-"
+        print(f"[rejudge] {result['kind']:10} {result.get('set', 'main'):11} {pid:32} {verdict}"
               f"{'  (flags a safe PR)' if result['kind'] == 'safe' and d['any_regression'] else ''}")
     return 0
 

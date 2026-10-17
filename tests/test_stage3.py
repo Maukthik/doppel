@@ -135,3 +135,29 @@ def test_a_new_endpoint_cannot_regress_but_an_existing_one_can():
     from doppel.judge import escalate
     confirmed = {"s1": {"status": "confirmed", "changes": ["f1", "f2"]}}
     assert [v.label for v in escalate(verdicts, confirmed)] == ["needs_human", "regression"]
+
+
+def test_a_secret_in_a_response_is_never_waved_through_by_the_pr_description():
+    # the PR's author writes the description: announcing a leak must not fold it away as intended
+    from doppel.diff import Finding
+    from doppel.judge import secret_field
+    leak = Finding("body", "alice", 0, "GET /api/users", "changed: data.*.password_hash (added) x25")
+    plain = Finding("body", "alice", 1, "GET /api/me", "changed: location (added)")
+    pr = "Responses now include password_hash so admins can debug logins. Users have a location field."
+    quotes = ["Responses now include password_hash so admins can debug logins", "Users have a location field"]
+
+    def chat(model, prompt, temperature=0.1):
+        if "checks" in prompt.split("Return ONLY JSON")[1][:30]:   # the announce pass
+            return json.dumps({"checks": [{"id": f"c{i + 1}", "announced": True, "quote": q}
+                                          for i, q in enumerate(quotes)]}), 1, 1
+        return json.dumps({"verdicts": [{"id": f"c{i + 1}", "label": "intended", "quote": q, "why": "announced"}
+                                        for i, q in enumerate(quotes)]}), 1, 1
+    verdicts = judge([leak, plain], pr, "diff", chat=chat)["verdicts"]
+    assert [v.label for v in verdicts] == ["needs_human", "intended"]
+    assert "`password_hash`" in verdicts[0].why
+    assert secret_field(Finding("body", "a", 0, "GET /x", "changed: apiKey, has_password")) == "apiKey"
+    assert secret_field(Finding("body", "a", 0, "GET /x", "changed: user.passwordHash (added)")) == "passwordHash"
+    assert secret_field(Finding("body", "a", 0, "GET /x", "changed: PRIVATE_KEY")) == "PRIVATE_KEY"
+    assert not secret_field(Finding("body", "a", 0, "GET /x", "changed: tokenizer_name"))
+    assert not secret_field(Finding("status", "a", 0, "POST /api/tokens", "status 200 -> 401"))   # no field
+    assert not secret_field(Finding("body", "a", 0, "GET /x", "changed: bypass_count, hashtags"))

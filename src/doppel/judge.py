@@ -152,6 +152,25 @@ def on_new_route(f: Finding, routes: list[re.Pattern]) -> bool:
     return bool(m and m.group(1) in ("404", "405") and any(r.search(path) for r in routes))
 
 
+# words in a field name that say it holds a secret. Never "intended" on the PR description's word alone: the PR's
+# author writes the description, and "responses now include password_hash" would otherwise fold a leak away
+SECRET_WORDS = {"password", "passwords", "passwd", "secret", "secrets", "token", "tokens", "apikey", "apikeys",
+                "privatekey", "credential", "credentials", "salt"}
+
+
+def secret_field(f: Finding) -> str:
+    """The first field a body change touches whose name says it holds a secret ("password_hash", "apiKey",
+    "refresh_token"), or "". Names are split into words (snake_case and camelCase), so "tokenizer_name" or
+    "hashtags" don't count."""
+    if f.kind != "body":
+        return ""
+    for name in re.findall(r"[A-Za-z][A-Za-z0-9_]*", f.detail or ""):
+        words = [w.lower() for w in re.findall(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])", name)]
+        if SECRET_WORDS & (set(words) | {a + b for a, b in zip(words, words[1:], strict=False)}):
+            return name
+    return ""
+
+
 def group(findings: list[Finding]) -> dict[str, list[int]]:
     """Group findings that show the same change: same kind and same 'what changed' text
     (slow findings: same route, with ids and query ignored)."""
@@ -226,6 +245,11 @@ def judge(findings: list[Finding], pr_text: str, diff: str, model: str | None = 
                           else "The PR description doesn't announce this change. " + v.why)
         for i in idx:
             verdicts[i] = new
+    for i, f in enumerate(findings):
+        if verdicts[i] is not None and verdicts[i].label == "intended" and (field := secret_field(f)):
+            verdicts[i] = Verdict("needs_human", f"Changes `{field}`, a field that looks like it holds a secret: "
+                                  "Doppel never takes the PR description's word for these, so a person should "
+                                  "confirm it. " + verdicts[i].why)
     routes = new_routes(diff)
     for i, f in enumerate(findings):
         if verdicts[i] is not None and verdicts[i].label == "regression" and on_new_route(f, routes):

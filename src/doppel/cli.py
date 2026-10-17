@@ -302,6 +302,26 @@ def cmd_comment(a) -> int:
     return 0
 
 
+def cmd_accepted(a) -> int:
+    """Exit 0 when a maintainer has put the accept label on the PR. Anything else, including not being able to
+    read the labels, is "not accepted": a failure here must never let a regression through."""
+    import os
+
+    from doppel.github import has_label, pr_labels, pr_number_from_event
+    pr = a.pr_number or pr_number_from_event()
+    try:
+        labels = pr_labels(os.environ["GITHUB_REPOSITORY"], pr, os.environ["GITHUB_TOKEN"])
+    except Exception as e:  # noqa: BLE001 - not accepted, and say why
+        print(f"PR #{pr}: couldn't read its labels ({type(e).__name__}: {e}), so the findings stay unaccepted",
+              file=sys.stderr)
+        return 1
+    if has_label(labels, a.label):
+        print(f"PR #{pr}: a maintainer accepted the findings (label {a.label!r})")
+        return 0
+    print(f"PR #{pr}: no label {a.label!r}, so the findings stand")
+    return 1
+
+
 def main(argv=None) -> int:
     try:  # the report has emoji; a redirected Windows console would otherwise crash on them
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -404,9 +424,14 @@ def main(argv=None) -> int:
     c.add_argument("--report", required=True)
     c.add_argument("--pr-number", type=int, help="default: from the GitHub event")
     c.add_argument("--footer", default="", help="extra Markdown under the report (e.g. a link to the run)")
+    ac = sub.add_parser("accepted", help="exit 0 if a maintainer put the accept label on the PR (in GitHub Actions)")
+    ac.add_argument("--label", default="doppel: accepted")
+    ac.add_argument("--pr-number", type=int, help="default: from the GitHub event")
     a = ap.parse_args(argv)
     if a.cmd == "comment":
         return cmd_comment(a)
+    if a.cmd == "accepted":
+        return cmd_accepted(a)
     try:
         if a.cmd == "personas":
             return cmd_personas(a)

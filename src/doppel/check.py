@@ -53,8 +53,8 @@ def twin_mode(a, pr_text_file: str | None, log) -> dict:
     base, head = Path(a.base), Path(a.head)
     if not (base / "doppel.toml").exists() and not (head / "doppel.toml").exists():
         return {"ran": False, "skipped": True,
-                "reason": "not set up (no doppel.toml): `doppel init` writes one, so invented users can explore "
-                          "what no test calls"}
+                "reason": "off (this repo has no doppel.toml). `doppel init` writes one, so invented users can "
+                          "explore what no test calls"}
     from doppel import cli
     with tempfile.TemporaryDirectory(prefix="doppel-check-") as tmp:
         personas = a.personas or str(base / "doppel-personas.json")
@@ -258,7 +258,9 @@ def report(tests: dict, twin: dict) -> str:
                        f"({twin.get('source', '')}), replayed in both worlds{served}.")
     else:
         summary.append(f"- **Invented users** (the twin): {twin['reason'].splitlines()[0][:300]}")
-    lines += ["Two independent checks compared the code before and after this PR:", "", *summary]
+    intro = ("Doppel compared the code before and after this PR:" if twin.get("skipped") else
+             "Two independent checks compared the code before and after this PR:")
+    lines += [intro, "", *summary]
     if regressions:
         title = ("### Behavior changes (not judged: no PR description given)" if unjudged
                  else "### 🚨 Regressions the PR doesn't mention")

@@ -31,6 +31,18 @@ def pr_number_from_event(path: str | None = None) -> int:
     return int(number)
 
 
+def pr_labels(repo: str, pr: int, token: str, request=_request) -> list[str]:
+    """The pull request's labels as they are now. Not from the event payload: a re-run carries the payload of
+    the first run, and the label a maintainer added since is exactly what it has to see."""
+    pull = request("GET", f"{API}/repos/{repo}/pulls/{pr}", token) or {}
+    return [str(label.get("name", "")) for label in pull.get("labels") or [] if isinstance(label, dict)]
+
+
+def has_label(labels: list[str], wanted: str) -> bool:
+    """GitHub label names are unique regardless of case."""
+    return wanted.strip().lower() in {label.strip().lower() for label in labels}
+
+
 def upsert_comment(body: str, repo: str, pr: int, token: str, request=_request) -> str:
     """Edit Doppel's existing comment on the PR, or create it. Returns "updated" or "created"."""
     body = f"{MARKER}\n{body}"

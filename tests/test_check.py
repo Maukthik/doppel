@@ -44,7 +44,8 @@ def test_no_doppel_toml_is_test_mode_only(tmp_path, capsys):
     base, head = flask_repo(tmp_path / "b"), flask_repo(tmp_path / "h", LEAKY)
     assert run("--base", base, "--head", head, "--strict") == 1
     md = capsys.readouterr().out
-    assert "not set up (no doppel.toml)" in md and "| your tests |" in md and "| invented users |" not in md
+    assert "off (this repo has no doppel.toml)" in md and "Doppel compared the code" in md
+    assert "| your tests |" in md and "| invented users |" not in md
 
 
 def test_same_code_is_quiet_in_both_modes(tmp_path, capsys):
@@ -67,6 +68,47 @@ def test_the_action_runs_doppel_check_with_base_branch_personas():
     script = next(s["run"] for s in action["runs"]["steps"] if s.get("name") == "Run Doppel")
     assert "doppel check" in script and "--strict" in script and 'PERSONAS="$BASE/' in script
     assert "--no-twin" in script and action["inputs"]["twin"]["default"] == "auto"
+
+
+def test_a_maintainer_label_accepts_the_findings_and_a_lookup_failure_never_does(monkeypatch, capsys):
+    from doppel import cli, github
+    seen = []
+
+    def api(method, url, token, body=None):
+        seen.append((method, url))
+        return {"number": 7, "labels": [{"name": "bug"}, {"name": "Doppel: Accepted"}]}
+    assert github.pr_labels("o/r", 7, "t", request=api) == ["bug", "Doppel: Accepted"]
+    assert seen == [("GET", f"{github.API}/repos/o/r/pulls/7")]   # read now, not from the event payload
+    assert github.has_label(["bug", "Doppel: Accepted"], "doppel: accepted")   # labels ignore case
+    assert not github.has_label(["bug"], "doppel: accepted")
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.setattr(github, "pr_labels", lambda repo, pr, token: ["doppel: accepted"])
+    assert cli.main(["accepted", "--pr-number", "7"]) == 0
+    monkeypatch.setattr(github, "pr_labels", lambda repo, pr, token: ["bug"])
+    assert cli.main(["accepted", "--pr-number", "7"]) == 1
+
+    def down(repo, pr, token):
+        raise OSError("API unreachable")
+    monkeypatch.setattr(github, "pr_labels", down)
+    assert cli.main(["accepted", "--pr-number", "7"]) == 1   # can't tell: the regressions still fail the check
+    assert "couldn't read its labels" in capsys.readouterr().err
+
+
+def test_the_action_warns_instead_of_failing_when_it_could_not_check_and_honors_the_label():
+    import pytest
+    yaml = pytest.importorskip("yaml")
+    from pathlib import Path
+    action = yaml.safe_load((Path(__file__).parent.parent / "action.yml").read_text(encoding="utf-8"))
+    steps = {s.get("name"): s for s in action["runs"]["steps"]}
+    assert action["inputs"]["fail-on-error"]["default"] == "false"
+    assert action["inputs"]["accept-label"]["default"] == "doppel: accepted"
+    run = steps["Run Doppel"]["run"]
+    assert "::warning title=Doppel::" in run and '[ "$FAIL_ON_ERROR" = "true" ] && exit' in run
+    assert "couldn't check this PR" in run and '"***"' in run   # a report even when Doppel stops early
+    assert "doppel accepted" in steps["Check for the accept label"]["run"]
+    assert "steps.accept.outputs.accepted != 'true'" in steps["Fail on regressions"]["if"]
 
 
 def test_the_report_groups_requests_into_distinct_changes():

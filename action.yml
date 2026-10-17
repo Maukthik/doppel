@@ -30,6 +30,12 @@ inputs:
   fail-on-regression:
     description: Fail the check when the judge finds a regression
     default: "true"
+  accept-label:
+    description: "A maintainer adds this label and re-runs the check to accept Doppel's findings: the check passes and the comment still lists them. Only people who can label the PR (triage access or more) can do this"
+    default: "doppel: accepted"
+  fail-on-error:
+    description: "true = fail the check when Doppel couldn't compare the two versions (the app didn't install, no test ran, ...); false = pass with a warning and the reason in the comment"
+    default: "false"
   nebius-api-key:
     description: Nebius Token Factory API key (store it as a repository secret)
     required: true
@@ -72,6 +78,7 @@ runs:
         NEBIUS_PROJECT_ID: ${{ inputs.nebius-project-id }}
         PR_TITLE: ${{ github.event.pull_request.title }}
         PR_BODY: ${{ github.event.pull_request.body }}
+        FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
       run: |
         set +e
         # pasted secrets often carry a trailing newline or space, which HTTP headers reject
@@ -108,14 +115,47 @@ runs:
         if [ "${{ inputs.judge }}" = "true" ]; then ARGS+=(--pr .doppel/out/PR.md); fi
         if [ "${{ inputs.guided }}" != "true" ]; then ARGS+=(--no-guided); fi
         if [ "${{ inputs.twin }}" = "off" ]; then ARGS+=(--no-twin); fi
-        doppel check "${ARGS[@]}"
-        code=$?
+        doppel check "${ARGS[@]}" 2>&1 | tee .doppel/out/doppel.log
+        code=${PIPESTATUS[0]}
+        if [ ! -f .doppel/out/report.md ]; then
+          # Doppel stopped before writing a report: the comment still says so, with the end of the log
+          # (secret values replaced: a comment isn't masked the way the job log is)
+          python - <<'PY'
+        import os, pathlib
+        text = pathlib.Path(".doppel/out/doppel.log").read_text("utf-8", "replace")
+        for name in ("NEBIUS_API_KEY", "NEBIUS_PROJECT_ID"):
+            if os.environ.get(name):
+                text = text.replace(os.environ[name], "***")
+        tail = "\n".join(text.splitlines()[-25:]).replace("```", "'''") or "(no output)"
+        pathlib.Path(".doppel/out/report.md").write_text(
+            "## Doppel: couldn't check this PR\n\nDoppel stopped before it could compare the two versions. "
+            "The end of its log:\n\n```\n" + tail + "\n```\n", encoding="utf-8")
+        PY
+        fi
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
         [ -f .doppel/out/report.md ] && cat .doppel/out/report.md >> "$GITHUB_STEP_SUMMARY"
         [ -f .doppel/out/run.json ] && doppel view .doppel/out/run.json --no-open --out .doppel/out/doppel-run.html || true
         [ -f .doppel/out/check.json ] && doppel view .doppel/out/check.json --no-open --public \
           --out .doppel/out/doppel-check.html || true
-        [ $code -le 1 ] || exit $code
+        if [ "$code" -gt 1 ]; then
+          # couldn't compare is no verdict either way: by default it warns instead of failing the PR
+          [ "$FAIL_ON_ERROR" = "true" ] && exit "$code"
+          echo "::warning title=Doppel::Doppel couldn't check this pull request; the reason is in the PR comment. This doesn't fail the check (fail-on-error: true makes it fail)."
+        fi
+    - name: Check for the accept label
+      id: accept
+      if: always() && steps.run.outputs.exit-code == '1'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        LABEL: ${{ inputs.accept-label }}
+      run: |
+        # read from the PR now, not from the event: a re-run carries the first run's event, which doesn't have
+        # the label a maintainer added afterwards
+        if doppel accepted --label "$LABEL"; then
+          echo "accepted=true" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Doppel::A maintainer accepted these findings with the label '$LABEL'; the check passes."
+        fi
     - name: Publish the check page
       id: page
       if: always() && inputs.publish-page == 'true' && hashFiles('.doppel/out/doppel-check.html') != ''
@@ -157,13 +197,23 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         PAGE: ${{ steps.page.outputs.url }}
         RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        CODE: ${{ steps.run.outputs.exit-code }}
+        ACCEPTED: ${{ steps.accept.outputs.accepted }}
+        LABEL: ${{ inputs.accept-label }}
+        FAILS: ${{ inputs.fail-on-regression }}
       run: |
+        NOTE=""
+        if [ "$ACCEPTED" = "true" ]; then
+          NOTE="✅ **Accepted by a maintainer:** this PR has the label \`$LABEL\`, so these findings don't fail the check. Removing the label makes them fail it again.<br><br>"
+        elif [ "$CODE" = "1" ] && [ "$FAILS" = "true" ]; then
+          NOTE="If these changes are what you want, a maintainer can add the label \`$LABEL\` and re-run this check: it then passes, and this comment keeps the findings.<br><br>"
+        fi
         if [ -n "$PAGE" ]; then
           FOOT="**[Open the full check page →]($PAGE)** (ready about a minute after this comment)<br>"
         else
           FOOT="The full check page (doppel-check.html) is in the [run artifacts]($RUN).<br>"
         fi
-        FOOT="$FOOT<sub>Raw recordings and the twin's replay: [run artifacts]($RUN)</sub>"
+        FOOT="$NOTE$FOOT<sub>Raw recordings and the twin's replay: [run artifacts]($RUN)</sub>"
         doppel comment --report .doppel/out/report.md --footer "$FOOT"
     - name: Upload artifacts
       if: always()
@@ -173,7 +223,7 @@ runs:
         path: .doppel/out/
         if-no-files-found: ignore
     - name: Fail on regressions
-      if: steps.run.outputs.exit-code == '1' && inputs.fail-on-regression == 'true'
+      if: steps.run.outputs.exit-code == '1' && inputs.fail-on-regression == 'true' && steps.accept.outputs.accepted != 'true'
       shell: bash
       env:
         PAGE: ${{ steps.page.outputs.url }}
