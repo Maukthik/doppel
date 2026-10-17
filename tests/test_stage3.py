@@ -108,3 +108,30 @@ def test_cli_with_pr_writes_judged_report_and_tests(tmp_path, monkeypatch):
     assert code == 1                                            # regressions fail CI
     assert "regression(s)" in (tmp_path / "r.md").read_text(encoding="utf-8")
     assert "def test_" in (tmp_path / "test_reg.py").read_text(encoding="utf-8")
+
+
+def test_a_new_endpoint_cannot_regress_but_an_existing_one_can():
+    from doppel.diff import Finding
+    from doppel.judge import new_routes, on_new_route
+    # s10: the PR adds GET /users/<id>/stats; base answered 404 because the route didn't exist
+    diff = ("--- a/api/users.py\n+++ b/api/users.py\n+@users.route('/users/<int:id>/stats', methods=['GET'])\n"
+            "--- a/tests/test_users.py\n+++ b/tests/test_users.py\n+    rv = self.client.get('/api/users/1/posts')\n")
+    routes = new_routes(diff)
+    assert len(routes) == 1          # a test calling a route doesn't define one
+    stats = Finding("status", "alice", 0, "GET /api/users/1/stats", "status 404 -> 401", 404, 401)
+    posts = Finding("status", "bob", 0, "GET /api/users/1/posts", "status 404 -> 200", 404, 200)  # r16
+    assert on_new_route(stats, routes) and not on_new_route(posts, routes)
+    assert not new_routes("-@bp.route('/old')\n+@bp.route('/old', methods=['POST'])\n")   # changed, not new
+    assert not new_routes("+@bp.route('/<int:id>')\n")   # too generic to tell
+
+    def chat(model, prompt, temperature=0.1):
+        if "checks" in prompt.split("Return ONLY JSON")[1][:30]:
+            return '{"checks": []}', 1, 1
+        return json.dumps({"verdicts": [{"id": "c1", "label": "regression", "why": "needs a login"},
+                                        {"id": "c2", "label": "regression", "why": "no 404"}]}), 1, 1
+    verdicts = judge([stats, posts], "Add a stats endpoint", diff, chat=chat)["verdicts"]
+    assert [v.label for v in verdicts] == ["needs_human", "regression"]
+    # a reviewer's confirmed suspicion doesn't turn it back into a regression
+    from doppel.judge import escalate
+    confirmed = {"s1": {"status": "confirmed", "changes": ["f1", "f2"]}}
+    assert [v.label for v in escalate(verdicts, confirmed)] == ["needs_human", "regression"]

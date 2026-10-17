@@ -49,7 +49,8 @@ def test_check_confirms_refutes_and_defaults_to_untested():
     def fake(model, prompt, temperature=0.7):
         assert "probe 'probe zero' for s1" in prompt and "base 400" in prompt and "head 201" in prompt
         return json.dumps({"checks": [{"id": "s1", "status": "confirmed", "changes": ["f1"], "evidence": "400 -> 201"},
-                                      {"id": "s2", "status": "refuted", "evidence": "same in both"}]}), 10, 5
+                                      {"id": "s2", "status": "refuted", "sent": "lamp",
+                                       "evidence": "same in both"}]}), 10, 5
 
     out = check(sus, findings, None, probes, w["base"], w["head"], chat=fake)["checks"]
     assert [out[k]["status"] for k in ("s1", "s2", "s3")] == ["confirmed", "refuted", "untested"]
@@ -173,3 +174,39 @@ def test_the_published_r17_run_shows_every_suspicion_confirmed():
     raw = json.loads((Path(__file__).resolve().parent.parent / "site/runs/r17-hash-leak-nebius.json").read_text())
     assert {x["id"]: x["status"] for x in raw["suspicions"]}["s1"] == "refuted"   # as recorded
     assert {x["status"] for x in run_data(raw)["suspicions"]} == {"confirmed"}     # as shown
+
+
+def test_a_refutation_needs_the_triggering_value_a_probe_really_sent():
+    # isso, 16 Oct: s1 (quote=False instead of quote=True) was refuted on a probe that only sent '&',
+    # which both versions escape the same way
+    probes = [{"name": "probe_s1", "probe": "s1", "steps": []}]
+    base = [{"persona": "probe_s1", "steps": [
+        {"request": "POST /new?uri=/blog/a", "sent": {"website": "https://ex.com?a=1&b=2"},
+         "status": 201, "body": {}}]}]
+    sus = [{"id": "s1", "claim": "quotes in website no longer escaped"}]
+
+    def checker(sent):
+        def chat(model, prompt, **kw):
+            assert 'sent {"website": "https://ex.com?a=1&b=2"}' in prompt   # the checker sees what was sent
+            return json.dumps({"checks": [{"id": "s1", "status": "refuted", "sent": sent, "evidence": "same"}]}), 1, 1
+        return check(sus, [], None, probes, base, base, chat=chat)["checks"]["s1"]
+
+    assert checker("&")["status"] == "refuted"             # it was sent: the checker's call (the prompt asks it
+    assert checker("'")["status"] == "untested"            # to pick a value that differs); never sent: untested
+    assert "no probe sent the triggering value" in checker("'")["evidence"]
+    assert checker("")["status"] == "untested"
+    assert checker("https://ex.com?a=1&b=2")["status"] == "refuted"
+
+
+def test_suspicions_carry_the_exact_inputs_into_the_trigger():
+    reply = {"suspicions": [{"claim": "quotes no longer escaped", "route": "POST /new",
+                             "trigger": "send a website", "inputs": ["https://x.com/'q'", "a\"b"]}]}
+    seen = {}
+
+    def chat(model, prompt, temperature=0.7):
+        seen["prompt"] = prompt
+        return json.dumps(reply), 1, 1
+    s = suspect("pr", "diff", "src", chat=chat)["suspicions"][0]
+    assert s["inputs"] == ["https://x.com/'q'", 'a"b']
+    assert s["trigger"].startswith("send a website Send each of these values:") and "'q'" in s["trigger"]
+    assert "treat DIFFERENTLY" in seen["prompt"]

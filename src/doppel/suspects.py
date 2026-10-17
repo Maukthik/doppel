@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from urllib.parse import unquote_plus
 
 from doppel.personas import cost_usd, nemotron_chat, parse_json
 
@@ -33,11 +34,15 @@ authorization mistakes, wrong side effects. Prefer recall: if in doubt, list it;
 app will check each one. Skip changes the description announces.
 
 For each, say exactly how to trigger it with HTTP requests against the API (which route, which
-input, and what to read back afterwards to see the effect).
+input, and what to read back afterwards to see the effect). The trigger input must be one that the code
+before and after the PR treat DIFFERENTLY: an input both versions handle the same way proves nothing. When
+it depends on characters or values, name every one that differs (e.g. escaping with quote=False instead of
+quote=True differs on ' and " only; & and < are escaped either way), and list them in "inputs".
 
 Return ONLY JSON:
 {{"suspicions": [{{"id": "s1", "claim": "one sentence", "route": "METHOD /path",
-                   "trigger": "requests to send and what to read back"}}]}}
+                   "trigger": "requests to send and what to read back",
+                   "inputs": ["each exact value to send that base and head treat differently"]}}]}}
 Use at most {max_n} suspicions, most likely first. Return an empty list if the PR is a pure refactor.
 
 PR description:
@@ -56,12 +61,16 @@ suspicion decide, from the evidence only:
 - "confirmed": one or more observed behavior changes show it; list their ids in "changes".
   Base and head answering the same is never "confirmed".
 - "refuted": a probe reached the route with input that would trigger it, and base and head
-  answered the same, so it does not happen.
+  answered the same, so it does not happen. The input has to be one that the suspected change and the
+  old code would treat differently (a suspicion about quotes needs a probe that sent a quote; an input
+  both versions handle the same way refutes nothing: that is "untested"). Put the exact value the probe
+  sent, copied from its request, in "sent".
 - "untested": no request reached it with triggering input (wrong route, login failed, 404 from a
   bad path, unresolved placeholder like {{post_id}}), so the evidence says nothing.
 
 Return ONLY JSON:
 {{"checks": [{{"id": "s1", "status": "confirmed|refuted|untested", "changes": ["f1"],
+               "sent": "for refuted: the triggering value the probe sent, copied exactly",
                "evidence": "one sentence naming the request(s) and what base and head answered"}}]}}
 
 Suspicions:
@@ -88,8 +97,13 @@ def suspect(pr_text: str, diff: str, source: str, model: str | None = None, max_
         raw = parse_json(text, key="suspicions")
         for i, s in enumerate(raw.get("suspicions", []) if isinstance(raw, dict) else []):
             if isinstance(s, dict) and s.get("claim"):
+                inputs = [str(v)[:120] for v in s.get("inputs", []) if str(v).strip()][:6] \
+                    if isinstance(s.get("inputs"), list) else []
+                trigger = str(s.get("trigger", ""))[:400]
+                if inputs:  # the probe writer reads the trigger: the exact values go with it
+                    trigger += " Send each of these values: " + ", ".join(json.dumps(v) for v in inputs)
                 out.append({"id": f"s{len(out) + 1}", "claim": str(s["claim"])[:300],
-                            "route": str(s.get("route", ""))[:80], "trigger": str(s.get("trigger", ""))[:400]})
+                            "route": str(s.get("route", ""))[:80], "trigger": trigger, "inputs": inputs})
             if len(out) >= max_n or i > 3 * max_n:
                 break
         if out or (isinstance(raw, dict) and isinstance(raw.get("suspicions"), list)):
@@ -115,8 +129,28 @@ def _probe_lines(personas: list[dict], base: list[dict], head: list[dict], limit
         for sb, sh in zip(rb["steps"], rh["steps"], strict=False):
             b = json.dumps(sb["body"], ensure_ascii=False, default=str)[:140]
             h = json.dumps(sh["body"], ensure_ascii=False, default=str)[:140]
-            lines.append(f"  {sb['request']} -> base {sb['status']} {b} | head {sh['status']} {h}")
+            sent = f" sent {json.dumps(sb['sent'], ensure_ascii=False, default=str)[:200]}" if sb.get("sent") else ""
+            lines.append(f"  {sb['request']}{sent} -> base {sb['status']} {b} | head {sh['status']} {h}")
     return "\n".join(lines)[:limit] or "(no probe personas ran)"
+
+
+def _norm_sent(text: str) -> str:
+    """A value as it can appear in a request: JSON-escaped or not, URL-quoted or not."""
+    return unquote_plus(str(text)).replace('\\"', '"').replace("\\'", "'").replace("\\\\", "\\")
+
+
+def probe_sent(personas: list[dict], base: list[dict]) -> str:
+    """Everything the probe personas sent in the base world (paths and bodies), for checking a refutation."""
+    probes = {p["name"] for p in personas if is_probe(p)}
+    out = []
+    for r in base:
+        if r.get("persona") in probes:
+            for st in r.get("steps", []):
+                out.append(str(st.get("request", "")))
+                if st.get("sent") is not None:
+                    sent = st["sent"]
+                    out.append(sent if isinstance(sent, str) else json.dumps(sent, ensure_ascii=False, default=str))
+    return _norm_sent("\n".join(out))
 
 
 def _get(obj, name):
@@ -174,6 +208,7 @@ def check(suspicions: list[dict], findings, verdicts, personas: list[dict], base
     got = {str(c.get("id")): c for c in (raw.get("checks", []) if isinstance(raw, dict) else [])
            if isinstance(c, dict) and c.get("status") in STATUSES}
     ids = {f"f{i + 1}" for i in range(len(findings))}
+    sent_by_probes = probe_sent(personas, base)
     checks = {}
     for s in suspicions:
         c = got.get(s["id"], {})
@@ -181,6 +216,13 @@ def check(suspicions: list[dict], findings, verdicts, personas: list[dict], base
         cited = [x for x in (c.get("changes") or []) if str(x) in ids] if isinstance(c.get("changes"), list) else []
         if status == "confirmed" and not cited:  # no observed change behind it: it is not proof
             status, evidence = "untested", f"(no observed change cited) {evidence}"
+        sent = str(c.get("sent") or "").strip()
+        if status == "refuted" and (not sent or _norm_sent(sent) not in sent_by_probes):
+            # isso, 16 Oct: s1 (quote escaping) was refuted on a probe that only sent '&'. A refutation has to
+            # name the triggering value, and a probe has to have sent it
+            status = "untested"
+            evidence = (f"(no probe sent the triggering value {sent!r}) " if sent else
+                        "(the checker named no triggering value a probe sent) ") + evidence
         checks[s["id"]] = {"status": status, "evidence": evidence, "changes": cited}
     labels = [v.label if v else None for v in (verdicts or [None] * len(findings))]
     fixed = reconcile([{**s, **checks[s["id"]]} for s in suspicions], findings, labels, personas)

@@ -89,6 +89,9 @@ def announced(quote: str, pr_text: str) -> bool:
     return len(q) >= 8 and q in _norm(pr_text)
 
 
+NEW_ENDPOINT = "A new endpoint this PR adds"
+
+
 def escalate(verdicts: list, checks: dict) -> list:
     """A change the reviewer suspected and the twin confirmed is a regression unless the judge could
     quote the description announcing it. Returns new verdicts (same order)."""
@@ -96,11 +99,57 @@ def escalate(verdicts: list, checks: dict) -> list:
            for c in chk.get("changes", []) if str(c).startswith("f") and str(c)[1:].isdigit()}
     out = []
     for i, v in enumerate(verdicts):
-        if i in hit and v is not None and v.label == "needs_human":
+        if i in hit and v is not None and v.label == "needs_human" and not v.why.startswith(NEW_ENDPOINT):
             v = Verdict("regression", "The reviewer suspected it, the twin confirmed it, and the PR description "
                                       "doesn't announce it. " + v.why.removeprefix("Not found in the PR description: "))
         out.append(v)
     return out
+
+
+# a route definition: @x.route('/a'), add_url_rule('/a'), Django path('a/'), and FastAPI-style @app.get('/a') only
+# as a decorator (client.get('/a') in a test calls a route, it doesn't define one)
+_LITERAL = r"""\(\s*[rRuUbB]?['"]([^'"]+)['"]"""
+ROUTE_CALL = re.compile(r"(?:\.route|add_url_rule|add_api_route|\bre_path|\bpath|\burl)" + _LITERAL)
+ROUTE_DECORATOR = re.compile(r"^\s*@\w+(?:\.\w+)*\.(?:get|post|put|patch|delete|api_route)" + _LITERAL)
+TEST_FILE = re.compile(r"(^|/)(tests?/|test_[^/]*$|[^/]*_test\.py$|conftest\.py$)")
+
+
+def _routes(diff: str, sign: str) -> set[str]:
+    out, in_test = set(), False
+    for line in diff.splitlines():
+        if line.startswith(("+++ ", "--- ")):
+            name = line[4:].split("\t")[0].strip()
+            if name != "/dev/null":
+                in_test = bool(TEST_FILE.search(name.removeprefix("a/").removeprefix("b/")))
+            continue
+        if in_test or not line.startswith(sign):
+            continue
+        code = line[1:]
+        out |= {m.group(1) for m in ROUTE_CALL.finditer(code)}
+        if m := ROUTE_DECORATOR.match(code):
+            out.add(m.group(1))
+    return out
+
+
+def new_routes(diff: str) -> list[re.Pattern]:
+    """URL patterns the PR adds (a route literal on an added line that no removed line has), as regexes
+    matching the end of a request path: '/users/<int:id>/stats' matches GET /api/users/7/stats."""
+    out = []
+    for route in _routes(diff, "+") - _routes(diff, "-"):
+        parts = [p for p in route.strip("/").split("/") if p]
+        if not parts or all(p[0] in "<{" for p in parts):
+            continue  # "/" or "/<id>" alone would match almost anything
+        body = "/".join("[^/]+" if p[0] in "<{" else re.escape(p) for p in parts)
+        out.append(re.compile(rf"(^|/){body}/?$"))
+    return out
+
+
+def on_new_route(f: Finding, routes: list[re.Pattern]) -> bool:
+    """A status change from 404/405 on a request to a route the PR adds: there was no endpoint before, so
+    there was no behavior to break. r16 (an existing route that stopped answering 404) is not this."""
+    m = re.match(r"status (\d+) -> (\d+)", f.detail or "")
+    path = f.request.partition(" ")[2].split("?")[0]
+    return bool(m and m.group(1) in ("404", "405") and any(r.search(path) for r in routes))
 
 
 def group(findings: list[Finding]) -> dict[str, list[int]]:
@@ -177,6 +226,12 @@ def judge(findings: list[Finding], pr_text: str, diff: str, model: str | None = 
                           else "The PR description doesn't announce this change. " + v.why)
         for i in idx:
             verdicts[i] = new
+    routes = new_routes(diff)
+    for i, f in enumerate(findings):
+        if verdicts[i] is not None and verdicts[i].label == "regression" and on_new_route(f, routes):
+            verdicts[i] = Verdict("needs_human", f"{NEW_ENDPOINT} (it answered "
+                                  f"{f.detail.split()[1]} before the PR, so there was no behavior to break); "
+                                  "check that its behavior is the one you want. " + verdicts[i].why)
     summary = str(raw.get("summary", "")) if isinstance(raw, dict) else ""
     return {"verdicts": verdicts, "summary": summary[:500], "model": model,
             "usd": cost_usd(model, tin, tout) + cost_usd(model, ain, aout), "groups": len(groups)}
