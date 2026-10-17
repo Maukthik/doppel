@@ -27,3 +27,9 @@ new endpoint, which is exactly what the description says.
 So the twin didn't get noisier, but the judge's call on announced changes is unstable from run to run. The same
 strict second pass is what catches r01, r05, r09, r11, h04 and h05, where the first pass explains the change away
 from the diff, so removing it would trade false alarms for misses.
+
+**Rejudged three times** on the same recordings (`bench/rejudge.py`, folders `../guided-rerun-j1` to `j3`), with
+identical results: main 16/20 caught, 3/10 false alarms; heldout 7/7, 0/3; consequence 2/3, 0/5. The live run's
+extra false alarms (h10, c-s1, c-s3, c-s5) didn't recur. The three that stay (s07, s09, s10) come from what the
+new probes recorded: two are behaviour the PR description doesn't mention (s10's endpoint needs a login, s09's
+`POST /api/users` accepts `location`), and s07 is a judge miss on a knock-on effect of the announced change.
