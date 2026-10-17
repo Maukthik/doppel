@@ -378,8 +378,9 @@ def test_tox_usedevelop_still_installs_the_project(tmp_path):
     assert any("pip install --quiet -e ." in step for step in plan(tmp_path).install)
 
 
-def test_a_project_that_wont_build_does_not_stop_the_tox_install(tmp_path):
+def test_without_skipsdist_tox_installs_the_project_and_a_failure_is_not_hidden(tmp_path):
+    # isso, 17 Oct: tox deps are only pytest; the package install brings werkzeug. Swallowing its failure
+    # ("|| carry on") skipped the build-tools retry and every test then failed to import
     write(tmp_path, {"tox.ini": "[testenv]\ncommands=\n    pytest\ndeps=\n    pytest\n",
                      "setup.py": "from setuptools import setup\nsetup(name='x')\n"})
-    step = plan(tmp_path).install[-1]
-    assert step.startswith("(pip install --quiet -e . ||") and "did not install as a package" in step
+    assert "pip install --quiet -e ." in plan(tmp_path).install

@@ -90,8 +90,9 @@ UNFILLED = re.compile(r"\{[A-Za-z_]\w*\}")
 
 
 def probe_stuck(recording: dict) -> bool:
-    """A probe request that can't have reached its code: a 405, or a placeholder never filled in."""
-    return any(s.get("status") == 405 or UNFILLED.search(str(s.get("request", "")).split("?")[0])
+    """A probe request that can't have reached its code: a 405, no answer at all (status 0: the URL couldn't
+    be sent, as isso's "PUT /id/XSS test" with a name where an id belongs), or a placeholder never filled in."""
+    return any(s.get("status") in (0, 405) or UNFILLED.search(str(s.get("request", "")).split("?")[0])
                for s in recording["steps"])
 
 

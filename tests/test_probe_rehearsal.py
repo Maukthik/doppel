@@ -50,6 +50,7 @@ def test_a_probe_that_meant_to_get_404_is_not_stuck():
 
 def test_an_unfilled_placeholder_is_stuck_but_a_query_with_braces_is_not():
     assert probe_stuck(rec("probe-s1", ("GET /api/users/{user_id}", 404)))
+    assert probe_stuck(rec("probe-s3", ("PUT /id/XSS test", 0)))   # isso, 17 Oct: the URL couldn't be sent
     assert not probe_stuck(rec("probe-s1", ("GET /api/search?q={x}", 200)))
 
 

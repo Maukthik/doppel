@@ -805,8 +805,9 @@ def plan(repo: str | Path) -> SetupPlan:
             p.install = ["pip install --quiet " + " ".join(d if d.startswith(("-r", "-e")) else f"'{d}'"
                                                            for d in tox_deps)]
             if installable(repo) and not tox_skip and not any(d.startswith("-e") for d in tox_deps):
-                # tox's deps are in; a project that won't build as a package still runs its tests from its folder
-                p.install.append(f"(pip install --quiet -e . || {SELF_INSTALL_NOTE})")
+                # not "|| carry on": tox's deps are often only the test tools and the package install brings the
+                # app's own dependencies (isso: werkzeug); a failure here must reach the build-tools retry
+                p.install.append("pip install --quiet -e .")
             p.source["install"] = "tox.ini deps"
         else:
             p.install, p.source["install"] = project_install(repo), "the project's dependencies"
