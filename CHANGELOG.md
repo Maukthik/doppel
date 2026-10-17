@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+Seven gaps found while writing the architecture guide, each pinned by a test in `tests/test_hardening.py`:
+- Test mode expands tox's own substitutions (`{posargs:tests}`, `{posargs}`, `{toxinidir}`, `{envpython}`),
+  which pytest used to take for paths.
+- A project's `PYTEST_ADDOPTS` is added to Doppel's options instead of replacing them, and
+  `PYTHONHASHSEED=random` from a project is ignored, so random order and hash randomization stay off.
+- The judge groups a status change, a crash or a changed request per route: a 500 on two unrelated routes is two
+  changes with two verdicts. A field change still counts once wherever it appears.
+- `--tests-out` is written after the reviewer's confirmed suspicions are applied, so an escalated regression
+  gets its test; a field the base didn't have is asserted as missing.
+- `doppel init` reports a `<repo>` placeholder in the seed once, not twice.
+- The init trace page shows the setup agent's run as its own row, and an init the agent finished as working.
+- The setup agent's `read` reads the sandbox it works in (including files its shell commands wrote), and a
+  re-read is allowed again after a shell command; `./.env` and `env` are no longer the same path.
+
 ## 1.0.0 (October 2026)
 
 The first release meant to be installed: `uses: Maukthik/doppel@v1` in a workflow, or

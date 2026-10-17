@@ -175,6 +175,19 @@ def normalize_test(segment: str) -> str:
     return " ".join(shlex.quote(w) for w in env + cmd)
 
 
+TOX_POSARGS = re.compile(r"\{posargs(?::([^{}]*))?\}")
+TOX_DIRS = re.compile(r"\{(?:toxinidir|tox_root)\}")
+
+
+def tox_substitute(text: str) -> str:
+    """tox's own substitutions, as tox would expand them with no arguments: {posargs:tests} -> tests,
+    {posargs} -> nothing, {toxinidir} -> the repo root, {envpython} -> python. Left in, pytest took
+    {posargs} for a path that doesn't exist and collected nothing."""
+    text = TOX_POSARGS.sub(lambda m: m.group(1) or "", text)
+    text = TOX_DIRS.sub(".", text).replace("{envpython}", "python").replace("{envbindir}/", "")
+    return " ".join(text.split())
+
+
 def from_tox(repo: Path) -> tuple[str, list[str], bool]:
     f = repo / "tox.ini"
     if not f.exists():
@@ -187,9 +200,9 @@ def from_tox(repo: Path) -> tuple[str, list[str], bool]:
     sec = "testenv" if cfg.has_section("testenv") else next((s for s in cfg.sections() if s.startswith("testenv")), "")
     if not sec:
         return "", [], False
-    commands = [c.strip() for c in cfg.get(sec, "commands", fallback="").splitlines() if c.strip()]
+    commands = [tox_substitute(c) for c in cfg.get(sec, "commands", fallback="").splitlines() if c.strip()]
     test = next((m.group(1) for c in commands if (m := TEST_LINE.search(" " + c))), "")
-    deps = [d.strip() for d in cfg.get(sec, "deps", fallback="").splitlines() if d.strip()]
+    deps = [tox_substitute(d) for d in cfg.get(sec, "deps", fallback="").splitlines() if d.strip()]
     def flag(section: str, key: str) -> bool:
         return cfg.get(section, key, fallback="false").strip().lower() == "true" if cfg.has_section(section) else False
     # tox installs the project only when it builds one: skipsdist (microblog-api) turns that off unless the env

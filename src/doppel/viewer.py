@@ -104,9 +104,31 @@ def load_trace(trace: Path) -> dict:
             "prompt": _read(folder / "1-prompt.txt", PROMPT_LIMIT),
             "reply": _read(folder / "2-reply.txt", PROMPT_LIMIT),
         })
+    agent = _agent_row(trace, len(attempts) + 1)
+    if agent:
+        attempts.append(agent)
     app = trace.resolve().parent.name
     return {"app": app, "stages": STAGES, "attempts": attempts,
             "outcome": next((a["n"] for a in attempts if a["status"] == "works"), None)}
+
+
+def _agent_row(trace: Path, n: int) -> dict | None:
+    """The setup agent's run, when init handed over to it: one more row, with its steps (agent.txt) and,
+    when it worked, the calibration it wrote at the trace's root."""
+    log = _read(trace / "agent.txt", PROMPT_LIMIT)
+    line = next((ln for ln in _read(trace / "summary.txt").splitlines() if ln.startswith("agent: ")), "")
+    if not log and not line:
+        return None
+    works = "WORKS" in line
+    steps = len(re.findall(r"^=== step \d+", log, re.M))
+    return {"n": n, "summary": line, "agent": True,
+            "status": "works" if works else "agent", "stage": len(STAGES) if works else None,
+            "decision": (f"The setup agent got it working in a live sandbox ({steps} step{'s' if steps != 1 else ''})."
+                         if works else f"The setup agent tried in a live sandbox ({steps} step"
+                         f"{'s' if steps != 1 else ''}) and did not get it working."),
+            "checks": [], "boot": {"ran": False, "works": works, "smoke": [], "error": ""}, "database": [],
+            "seed_output": [], "files": {}, "prompt": "", "reply": "", "agent_log": log,
+            "calibration": [ln for ln in _read(trace / "6-calibration.txt").splitlines() if ln.strip()] if works else []}
 
 
 def render(data: dict) -> str:
@@ -205,11 +227,13 @@ const $ = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag);
   for (const k of kids) e.append(k instanceof Node ? k : document.createTextNode(String(k))); return e; };
 const NAMES = {install:'Install', seed:'Seed data', start:'Start', login:'Log in', users:'Users served'};
 const VERDICT = {works:['Works','works'], caught:['Caught by checks','caught'], kept:['Stopped at ','stop'],
-  dropped:['Went backwards','dropped'], unusable:['Reply unusable','stop'], network:['Network failed','stop']};
+  dropped:['Went backwards','dropped'], unusable:['Reply unusable','stop'], network:['Network failed','stop'],
+  agent:['Agent stopped','stop']};
 
 const n = D.attempts.length, won = D.outcome;
-document.getElementById('title').textContent = won ? `${D.app} set itself up in ${won} attempt${won > 1 ? 's' : ''}`
-                                                   : `${D.app}: no working setup yet`;
+const byAgent = won && D.attempts.some(a => a.n === won && a.agent);
+document.getElementById('title').textContent = byAgent ? `${D.app} set itself up: the setup agent finished it`
+  : won ? `${D.app} set itself up in ${won} attempt${won > 1 ? 's' : ''}` : `${D.app}: no working setup yet`;
 const free = D.attempts.filter(a => a.status === 'caught').length;
 document.getElementById('lede').textContent =
   `${n} attempt${n > 1 ? 's' : ''}. ${free ? free + ' caught by the checks before any sandbox was used. ' : ''}` +
@@ -250,6 +274,7 @@ function detail(a) {
   const files = Object.entries(a.files);
   if (files.length) { box.append($('h3', {}, 'Files the model drafted'));
     for (const [name, text] of files) box.append($('details', {}, $('summary', {}, name), pre(text))); }
+  if (a.agent_log) box.append($('details', {}, $('summary', {}, 'Every step the agent took'), pre(a.agent_log)));
   if (a.prompt) box.append($('details', {}, $('summary', {}, `Everything the model was asked (${a.prompt.length.toLocaleString()} characters)`), pre(a.prompt)));
   return box;
 }
@@ -258,7 +283,7 @@ const rows = document.getElementById('rows');
 for (const a of D.attempts) {
   const d = detail(a);
   const b = $('button', {class: 'row', 'aria-expanded': 'false', 'aria-controls': 'd' + a.n},
-    $('span', {class: 'num'}, 'Attempt ' + a.n), rail(a), verdict(a));
+    $('span', {class: 'num'}, a.agent ? 'Setup agent' : 'Attempt ' + a.n), rail(a), verdict(a));
   b.addEventListener('click', () => { const open = b.getAttribute('aria-expanded') !== 'true';
     b.setAttribute('aria-expanded', String(open)); d.classList.toggle('open', open); });
   rows.append(b, d);

@@ -84,12 +84,9 @@ def cmd_run(a) -> int:
     steps = sum(len(r["steps"]) for r in worlds["base"])
     judged = None
     if a.pr and findings:
-        from doppel.judge import judge, regression_tests
+        from doppel.judge import judge
         from doppel.personas import code_diff
         judged = judge(findings, Path(a.pr).read_text(encoding="utf-8"), code_diff(a.base, a.head))
-        if a.tests_out:
-            Path(a.tests_out).write_text(regression_tests(findings, judged["verdicts"], personas,
-                                                          Path(a.tests_out).name), encoding="utf-8")
     if sus:
         from doppel.suspects import check
         checks = check(sus, findings, judged["verdicts"] if judged else None, personas,
@@ -97,6 +94,10 @@ def cmd_run(a) -> int:
         if judged:
             from doppel.judge import escalate
             judged["verdicts"] = escalate(judged["verdicts"], checks)
+    if judged and a.tests_out:   # after escalate: a regression the twin confirmed gets its test too
+        from doppel.judge import regression_tests
+        Path(a.tests_out).write_text(regression_tests(findings, judged["verdicts"], personas,
+                                                      Path(a.tests_out).name), encoding="utf-8")
     from doppel.report import settle_suspicions
     settled = settle_suspicions([{**x, **checks.get(x["id"], {})} for x in sus], findings,
                                 judged["verdicts"] if judged else None) if sus else []

@@ -180,7 +180,14 @@ def group(findings: list[Finding]) -> dict[str, list[int]]:
         route = "/".join("{id}" if part.isdigit() else part for part in path.split("?")[0].split("/"))
         # "*.in_stock (added) x10" on a list and "in_stock (added)" on one item are the same change
         detail = re.sub(r" x\d+", "", f.detail).replace("*.", "")
-        key = (f.kind, detail if f.kind != "slow" else f"{method} {route}")
+        # a body change is the same change wherever it shows (password_hash added on 14 endpoints is one leak);
+        # a status, crash or request change is tied to its route (a 500 on /a and a 500 on /b are two bugs)
+        if f.kind == "slow":
+            key = (f.kind, f"{method} {route}")
+        elif f.kind in ("status", "error", "request"):
+            key = (f.kind, detail, f"{method} {route}")
+        else:
+            key = (f.kind, detail)
         groups.setdefault(key, []).append(i)
     return {f"c{n + 1}": idx for n, idx in enumerate(groups.values())}
 
@@ -302,9 +309,10 @@ def regression_tests(findings: list[Finding], verdicts: list[Verdict], personas:
         if f.kind in ("status", "error"):
             check = f"    assert step['status'] == {f.base!r}, step"
         elif isinstance(f.base, dict):
-            check = "\n".join(f"    assert extract(step['body'], {path!r}) == {value!r}, step['body']"
-                              for path, value in f.base.items() if value != "(absent)")
-            check = check or f"    assert step['body'] == {f.base!r}"
+            # "(absent)" means base had no such field: assert it is missing (or null), not the marker itself
+            check = "\n".join(f"    assert extract(step['body'], {path!r}) is None, step['body']" if value == "(absent)"
+                              else f"    assert extract(step['body'], {path!r}) == {value!r}, step['body']"
+                              for path, value in f.base.items())
         else:
             check = f"    assert step['body'] == {f.base!r}"
         out.append(f'''

@@ -163,8 +163,12 @@ def world_env(hook_dir: str, out_dir: str, base_env: dict | None = None, sep: st
         if k == "PYTHONPATH":
             env["PYTHONPATH"] = hook_dir + sep + v.replace("$PYTHONPATH", "").strip(sep) + (
                 sep + base_env["PYTHONPATH"] if (base_env or {}).get("PYTHONPATH") else "")
+        elif k == "PYTEST_ADDOPTS":   # added to Doppel's options, never replacing them (random order stays off)
+            env[k] = f"{env[k]} {v}".strip()
+        elif k == "PYTHONHASHSEED" and not str(v).strip().isdigit():
+            continue                  # "random" would make every world hash differently; a fixed seed is kept
         else:
-            env[k] = v
+            env[k] = v               # TZ and the rest: the same value in every world, so still deterministic
     return env
 
 

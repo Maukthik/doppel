@@ -1761,9 +1761,6 @@ def check_seed(repo: str | Path, seed: str) -> list[str]:
     if "<repo>" in seed:
         problems.append(f"{SEED_FILE} contains '<repo>': a placeholder, not a path. The seed runs in the repo root, "
                         "so use paths relative to it")
-    if "<repo>" in seed:
-        problems.append(f"{SEED_FILE} contains '<repo>': that is a placeholder, not a path. The seed runs in the "
-                        "repo root, so use paths relative to it")
     if re.search(r"\.add(_all)?\(", seed) and re.search(r"session", seed, re.I) \
             and not re.search(r"\.commit\(|\.begin\(|atomic", seed):
         problems.append(f"{SEED_FILE} adds rows to a session but never commits, so nothing is saved and every "

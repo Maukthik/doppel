@@ -70,6 +70,10 @@ class LocalWorkspace:
                 _kill_tree(p)
         return f"exit {rc}\n" + _tail(log.read_text("utf-8", errors="replace"))
 
+    def read(self, rel: str) -> str:
+        """A file or folder as it is in this workspace now, including what earlier shell commands wrote."""
+        return _read(self.dir, rel)
+
     def serve(self, start: str, ready: str, steps: list, env: dict | None = None) -> dict:
         from doppel.backends.local import _serve_and_replay
         from doppel.spec import TwinSpec
@@ -136,6 +140,16 @@ class NebiusWorkspace:
         out = self._wait(go())
         self.img = out
         return f"exit {out.exit_code}\n" + _tail((out.stdout or "") + (out.stderr or ""))
+
+    def read(self, rel: str) -> str:
+        """A file or folder as it is in the sandbox now (a disposable run: reading changes nothing)."""
+        import shlex
+
+        async def go():
+            return await self.img.run(shell=f"cd /app && python3 -c {shlex.quote(READ_SCRIPT)} {shlex.quote(rel)}",
+                                      disposable=True, timeout=120, truncate_output_at=200_000)
+        out = self._wait(go())
+        return _tail(out.stdout or out.stderr or "", 12000)
 
     def serve(self, start: str, ready: str, steps: list, env: dict | None = None) -> dict:
         from doppel.backends.nebius import OUTPUT_LIMIT, RUNNER, persona_command
@@ -263,6 +277,28 @@ def _show_recording(rec: dict) -> str:
     return "\n".join(lines) or "(no steps were sent)"
 
 
+READ_SCRIPT = """import os, sys
+rel = sys.argv[1]
+root = os.path.realpath(".")
+p = os.path.realpath(os.path.join(root, rel))
+if not (p == root or p.startswith(root + os.sep)) or not os.path.exists(p):
+    print("no such file or folder: " + rel)
+elif os.path.isdir(p):
+    names = sorted(n + ("/" if os.path.isdir(os.path.join(p, n)) else "") for n in os.listdir(p))[:200]
+    print("\\n".join(names) or "(empty folder)")
+else:
+    sys.stdout.write(open(p, encoding="utf-8", errors="replace").read()[-12000:])
+"""
+
+
+def _path_key(rel: str) -> str:
+    """One spelling per path: './.env', '.env' and 'a/../.env' are the same file (strip('./') turned '.env'
+    into 'env')."""
+    import posixpath
+    key = posixpath.normpath(str(rel).replace("\\", "/")).lstrip("/")
+    return "." if key in ("", ".") else key
+
+
 def _read(repo: Path, rel: str) -> str:
     target = (repo / rel).resolve()
     if not target.is_relative_to(repo.resolve()) or not target.exists():
@@ -306,15 +342,17 @@ def fix(repo: Path, backend: str, brief: str, history: list[str], files: dict | 
             if tool == "shell" and not action.get("command"):
                 action["command"] = action.get("cmd") or action.get("args") or ""
             try:
-                if tool == "read" and str(action.get("path", ".")).strip("./") in read_before:
-                    first = read_before[str(action.get("path", ".")).strip("./")]
+                if tool == "read" and _path_key(action.get("path", ".")) in read_before:
+                    first = read_before[_path_key(action.get("path", "."))]
                     out = (f"You already read {action.get('path')} at step {first}; it is unchanged and still shown "
                            "above. Use what it says: test with shell or serve, or make a try.")
                 elif tool == "shell":
                     out = ws.shell(str(action.get("command", "")))
+                    read_before.clear()   # the command may have changed any file: a re-read is new information
                 elif tool == "read":
-                    out = _read(repo, str(action.get("path", ".")))
-                    read_before[str(action.get("path", ".")).strip("./")] = step
+                    rel = str(action.get("path", "."))
+                    out = ws.read(rel) if hasattr(ws, "read") else _read(repo, rel)
+                    read_before[_path_key(rel)] = step
                 elif tool == "serve":
                     steps = action.get("steps") if isinstance(action.get("steps"), list) else []
                     out = _show_recording(ws.serve(str(action.get("start", "")), str(action.get("ready", "/")),
