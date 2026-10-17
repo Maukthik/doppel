@@ -170,7 +170,7 @@ The package is named `doppel-check` because `doppel` on PyPI is an unrelated pro
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/doppel-architecture-dark.svg">
-  <img src="docs/doppel-architecture-light.svg" alt="Doppel architecture: the main branch is seeded once into a twin of the app in Nebius sandboxes, forked into a base world and a head world (with the PR's code); the same users (your tests plus Nemotron-written users) run in both; every response is compared; a Nemotron judge asks whether the PR meant each change, and regressions go to the PR comment and check. On 30 PRs to a real app: tests 12/20, AI review 17/20, review-guided Doppel 16/20 with 2/10 false alarms, tests + Doppel 19/20." width="100%">
+  <img src="docs/doppel-architecture-light.svg" alt="Doppel architecture: the main branch is seeded once into a twin of the app in Nebius sandboxes, forked into a base world and a head world (with the PR's code); the same users (your tests plus Nemotron-written users) run in both; every response is compared; a Nemotron judge asks whether the PR meant each change, and regressions go to the PR comment and check. On 30 PRs to a real app: tests 12/20, AI review 17/20, review-guided Doppel 17/20 with 2/10 false alarms, tests + Doppel 20/20." width="100%">
 </picture>
 
 Doppel has **two ways to exercise the app** and **one way to decide what a difference means**:
@@ -427,20 +427,28 @@ Each PR has a description written the way authors write them: *"simplify the fee
 |---|---|---|---|---|
 | App's own test suite (44 tests) | 12/20 | 0/10 | $0 | 11 s |
 | AI code review (Nemotron 3 Ultra) | 17/20 | 1/10 | $0.03 | 3 s |
-| **Review-guided Doppel** | **16/20** | **2/10** | $0.25 | 89 s |
-| **Tests + Doppel** | **19/20** | 2/10 | | |
+| **Review-guided Doppel** | **17/20** | **2/10** | $0.25 | 89 s |
+| **Tests + Doppel** | **20/20** | 2/10 | | |
 | AI review + Doppel | 19/20 | 3/10 | | |
 
-These methods catch **different** bugs. Doppel caught 7 of the 8 regressions the test suite missed, including
+These methods catch **different** bugs. Doppel caught all 8 regressions the test suite missed, including
 the two the AI reviewer called safe: the hash leak, and a token-revoke request that crashes with a 500.
 
 The Doppel row is the latest run (17 Oct). 2 of 10 safe PRs were flagged: s09, because account creation now
 accepts the new `location` field, which the description doesn't mention; and s07, a judge miss on a knock-on
-effect of the announced change. Disclosed: one judge rule was added after that run (a route the PR adds can't
-regress, since it didn't exist before), and the numbers are the same recordings judged again; another change
-was tried and dropped because it lost a real catch ([rejudged](bench/results/guided-rerun-fixed),
-[dropped trial](bench/results/guided-rerun-knockon-trial)). The secret-field rule above was added later still
-and changes none of these numbers. Complete runs have scored 15 to 17 of 20, so treat each number as one
+effect of the announced change. Disclosed: nothing was run again after that run, but its recordings were judged
+again with two judge changes made since. One is a rule (a route the PR adds can't regress, since it didn't exist
+before), which cleared s10. The other is a fix found while documenting the code: a status change on two
+different routes gets two verdicts. It changed one result, r11, a PR that raises the email length limit and
+also drops the email-format check. The judge used to clear `not-an-email` being accepted by quoting the
+description's "up to 254 characters", while its own reason said the format check was gone; it now calls that a
+regression. The fix didn't regroup the findings that decide r11 (it split two knock-on 401 → 200 changes, on
+two routes, into two verdicts), so this is the judge reading a different prompt differently: count it as one
+sample like the rest. Three rejudges
+gave identical results ([rejudged](bench/results/guided-rerun-grouping),
+[rule only](bench/results/guided-rerun-fixed)). A third change was tried and dropped because it lost a real
+catch ([dropped trial](bench/results/guided-rerun-knockon-trial)). The secret-field rule above was added later
+still and changes none of these numbers. Complete runs have scored 15 to 17 of 20, so treat each number as one
 sample. What doesn't vary: **every catch and every false alarm comes with the recorded requests**. On a
 held-out set of 10 PRs written after tuning: tests 6/7, AI review 5/7, Doppel 7/7 with 0/3 false alarms.
 

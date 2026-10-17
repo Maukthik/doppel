@@ -16,6 +16,10 @@ Seven gaps found while writing the architecture guide, each pinned by a test in 
 - The setup agent's `read` reads the sandbox it works in (including files its shell commands wrote), and a
   re-read is allowed again after a shell command; `./.env` and `env` are no longer the same path.
 
+The 17 Oct benchmark recordings judged again with the per-route grouping (nothing else run), three times with
+identical results: review-guided Doppel 17/20 with 2/10 false alarms (was 16/20; r11 changed from missed to
+caught), held-out 7/7 with 0/3, consequence 2/3 with 0/5. Results in `bench/results/guided-rerun-grouping/`.
+
 ## 1.0.0 (October 2026)
 
 The first release meant to be installed: `uses: Maukthik/doppel@v1` in a workflow, or

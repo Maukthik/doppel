@@ -3,7 +3,8 @@
 The same recordings as [../guided-rerun/](../guided-rerun/): nothing was run again. `bench/rejudge.py --results`
 ran only the judge, with one rule added after that run: a status change from 404 or 405 on a route the PR
 adds goes to a person, never into the regressions, since there was no endpoint before and so no behavior to
-break. **These are the numbers the main README quotes.**
+break. The main README now quotes [../guided-rerun-grouping/](../guided-rerun-grouping/): the same recordings
+judged again after one more judge fix, where r11 changed from missed to caught.
 
 | Set | Regressions caught | False alarms on safe PRs |
 |---|---|---|

@@ -13,7 +13,8 @@ the per-item table, and the JSON files hold the raw recordings. How the benchmar
 | [`guided-rerun/`](guided-rerun/) | Review-guided Doppel run again on all 48, with probe rehearsal | 16–17 Oct | 17/20, 3/10; held-out 7/7, 1/3; consequence 2/3, 3/5 |
 | `guided-rerun-j1/`, `-j2/`, `-j3/` | The same recordings judged three more times, nothing else run | 17 Oct | identical each time: 16/20, 3/10; 7/7, 0/3; 2/3, 0/5 |
 | [`guided-rerun-knockon-trial/`](guided-rerun-knockon-trial/) | A judge change tried on those recordings and dropped, because it lost a real catch | 17 Oct | 17/20, 1/10, but consequence fell to 1/3 |
-| [`guided-rerun-fixed/`](guided-rerun-fixed/) | Those recordings judged with the one rule that was kept. **The numbers the main README quotes** | 17 Oct | 16/20, 2/10; 7/7, 0/3; 2/3, 0/5 |
+| [`guided-rerun-fixed/`](guided-rerun-fixed/) | Those recordings judged with the one rule that was kept | 17 Oct | 16/20, 2/10; 7/7, 0/3; 2/3, 0/5 |
+| [`guided-rerun-grouping/`](guided-rerun-grouping/), `-2/`, `-3/` | Those recordings judged three times with that rule and the per-route grouping fix. **The numbers the main README quotes** | 17 Oct | identical each time: 17/20, 2/10; 7/7, 0/3; 2/3, 0/5 |
 | [`testmode/`](testmode/) | Test mode alone on the benchmark, unjudged, on a laptop | 8 Oct | 21 of 27 regressions changed a response the suite already sends |
 | `recheck-1014/`, `recheck-order/` | Test mode checked again after later changes (the second after the rule for lists returned in a new order) | 14 Oct | unchanged: 21/27 |
 
