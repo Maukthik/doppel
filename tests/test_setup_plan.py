@@ -357,3 +357,29 @@ def test_the_cis_own_sharding_flags_are_dropped():
 def test_git_missing_at_run_time_is_installed():
     from doppel import sandbox
     assert sandbox.runtime_packages("E   FileNotFoundError: [Errno 2] No such file or directory: 'git'") == ["git"]
+
+
+def test_tox_skipsdist_means_the_project_itself_is_not_installed(tmp_path):
+    # microblog-api: a hatchling pyproject that can't build a wheel, and a tox.ini with skipsdist=True
+    write(tmp_path, {"tox.ini": "[tox]\nskipsdist=True\n\n[testenv]\ncommands=\n    pytest -p no:logging\n"
+                                "deps=\n    -r requirements-dev.txt\n",
+                     "pyproject.toml": "[project]\nname = 'microblog-api'\n\n[build-system]\n"
+                                       "requires = ['hatchling']\nbuild-backend = 'hatchling.build'\n",
+                     "requirements-dev.txt": "pytest\n"})
+    install = plan(tmp_path).install
+    assert install[0] == "pip install --quiet -r requirements-dev.txt"
+    assert not any("-e ." in step for step in install)
+
+
+def test_tox_usedevelop_still_installs_the_project(tmp_path):
+    write(tmp_path, {"tox.ini": "[tox]\nskipsdist=True\n\n[testenv]\nusedevelop=True\ncommands=\n    pytest\n"
+                                "deps=\n    pytest\n",
+                     "setup.py": "from setuptools import setup\nsetup(name='x')\n"})
+    assert any("pip install --quiet -e ." in step for step in plan(tmp_path).install)
+
+
+def test_a_project_that_wont_build_does_not_stop_the_tox_install(tmp_path):
+    write(tmp_path, {"tox.ini": "[testenv]\ncommands=\n    pytest\ndeps=\n    pytest\n",
+                     "setup.py": "from setuptools import setup\nsetup(name='x')\n"})
+    step = plan(tmp_path).install[-1]
+    assert step.startswith("(pip install --quiet -e . ||") and "did not install as a package" in step

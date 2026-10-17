@@ -190,7 +190,11 @@ def from_tox(repo: Path) -> tuple[str, list[str], bool]:
     commands = [c.strip() for c in cfg.get(sec, "commands", fallback="").splitlines() if c.strip()]
     test = next((m.group(1) for c in commands if (m := TEST_LINE.search(" " + c))), "")
     deps = [d.strip() for d in cfg.get(sec, "deps", fallback="").splitlines() if d.strip()]
-    skip_install = cfg.get(sec, "skip_install", fallback="false").strip().lower() == "true"
+    def flag(section: str, key: str) -> bool:
+        return cfg.get(section, key, fallback="false").strip().lower() == "true" if cfg.has_section(section) else False
+    # tox installs the project only when it builds one: skipsdist (microblog-api) turns that off unless the env
+    # says usedevelop
+    skip_install = flag(sec, "skip_install") or (flag("tox", "skipsdist") and not flag(sec, "usedevelop"))
     return test, deps, skip_install
 
 
@@ -801,7 +805,8 @@ def plan(repo: str | Path) -> SetupPlan:
             p.install = ["pip install --quiet " + " ".join(d if d.startswith(("-r", "-e")) else f"'{d}'"
                                                            for d in tox_deps)]
             if installable(repo) and not tox_skip and not any(d.startswith("-e") for d in tox_deps):
-                p.install.append("pip install --quiet -e .")
+                # tox's deps are in; a project that won't build as a package still runs its tests from its folder
+                p.install.append(f"(pip install --quiet -e . || {SELF_INSTALL_NOTE})")
             p.source["install"] = "tox.ini deps"
         else:
             p.install, p.source["install"] = project_install(repo), "the project's dependencies"
