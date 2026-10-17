@@ -44,3 +44,22 @@ a persona stuck at 401/403/404/405 on base goes back to Nemotron with the app's 
 fixed, and a probe stuck at 405 should too. And a probe should send every input its trigger names (s1's
 trigger named quotes; its probe sent only `&`). Both change the guided twin, so the Stage 5 benchmark would
 have to be rerun to keep its numbers honest.
+
+## Rerun with probe rehearsal (16 Oct 2026)
+
+Run folder: [isso-stored-xss-rerun/](isso-stored-xss-rerun/doppel-check.html). Same PR and same hand-written
+setup as above, with today's guided twin (probes stuck at 405 are rehearsed; probes are asked to send every value a
+trigger names).
+
+| | First run | Rerun |
+|---|---|---|
+| Probes reaching the edit code | none (all used `PUT /id/<id>/edit/<hash>`, 405) | yes: `PUT /id/<id>`, the real route |
+| Probes sending a quote | none | none (the website probe sent `&`, the edit probes sent plain text) |
+| Suspicions | 6 untested | 3 untested, **3 refuted** |
+| Result | invisible | invisible |
+
+Rehearsal fixed the route, so it does what it was built for. The input is still wrong: no probe sent a `'` or a
+`<`, so the bug never showed. And this run is worse in one way. s1 ("quote=False instead of quote=True") was marked
+**refuted** on a probe that sent only `&`, which escapes the same way in both versions, so it proves nothing about
+quotes. A refutation should need a probe that actually sends the trigger. Doppel doesn't check that yet, and that's
+a known limit.

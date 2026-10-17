@@ -1,0 +1,186 @@
+{
+ "id": "isso-stored-xss",
+ "app": "isso",
+ "sha": "2e588895b6374be4d4b1d8cec8e2e263a35daaef",
+ "date": "2026-02-19",
+ "title": "Fix stored XSS in website and author fields",
+ "bug": "Single quotes in website aren't escaped, and edits don't escape website or author at all (stored XSS).",
+ "expect": "POST /new|PUT /id/|/edit/",
+ "framework": "Flask",
+ "backend": "nebius",
+ "ran_on": "2026-10-17",
+ "mode": "test mode + guided twin",
+ "hidden_tests": [
+  "isso/tests/test_comments.py"
+ ],
+ "twin_setup_by": "hand-written: bench/twin-setups/isso/",
+ "twin_setup": [
+  "doppel.toml",
+  "doppel_isso.py",
+  "doppel_seed.json",
+  "isso-doppel.cfg"
+ ],
+ "modes": {
+  "tests": {
+   "ran": true,
+   "reason": ""
+  },
+  "twin": {
+   "ran": true,
+   "reason": null,
+   "coverage": {
+    "requests": 66,
+    "served": 32,
+    "blocked": 8,
+    "stuck_personas": [],
+    "personas": 19,
+    "repaired": [
+     "probe s1: normal_user",
+     "probe s3: careless_user",
+     "probe_s3"
+    ],
+    "reach": [
+     {
+      "id": "c1",
+      "file": "isso/views/comments.py",
+      "where": "API.new",
+      "base_lines": [
+       338,
+       342,
+       343
+      ],
+      "head_lines": [
+       338
+      ],
+      "reached_by": [
+       "alice_hello",
+       "bob_second",
+       "carol_reply",
+       "dave_edit",
+       "eve_delete",
+       "grace_csrf",
+       "heidi_power",
+       "ivan_negative",
+       "judy_duplicate",
+       "lea_website_null",
+       "probe s1: normal_user",
+       "probe s2: power_user",
+       "probe s3: careless_user",
+       "probe_s1",
+       "probe_s2",
+       "probe_s3"
+      ],
+      "reached_in": [
+       "base",
+       "head"
+      ]
+     },
+     {
+      "id": "c2",
+      "file": "isso/views/comments.py",
+      "where": "API.edit",
+      "base_lines": [
+       554,
+       555,
+       556,
+       558,
+       559
+      ],
+      "head_lines": [],
+      "reached_by": [
+       "probe s1: normal_user"
+      ],
+      "reached_in": [
+       "base"
+      ]
+     },
+     {
+      "id": "c3",
+      "file": "isso/views/comments.py",
+      "where": "API.moderate",
+      "base_lines": [
+       805,
+       808,
+       809,
+       811,
+       812,
+       813,
+       815,
+       816,
+       817,
+       819,
+       820
+      ],
+      "head_lines": [],
+      "reached_by": [],
+      "reached_in": []
+     }
+    ]
+   },
+   "personas": 19,
+   "source": "written by Nemotron for this PR"
+  }
+ },
+ "suspicions": [
+  {
+   "id": "s1",
+   "claim": "Website field is now escaped with quote=False instead of quote=True, changing how special characters are encoded in stored comments.",
+   "route": "POST /new?uri=<path>",
+   "trigger": "Send JSON with website containing special chars like '&' or '\"': {\"text\": \"test\", \"author\": \"A\", \"email\": \"a@b.c\", \"website\": \"https://ex.com?a=1&b=2\"}. Read back the created comment's website field; it will contain raw '&' instead of '&amp;'.",
+   "status": "refuted",
+   "evidence": "probe_s1 POST /new?uri=/blog/hello-world with website containing '&' returned identical website field in base and head (both stored raw '&'), showing no escaping change.",
+   "changes": []
+  },
+  {
+   "id": "s2",
+   "claim": "Email field is now escaped on comment creation (previously it was not), altering stored email representation.",
+   "route": "POST /new?uri=<path>",
+   "trigger": "Send JSON with email containing '\"' or '&': {\"text\": \"test\", \"author\": \"A\", \"email\": \"a&b@c.com\", \"website\": null}. Read back the created comment's email field; it will be HTML-escaped.",
+   "status": "refuted",
+   "evidence": "probe_s2 POST /new?uri=/blog/second-post with email containing '&' returned identical email field in base and head (both stored raw '&'), showing no new escaping.",
+   "changes": []
+  },
+  {
+   "id": "s3",
+   "claim": "Edit action (PUT /id/<id>/edit/<hash>) no longer validates incoming data via API.verify, allowing invalid or extra fields to be stored.",
+   "route": "PUT /id/<id>/edit/<hash>",
+   "trigger": "Send JSON with missing required text field or extra fields: {\"author\": \"X\", \"email\": \"x@y.z\", \"website\": \"https://w.com\"}. Observe that request succeeds (200) and comment is updated despite missing text.",
+   "status": "refuted",
+   "evidence": "probe_s3 PUT /id/4 with missing text field returned 400 Bad Request in both base and head, showing validation still occurs.",
+   "changes": []
+  },
+  {
+   "id": "s4",
+   "claim": "Edit action no longer escapes author, email, website fields before saving, so special characters are stored raw.",
+   "route": "PUT /id/<id>/edit/<hash>",
+   "trigger": "First create a comment, then PUT with {\"text\": \"new\", \"author\": \"A&B\", \"email\": \"a&b@c.com\", \"website\": \"https://ex.com?x=1&y=2\"}. Read back the comment; fields will contain raw '&' instead of escaped entities.",
+   "status": "untested",
+   "evidence": "No probe sent PUT /id/<id>/edit/<hash> with special characters in author, email, or website fields to test escaping behavior on edit.",
+   "changes": []
+  },
+  {
+   "id": "s5",
+   "claim": "Edit action no longer normalizes website URL (prepend http://), so bare domains are stored as-is.",
+   "route": "PUT /id/<id>/edit/<hash>",
+   "trigger": "PUT with {\"text\": \"t\", \"website\": \"example.com\"}. Read back comment's website; it will be \"example.com\" not \"http://example.com\".",
+   "status": "untested",
+   "evidence": "No probe sent PUT /id/<id>/edit/<hash> with bare domain website (e.g., 'example.com') to test URL normalization on edit.",
+   "changes": []
+  },
+  {
+   "id": "s6",
+   "claim": "Edit action now accepts and stores any extra fields sent in request body (previously stripped to only text, author, website).",
+   "route": "PUT /id/<id>/edit/<hash>",
+   "trigger": "PUT with {\"text\": \"t\", \"author\": \"A\", \"website\": \"w\", \"extra\": \"value\", \"mode\": 4}. Read back comment; extra fields may appear in response or be persisted.",
+   "status": "untested",
+   "evidence": "No probe sent PUT /id/<id>/edit/<hash> with extra fields like 'extra' or 'mode' to test whether they are accepted and stored.",
+   "changes": []
+  }
+ ],
+ "status": "invisible",
+ "differences": 0,
+ "caught_by": [],
+ "on_route": [],
+ "other": [],
+ "seconds": 122.8
+}

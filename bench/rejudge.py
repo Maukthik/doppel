@@ -6,6 +6,7 @@ changes, so the twin's run-to-run variance doesn't get mixed into the comparison
 
     python bench/rejudge.py                       # doppel_guided on all 40 PRs
     python bench/rejudge.py --key doppel --only r05-feed-own-posts
+    python bench/rejudge.py --results bench/results/guided-rerun-j1   # a copied run folder, judged again
 """
 from __future__ import annotations
 
@@ -69,10 +70,11 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--key", default="doppel_guided")
     ap.add_argument("--only", help="comma-separated PR ids")
+    ap.add_argument("--results", type=Path, default=rb.RESULTS, help="folder of result files (rewritten in place)")
     a = ap.parse_args(argv)
     prs = {p["id"]: p for p in json.loads((rb.APP / "prs" / "index.json").read_text(encoding="utf-8"))}
     base = rb.upstream()
-    for path in sorted(rb.RESULTS.glob("*.json")):
+    for path in sorted(a.results.glob("*.json")):
         result = json.loads(path.read_text(encoding="utf-8"))
         pid = result.get("id")
         if pid not in prs or a.key not in result or (a.only and pid not in a.only.split(",")):
@@ -84,7 +86,7 @@ def main(argv=None) -> int:
             continue
         path.write_text(json.dumps(result, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
         d = result[a.key]
-        print(f"[rejudge] {result['kind']:10} {pid:24} {'CAUGHT' if d['caught'] else '-'}"
+        print(f"[rejudge] {result['kind']:10} {result.get('set', 'main'):11} {pid:32} {'CAUGHT' if d['caught'] else '-'}"
               f"{'  (flags a safe PR)' if result['kind'] == 'safe' and d['any_regression'] else ''}")
     return 0
 
