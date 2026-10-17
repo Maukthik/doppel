@@ -13,7 +13,7 @@ request, the old answer and the new answer.
 ![Nebius Token Factory](https://img.shields.io/badge/sandboxes-Nebius%20Token%20Factory-4b3bff)
 ![NVIDIA Nemotron](https://img.shields.io/badge/models-NVIDIA%20Nemotron-76b900)
 
-[Quickstart](#put-it-on-your-pull-requests) · [Live demo PR](https://github.com/Maukthik/doppel-demo/pull/1) · [How it works](#how-it-works) · [Results](bench/results/README.md) · [Replay site](https://maukthik.github.io/doppel/) · [Changelog](CHANGELOG.md)
+[Quickstart](#put-it-on-your-pull-requests) · [**Try it on any PR**](https://maukthik.github.io/doppel-try/) · [Live demo PR](https://github.com/Maukthik/doppel-demo/pull/1) · [How it works](#how-it-works) · [Results](bench/results/README.md) · [Replay site](https://maukthik.github.io/doppel/) · [Changelog](CHANGELOG.md)
 
 *Nebius x NVIDIA Global AI Hackathon · Coding and Agentic Engineering track*
 
@@ -42,6 +42,10 @@ didn't need to notice anything. It ran both versions, saw the field appear and s
 You can open this one: [doppel-demo#1](https://github.com/Maukthik/doppel-demo/pull/1) is that PR on a fresh
 repo with one workflow file and no other setup. Doppel ran the app's own tests on both versions in about a
 minute and flagged the same 38 requests on two runs ([recorded results](bench/results/demo-pr)).
+
+**Try it on any public pull request:** paste a link on the [Try page](https://maukthik.github.io/doppel-try/)
+and Doppel replies on a GitHub issue in a few minutes, with nothing to install. It runs from
+[doppel-try](https://github.com/Maukthik/doppel-try), built from [`try/`](try/).
 
 ## Put it on your pull requests
 

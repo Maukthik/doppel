@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Try Doppel</title>
+<meta name="description" content="All 44 tests passed. The pull request leaked every password hash. Doppel runs a PR's code next to main in Nebius sandboxes and shows the request, the old answer and the new one. Paste a public PR to try it.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* The palette is Doppel's own check page: fog and paper, ink, a teal pass, a red stop, violet for the head */
+:root {
+  --fog: #eef1f4; --paper: #ffffff; --ink: #1e2a38; --quiet: #5b6878; --line: #dce2e8; --rail: #cdd5de;
+  --pass: #2f7d6d; --pass-bg: #e8f3f0; --stop: #b23a48; --stop-bg: #fbeef0; --head: #6b5ca5;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fog: #0f151c; --paper: #161f29; --ink: #e3e9ef; --quiet: #93a1b0; --line: #253140; --rail: #33414f;
+    --pass: #5db5a1; --pass-bg: #15302b; --stop: #e27a87; --stop-bg: #3a1c22; --head: #a597dc;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--fog); color: var(--ink); font: 16px/1.6 var(--sans); }
+a { color: inherit; text-decoration-color: var(--rail); text-underline-offset: 3px; }
+a:hover { text-decoration-color: currentColor; }
+code, .mono { font-family: var(--mono); font-size: 0.9em; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+
+/* top bar */
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 0; }
+.mark { font-weight: 600; font-size: 1.05rem; text-decoration: none; display: inline-flex; align-items: center; gap: 9px; }
+.mark svg { flex: none; }
+.bar nav { display: flex; gap: 22px; font-size: 0.92rem; color: var(--quiet); }
+.bar nav a { text-decoration: none; }
+.bar nav a:hover { color: var(--ink); }
+
+/* hero */
+.hero { display: grid; grid-template-columns: 1fr; gap: 40px; padding: 36px 0 64px; }
+@media (min-width: 940px) { .hero { grid-template-columns: 0.95fr 1.05fr; align-items: start; gap: 56px; padding-top: 56px; } }
+h1 { font-size: clamp(2rem, 4.4vw, 3.05rem); line-height: 1.12; letter-spacing: -0.022em; font-weight: 600; margin: 0 0 20px; }
+h1 .then { display: block; color: var(--stop); }
+.lede { font-size: 1.08rem; color: var(--quiet); margin: 0 0 30px; max-width: 34em; }
+.lede strong { color: var(--ink); font-weight: 500; }
+
+.verdicts { border-top: 1px solid var(--line); margin: 0 0 30px; }
+.verdicts div { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+.verdicts dt { margin: 0; }
+.verdicts dt small { display: block; color: var(--quiet); font-size: 0.86rem; }
+.verdicts dd { margin: 0; font-weight: 500; white-space: nowrap; align-self: center; display: flex; align-items: center; gap: 8px; }
+.ok { color: var(--pass); } .bad { color: var(--stop); }
+.verdicts .doppel dt { font-weight: 600; }
+
+.go { display: inline-flex; align-items: center; gap: 10px; background: var(--ink); color: var(--fog); text-decoration: none;
+  padding: 12px 20px; border-radius: 8px; font-weight: 500; }
+.go:hover { background: color-mix(in srgb, var(--ink) 86%, var(--head)); }
+.secondary { margin-left: 18px; font-size: 0.95rem; color: var(--quiet); }
+
+/* the evidence: one recorded request from doppel-demo#1 */
+.evidence { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  box-shadow: 0 1px 0 var(--line), 0 18px 40px -28px rgba(30, 42, 56, 0.35); }
+.ev-head { padding: 16px 20px 14px; border-bottom: 1px solid var(--line); }
+.ev-head .pr { display: flex; align-items: center; gap: 8px; color: var(--quiet); font-size: 0.86rem; }
+.ev-head h2 { font-size: 1.05rem; margin: 4px 0 6px; font-weight: 600; }
+.ev-head .says { margin: 0; color: var(--quiet); font-size: 0.92rem; }
+.ev-head .says b { color: var(--ink); font-weight: 500; }
+.req { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 12px 20px; background: var(--fog);
+  border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 0.86rem; }
+.req .who { color: var(--quiet); }
+pre.diff { margin: 0; padding: 10px 0; font: 0.88rem/1.75 var(--mono); overflow-x: auto; }
+pre.diff span { display: block; padding: 0 20px; white-space: pre; }
+pre.diff .ctx { color: var(--quiet); }
+pre.diff .del { background: var(--stop-bg); }
+pre.diff .add { background: var(--pass-bg); }
+pre.diff .add b { color: var(--stop); font-weight: 500; }
+.ev-why { padding: 14px 20px 18px; border-top: 1px solid var(--line); font-size: 0.93rem; }
+.ev-why p { margin: 0 0 10px; }
+.ev-why blockquote { margin: 0; padding-left: 14px; border-left: 3px solid var(--head); color: var(--quiet); }
+.ev-why cite { display: block; font-style: normal; font-size: 0.84rem; margin-top: 6px; }
+.ev-foot { display: flex; flex-wrap: wrap; gap: 6px 20px; padding: 12px 20px; border-top: 1px solid var(--line); font-size: 0.88rem; }
+
+/* sections */
+section { padding: 64px 0; border-top: 1px solid var(--line); }
+h2.sec { font-size: 1.55rem; letter-spacing: -0.015em; font-weight: 600; margin: 0 0 8px; }
+.sub { color: var(--quiet); margin: 0 0 28px; max-width: 42em; }
+.cols { display: grid; gap: 40px; }
+@media (min-width: 940px) { .cols { grid-template-columns: 1.15fr 0.85fr; gap: 56px; } }
+
+/* try form: the field is the argument of a command */
+form.cmd { display: flex; flex-wrap: wrap; gap: 10px; }
+.field { flex: 1 1 360px; min-width: 0; display: flex; align-items: center; background: var(--paper); border: 1px solid var(--rail);
+  border-radius: 8px; font-family: var(--mono); font-size: 0.95rem; }
+.field:focus-within { border-color: var(--ink); box-shadow: 0 0 0 3px color-mix(in srgb, var(--head) 22%, transparent); }
+.field label { padding: 0 2px 0 14px; color: var(--quiet); white-space: nowrap; }
+.field input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--ink); font: inherit; padding: 13px 14px 13px 6px; outline: 0; }
+form.cmd button { border: 0; border-radius: 8px; padding: 0 22px; min-height: 48px; font: 500 1rem var(--sans); cursor: pointer;
+  background: var(--ink); color: var(--fog); }
+.hint { margin: 10px 0 0; font-size: 0.9rem; color: var(--quiet); min-height: 1.5em; }
+.hint.bad { color: var(--stop); }
+
+.prs { margin: 28px 0 0; padding: 0; list-style: none; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
+.prs li + li { border-top: 1px solid var(--line); }
+.prs button { all: unset; box-sizing: border-box; width: 100%; cursor: pointer; display: grid; grid-template-columns: auto 1fr auto;
+  gap: 4px 14px; padding: 14px 18px; align-items: start; }
+.prs button:hover { background: color-mix(in srgb, var(--fog) 60%, transparent); }
+.prs button:focus-visible { outline: 2px solid var(--head); outline-offset: -2px; border-radius: 10px; }
+.prs .icon { margin-top: 3px; color: var(--pass); }
+.prs .t { font-weight: 500; }
+.prs .t span { color: var(--quiet); font-weight: 400; }
+.prs .d { grid-column: 2; color: var(--quiet); font-size: 0.9rem; }
+.prs .expect { grid-row: 1 / span 2; grid-column: 3; align-self: center; font-size: 0.8rem; font-weight: 500; white-space: nowrap; }
+@media (max-width: 560px) { .prs .expect { grid-row: auto; grid-column: 2; align-self: start; } }
+
+.aside h3 { font-size: 1rem; margin: 0 0 10px; font-weight: 600; }
+.aside ol { margin: 0 0 24px; padding-left: 1.2em; color: var(--quiet); }
+.aside li { margin: 0 0 8px; padding-left: 4px; }
+.aside p { color: var(--quiet); font-size: 0.93rem; margin: 0; }
+
+/* how it works: three runs, two comparisons */
+.worlds { display: grid; gap: 0; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.world { display: grid; grid-template-columns: 132px 1fr; gap: 6px 20px; padding: 18px 22px; }
+.world + .world { border-top: 1px solid var(--line); }
+.world .name { font-family: var(--mono); font-weight: 500; }
+.world .name i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 9px; background: var(--rail); vertical-align: 1px; }
+.world.head .name i { background: var(--head); }
+.world p { margin: 0; color: var(--quiet); }
+.world p b { color: var(--ink); font-weight: 500; }
+@media (max-width: 560px) { .world { grid-template-columns: 1fr; } }
+.modes { margin-top: 28px; display: grid; gap: 28px; }
+@media (min-width: 760px) { .modes { grid-template-columns: 1fr 1fr; gap: 40px; } }
+.modes h3 { margin: 0 0 6px; font-size: 1rem; font-weight: 600; }
+.modes p { margin: 0; color: var(--quiet); font-size: 0.95rem; }
+
+/* results table */
+.table-wrap { overflow-x: auto; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
+table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 0.95rem; }
+th, td { text-align: left; padding: 11px 18px; border-bottom: 1px solid var(--line); }
+th { font-weight: 500; color: var(--quiet); font-size: 0.86rem; }
+td.n { font-family: var(--mono); }
+tr.us td { font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+.note { color: var(--quiet); font-size: 0.92rem; margin: 16px 0 0; max-width: 46em; }
+
+/* recent runs, listed the way GitHub lists checks */
+.runs { list-style: none; margin: 0; padding: 0; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
+.runs li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 11px 18px; }
+.runs li + li { border-top: 1px solid var(--line); }
+.runs .st { width: 1.1em; font-weight: 600; text-align: center; }
+.runs .st.red { color: var(--stop); } .runs .st.green { color: var(--pass); } .runs .st.grey { color: var(--quiet); }
+.runs .what { flex: 1 1 260px; font-family: var(--mono); font-size: 0.88rem; overflow-wrap: anywhere; }
+.runs .out { color: var(--quiet); font-size: 0.88rem; }
+.runs .links { display: flex; gap: 14px; font-size: 0.88rem; }
+.runs .empty { color: var(--quiet); }
+
+footer { border-top: 1px solid var(--line); padding: 32px 0 48px; color: var(--quiet); font-size: 0.9rem; }
+footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="bar">
+    <a class="mark" href="https://github.com/Maukthik/doppel" aria-label="Doppel on GitHub">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="8" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="14" cy="11" r="6.5" fill="none" stroke="var(--head)" stroke-width="1.6"/></svg>
+      Doppel
+    </a>
+    <nav>
+      <a href="#how">How it works</a>
+      <a href="#results">Results</a>
+      <a href="https://github.com/Maukthik/doppel">GitHub</a>
+    </nav>
+  </header>
+
+  <div class="hero">
+    <div>
+      <h1>All 44 tests passed.<span class="then">The pull request leaked every password hash.</span></h1>
+      <p class="lede">Doppel runs a pull request's code next to the code it started from, in <strong>Nebius</strong> sandboxes,
+        and compares every response. <strong>NVIDIA Nemotron</strong> checks each difference against what the PR says
+        it does. What you get is evidence: the request, the old answer and the new one.</p>
+      <dl class="verdicts" aria-label="Three checks on the same pull request">
+        <div><dt>The app's own test suite<small>44 tests, microblog-api</small></dt><dd class="ok">✓ all pass</dd></div>
+        <div><dt>AI code review<small>Nemotron 3 Ultra, full source and diff</small></dt><dd class="ok">✓ “safe”</dd></div>
+        <div class="doppel"><dt>Doppel<small>ran both versions, 117 requests each</small></dt><dd class="bad">✗ regression</dd></div>
+      </dl>
+      <a class="go" href="#try">Run it on a pull request</a>
+      <a class="secondary" href="https://github.com/Maukthik/doppel-demo/pull/1">See the live PR</a>
+    </div>
+
+    <figure class="evidence" aria-label="One recorded request from the pull request" style="margin:0">
+      <div class="ev-head">
+        <div class="pr"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1.5 3.25a2.25 2.25 0 1 1 3 2.12v5.26a2.25 2.25 0 1 1-1.5 0V5.37a2.25 2.25 0 0 1-1.5-2.12Zm2.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM3 12.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm7.5-9.25a.75.75 0 0 1 .75-.75h.5A2.25 2.25 0 0 1 14 5v5.63a2.25 2.25 0 1 1-1.5 0V5a.75.75 0 0 0-.75-.75h-.5a.75.75 0 0 1-.75-.75Zm2.25 8.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"/></svg>doppel-demo #1 · one line changed in api/schemas.py</div>
+        <h2>Describe has_password in the API schema</h2>
+        <p class="says"><b>The PR says:</b> “Back <code>has_password</code> with the actual column so the OpenAPI docs describe it.”</p>
+      </div>
+      <div class="req"><span>GET /api/users</span><span class="who">from test_auth.py::test_get_token</span></div>
+<pre class="diff"><span class="ctx">  data[0].password_hash</span><span class="del">- (absent)</span><span class="add">+ <b>"scrypt:32768:8:1$vOQdSi9zHZhK00Np$22cfbfb7…"</b></span></pre>
+      <div class="ev-why">
+        <p>The same field appeared on <b>14 endpoints</b>, in <b>38 requests</b> from 25 tests. No test asserts on it.</p>
+        <blockquote>“The diff adds password_hash as a dump_only auto_field, exposing the actual password hash in API
+          responses where it was previously absent, which the PR description does not announce.”
+          <cite>Nemotron 3 Ultra, judging the difference against the PR description</cite></blockquote>
+      </div>
+      <div class="ev-foot">
+        <a href="https://maukthik.github.io/doppel-demo/doppel/pr-1/">Open the full check page</a>
+        <a href="https://github.com/Maukthik/doppel/tree/main/bench/results/demo-pr">Recorded results</a>
+      </div>
+    </figure>
+  </div>
+</div>
+
+<section id="try">
+  <div class="wrap cols">
+    <div>
+      <h2 class="sec">Run it on a pull request</h2>
+      <p class="sub">Any public PR to a Python web app. Doppel replies on a GitHub issue in 1 to 5 minutes, with a link
+        to the check page.</p>
+      <form class="cmd" id="f">
+        <div class="field">
+          <label for="url">doppel check</label>
+          <input id="url" type="url" required spellcheck="false" autocomplete="off" placeholder="https://github.com/owner/repo/pull/123">
+        </div>
+        <button type="submit">Run</button>
+      </form>
+      <p class="hint" id="hint">Opens a GitHub issue with the link filled in. Submit it to start the run.</p>
+
+      <ul class="prs" aria-label="Example pull requests">
+        <li><button data-url="https://github.com/Maukthik/doppel-demo/pull/1">
+          <svg class="icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1.5 3.25a2.25 2.25 0 1 1 3 2.12v5.26a2.25 2.25 0 1 1-1.5 0V5.37a2.25 2.25 0 0 1-1.5-2.12Zm2.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM3 12.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm7.5-9.25a.75.75 0 0 1 .75-.75h.5A2.25 2.25 0 0 1 14 5v5.63a2.25 2.25 0 1 1-1.5 0V5a.75.75 0 0 0-.75-.75h-.5a.75.75 0 0 1-.75-.75Zm2.25 8.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"/></svg>
+          <span class="t">Describe has_password in the API schema <span>#1</span></span>
+          <span class="d">Says it documents a field. Puts every user's password hash in the API's answers.</span>
+          <span class="expect bad">✗ regression</span></button></li>
+        <li><button data-url="https://github.com/Maukthik/doppel-demo/pull/2">
+          <svg class="icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1.5 3.25a2.25 2.25 0 1 1 3 2.12v5.26a2.25 2.25 0 1 1-1.5 0V5.37a2.25 2.25 0 0 1-1.5-2.12Zm2.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM3 12.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm7.5-9.25a.75.75 0 0 1 .75-.75h.5A2.25 2.25 0 0 1 14 5v5.63a2.25 2.25 0 1 1-1.5 0V5a.75.75 0 0 0-.75-.75h-.5a.75.75 0 0 1-.75-.75Zm2.25 8.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"/></svg>
+          <span class="t">Small cleanup in auth error handlers <span>#2</span></span>
+          <span class="d">Says it tidies two handlers. Renames <code>message</code> to <code>name</code> in every 401 and 403.</span>
+          <span class="expect bad">✗ regression</span></button></li>
+        <li><button data-url="https://github.com/Maukthik/doppel-demo/pull/3">
+          <svg class="icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1.5 3.25a2.25 2.25 0 1 1 3 2.12v5.26a2.25 2.25 0 1 1-1.5 0V5.37a2.25 2.25 0 0 1-1.5-2.12Zm2.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM3 12.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm7.5-9.25a.75.75 0 0 1 .75-.75h.5A2.25 2.25 0 0 1 14 5v5.63a2.25 2.25 0 1 1-1.5 0V5a.75.75 0 0 0-.75-.75h-.5a.75.75 0 0 1-.75-.75Zm2.25 8.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"/></svg>
+          <span class="t">Better endpoint descriptions <span>#3</span></span>
+          <span class="d">Only docstrings change, and the PR says so.</span>
+          <span class="expect ok">✓ nothing to flag</span></button></li>
+      </ul>
+    </div>
+    <div class="aside">
+      <h3>What happens when you submit</h3>
+      <ol>
+        <li>The issue starts a workflow in <a href="https://github.com/Maukthik/doppel-try">doppel-try</a>, a public repo you can read.</li>
+        <li>It checks out the commit the PR started from and the PR's latest commit.</li>
+        <li>Both go to Nebius sandboxes, where the app is installed and its own tests run: twice on the old code, once on the new.</li>
+        <li>Nemotron judges every difference against the PR's description, and Doppel replies on the issue.</li>
+      </ol>
+      <p>Works when the tests run from <code>tox.ini</code>, a CI workflow, a Makefile or a noxfile (Flask, Django,
+        FastAPI). If Doppel can't compare the two versions, the reply says why; it never says “no regressions”.
+        Runs are public and capped per day, because each one uses real sandboxes.</p>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2 class="sec">Three runs, two comparisons</h2>
+    <p class="sub">A test suite checks what someone thought to assert. Doppel records everything the app answers, so a
+      field nobody asserts on still shows up.</p>
+    <div class="worlds">
+      <div class="world"><span class="name"><i></i>base</span>
+        <p>The code the PR started from. Every request and response is recorded.</p></div>
+      <div class="world"><span class="name"><i></i>base again</span>
+        <p>The same code, run a second time. Whatever differs from the first run is <b>noise</b> (timestamps, tokens,
+          random IDs) and is ignored.</p></div>
+      <div class="world head"><span class="name"><i></i>head</span>
+        <p>The code with the PR. Every other difference is a <b>change in behavior</b>. It is re-checked by running the
+          tests involved again, then Nemotron labels it <b>intended</b>, <b>regression</b> or <b>needs a human</b>,
+          using the PR's description, never the diff alone.</p></div>
+    </div>
+    <div class="modes">
+      <div>
+        <h3>Test mode, on this page</h3>
+        <p>The users are the app's own tests, recorded request by request. No setup: the commands come from the repo.
+          The tests run from the base branch, so a PR can't edit a test to hide a change.</p>
+      </div>
+      <div>
+        <h3>The guided twin, in the GitHub Action</h3>
+        <p>Nemotron 3 Ultra lists the regressions it suspects; Nemotron writes users and probes that send the exact
+          inputs. Each suspicion ends confirmed, refuted or untested. It needs a <code>doppel.toml</code>, which
+          <code>doppel init</code> writes.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="results">
+  <div class="wrap">
+    <h2 class="sec">30 pull requests to a real app</h2>
+    <p class="sub">microblog-api, a well-tested Flask app. 20 PRs carry a regression, 3 of them real upstream fixes
+      reverted. 10 are safe. Each comes with the kind of description authors write.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th></th><th>Regressions caught</th><th>False alarms</th><th>Cost per PR</th><th>Time per PR</th></tr></thead>
+        <tbody>
+          <tr><td>The app's 44 tests</td><td class="n">12/20</td><td class="n">0/10</td><td class="n">$0</td><td class="n">11 s</td></tr>
+          <tr><td>AI code review (Nemotron 3 Ultra)</td><td class="n">17/20</td><td class="n">1/10</td><td class="n">$0.03</td><td class="n">3 s</td></tr>
+          <tr class="us"><td>Doppel, review-guided</td><td class="n">16/20</td><td class="n">2/10</td><td class="n">$0.25</td><td class="n">89 s</td></tr>
+          <tr class="us"><td>Tests + Doppel</td><td class="n">19/20</td><td class="n">2/10</td><td></td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">They catch different bugs: Doppel caught 7 of the 8 the test suite missed, including the two the
+      AI reviewer called safe. Every catch and every false alarm comes with the recorded requests.
+      <a href="https://github.com/Maukthik/doppel#results">Method, disclosures and all runs</a>.</p>
+  </div>
+</section>
+
+<section id="runs">
+  <div class="wrap">
+    <h2 class="sec">Recent runs</h2>
+    <p class="sub">Every run here is a public issue, with its reply and check page.</p>
+    <ul class="runs" id="list"><li class="empty">Loading…</li></ul>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Sandboxes on Nebius Token Factory. Models: NVIDIA Nemotron. Built for the Nebius x NVIDIA Global AI Hackathon.</span>
+    <span><a href="https://github.com/Maukthik/doppel#put-it-on-your-pull-requests">Add it to your repo</a> ·
+      <a href="https://github.com/Maukthik/doppel">github.com/Maukthik/doppel</a> · MIT</span>
+  </div>
+</footer>
+
+<script>
+const REPO = "Maukthik/doppel-try";
+const PR = /https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}\/pull\/\d{1,7}/;
+const hint = document.getElementById("hint"), input = document.getElementById("url");
+
+function go(url) {
+  const m = (url || "").trim().match(PR);
+  if (!m) {
+    hint.textContent = "That isn't a pull request link. It looks like https://github.com/owner/repo/pull/123";
+    hint.className = "hint bad";
+    return;
+  }
+  hint.textContent = "Opened the issue in a new tab. Submit it there to start the run.";
+  hint.className = "hint";
+  const q = new URLSearchParams({ template: "try.yml", title: "Try: " + m[0], pr: m[0] });
+  window.open(`https://github.com/${REPO}/issues/new?${q}`, "_blank", "noopener");
+}
+document.getElementById("f").addEventListener("submit", e => { e.preventDefault(); go(input.value); });
+document.querySelectorAll(".prs button").forEach(b => b.addEventListener("click", () => {
+  input.value = b.dataset.url; go(b.dataset.url);
+}));
+
+const OUTCOME = {
+  "regression found": ["red", "✗", "regression found"],
+  "no regressions": ["green", "✓", "no regressions"],
+  "couldn't check": ["grey", "–", "couldn't check"],
+  "no result": ["grey", "–", "no result"],
+  "running": ["grey", "●", "running"],
+};
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function link(href, text) { const a = el("a", "", text); a.href = href; return a; }
+function ago(iso) {
+  const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  if (!(m >= 0)) return "";
+  if (m < 60) return m <= 1 ? "just now" : `${m} min ago`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
+}
+
+const list = document.getElementById("list");
+fetch(`https://api.github.com/repos/${REPO}/issues?state=all&per_page=15`)
+  .then(r => r.ok ? r.json() : Promise.reject(r.status))
+  .then(issues => {
+    list.textContent = "";
+    const names = i => (i.labels || []).map(l => l.name);
+    issues.filter(i => !i.pull_request && !names(i).includes("not run")).slice(0, 10).forEach(i => {
+      let key = names(i).find(n => n in OUTCOME);
+      if (!key) key = Date.now() - Date.parse(i.created_at) > 40 * 60 * 1000 ? "no result" : "running";
+      const [cls, mark, word] = OUTCOME[key];
+      const pr = ((i.body || "") + " " + (i.title || "")).match(PR);
+      const li = el("li");
+      const st = el("span", "st " + cls, mark); st.setAttribute("aria-hidden", "true");
+      const links = el("span", "links");
+      if (key === "regression found" || key === "no regressions") links.append(link(`./try/${i.number}/`, "check page"));
+      links.append(link(i.html_url, `issue #${i.number}`));
+      li.append(st, el("span", "what", pr ? pr[0].replace("https://github.com/", "") : (i.title || "")),
+                el("span", "out", `${word}${i.created_at ? " · " + ago(i.created_at) : ""}`), links);
+      list.append(li);
+    });
+    if (!list.children.length) list.append(el("li", "empty", "No runs yet. Try one of the examples above."));
+  })
+  .catch(() => {
+    list.textContent = "";
+    const li = el("li", "empty");
+    li.append(link(`https://github.com/${REPO}/issues?q=is%3Aissue`, "See the runs on GitHub"));
+    list.append(li);
+  });
+</script>
+</body>
+</html>

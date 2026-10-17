@@ -1,0 +1,125 @@
+name: try
+# Someone opens an issue with a public pull request link; Doppel checks that PR and replies on the issue.
+# Everything the issue's author wrote reaches the scripts through env, never inside a shell command.
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write   # the check page goes to gh-pages
+  issues: write     # replies and labels
+
+concurrency:
+  group: try-${{ github.event.issue.number }}
+
+jobs:
+  try:
+    if: github.event.issue.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      ISSUE: ${{ github.event.issue.number }}
+      DAILY_LIMIT: ${{ vars.DAILY_LIMIT || '25' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: try
+      - name: Read the pull request link
+        id: start
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: python try/scripts/try_pr.py start
+      - uses: actions/setup-python@v7
+        if: steps.start.outputs.go == 'true'
+        with:
+          python-version: "3.12"
+      - name: Install Doppel
+        if: steps.start.outputs.go == 'true'
+        run: pip install --quiet "doppel-check[nebius] @ git+https://github.com/Maukthik/doppel@v1"
+      - name: Check out the pull request (base and head)
+        id: prepare
+        if: steps.start.outputs.go == 'true'
+        env:
+          OWNER: ${{ steps.start.outputs.owner }}
+          REPO: ${{ steps.start.outputs.repo }}
+          NUMBER: ${{ steps.start.outputs.number }}
+        run: python try/scripts/try_pr.py prepare
+      - name: Run Doppel
+        id: run
+        if: steps.start.outputs.go == 'true'
+        env:
+          NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
+          NEBIUS_PROJECT_ID: ${{ secrets.NEBIUS_PROJECT_ID }}
+          REPO: ${{ steps.start.outputs.repo }}
+        run: |
+          set +e
+          NEBIUS_API_KEY="$(printf '%s' "$NEBIUS_API_KEY" | tr -d '[:space:]')"
+          NEBIUS_PROJECT_ID="$(printf '%s' "$NEBIUS_PROJECT_ID" | tr -d '[:space:]')"
+          export NEBIUS_API_KEY NEBIUS_PROJECT_ID
+          # test mode only: it needs no setup in the repo, and its cost per run is known
+          doppel check --backend nebius --no-twin --strict --base .doppel/base --head .doppel/head \
+            --app "$REPO" --pr .doppel/out/PR.md \
+            --out .doppel/out/report.md --json .doppel/out/check.json 2>&1 | tee .doppel/out/doppel.log
+          code=${PIPESTATUS[0]}
+          [ -f .doppel/out/report.md ] || python try/scripts/try_pr.py fallback
+          [ -f .doppel/out/check.json ] && doppel view .doppel/out/check.json --no-open --public \
+            --out .doppel/out/doppel-check.html
+          cat .doppel/out/report.md >> "$GITHUB_STEP_SUMMARY"
+          echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Publish the check page
+        id: page
+        if: steps.run.outcome == 'success' && hashFiles('.doppel/out/doppel-check.html') != ''
+        run: |
+          set +e
+          REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          for try in 1 2 3; do   # two runs can finish together: start again from the newest gh-pages
+            rm -rf .doppel/pages
+            if ! git clone -q --depth 1 --branch gh-pages "$REMOTE" .doppel/pages 2>/dev/null; then
+              mkdir -p .doppel/pages && git -C .doppel/pages init -q && git -C .doppel/pages checkout -q -b gh-pages \
+                && git -C .doppel/pages remote add origin "$REMOTE"
+            fi
+            mkdir -p ".doppel/pages/try/$ISSUE" && cp .doppel/out/doppel-check.html ".doppel/pages/try/$ISSUE/index.html"
+            touch .doppel/pages/.nojekyll
+            git -C .doppel/pages add -A
+            git -C .doppel/pages -c user.name="doppel" -c user.email="doppel@users.noreply.github.com" \
+              commit -qm "Check page for issue $ISSUE"
+            if git -C .doppel/pages push -q origin gh-pages 2>/dev/null; then
+              OWNER="${GITHUB_REPOSITORY%%/*}"; NAME="${GITHUB_REPOSITORY#*/}"
+              echo "url=https://${OWNER,,}.github.io/${NAME}/try/${ISSUE}/" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep $((RANDOM % 10 + 5))
+          done
+          echo "::notice::The check page couldn't be published; it is in the run artifacts."
+      - name: Reply with the result
+        if: steps.run.outcome == 'success'
+        env:
+          PAGE: ${{ steps.page.outputs.url }}
+          URL: ${{ steps.start.outputs.url }}
+          BASE: ${{ steps.prepare.outputs.base_short }}
+          HEAD: ${{ steps.prepare.outputs.head_short }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CODE: ${{ steps.run.outputs.exit-code }}
+        run: |
+          FOOT="<sub>Checked $URL: the commit it started from (\`$BASE\`) against its latest commit (\`$HEAD\`).</sub><br>"
+          if [ -n "$PAGE" ]; then
+            FOOT="$FOOT**[Open the full check page →]($PAGE)** (ready about a minute after this comment)<br>"
+          else
+            FOOT="${FOOT}The full check page is in the [run artifacts]($RUN).<br>"
+          fi
+          FOOT="$FOOT<sub>Want this on every pull request of your own repo? [One workflow file](https://github.com/Maukthik/doppel#put-it-on-your-pull-requests).</sub>"
+          doppel comment --report .doppel/out/report.md --pr-number "$ISSUE" --footer "$FOOT"
+          python try/scripts/try_pr.py label "$CODE"
+      - name: Upload artifacts
+        if: always() && steps.start.outputs.go == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: doppel-report
+          path: .doppel/out/
+          if-no-files-found: ignore
+      - name: Say that this run broke
+        if: failure()
+        run: python try/scripts/try_pr.py crashed
