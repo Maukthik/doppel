@@ -2,230 +2,123 @@
 
 # Doppel
 
-**A twin of your app that tries every pull request first.**
+**Tests check what someone thought of. Reviewers read the diff. Doppel runs it.**
 
-*Nebius x NVIDIA Global AI Hackathon, Coding and Agentic Engineering track*
+A GitHub check that runs every pull request against the main branch, sends the same users through both,
+and proves each regression with the request, the old answer and the new answer.
+
+[![tests](https://github.com/Maukthik/doppel/actions/workflows/tests.yml/badge.svg)](https://github.com/Maukthik/doppel/actions/workflows/tests.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Nebius Token Factory](https://img.shields.io/badge/sandboxes-Nebius%20Token%20Factory-4b3bff)
+![NVIDIA Nemotron](https://img.shields.io/badge/models-NVIDIA%20Nemotron-76b900)
+
+[Replay site](https://maukthik.github.io/doppel/) · [Benchmark](bench/results/results.md) · [Method and limits](bench/README.md)
+
+*Nebius x NVIDIA Global AI Hackathon · Coding and Agentic Engineering track*
 
 </div>
 
-Tests check what you thought of. Doppel checks what your users do.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/doppel-architecture-dark.svg">
+  <img src="docs/doppel-architecture-light.svg" alt="Doppel architecture: the main branch is seeded once into a twin of the app in Nebius sandboxes, forked into a base world and a head world (with the PR's code); the same users (your tests plus Nemotron-written users) run in both; every response is compared; a Nemotron judge asks whether the PR meant each change, and regressions go to the PR comment and check. On 30 real PRs: tests 12/20, AI review 17/20, Doppel 16/20 with 0 false alarms, tests + Doppel 20/20." width="100%">
+</picture>
 
-Before a pull request is merged, Doppel builds a running copy of your app and its data,
-fills it with synthetic users, forks it into two worlds (the main branch and the pull request),
-replays the same users in both, and reports every difference: changed responses, new errors,
-slower requests. Then it tells you which differences the PR meant to make and which are regressions.
+<!-- 15-second GIF of the red PR comment turning green goes here: docs/demo.gif -->
 
-```
-            seed once                       fork per world (and per persona)
-  base code ──────────► seeded twin ──┬──► base world ──► replay personas ──┐
-                                      └──► head world ──► replay personas ──┴──► diff ──► PR report
-```
+## One line leaked every password hash
 
-## Status
+A pull request titled *"Describe has_password in the API schema"* changed one line in
+[microblog-api](https://github.com/miguelgrinberg/microblog-api), a well-tested open-source Flask app.
 
-| Stage | What | State |
+| | Verdict |
+|---|---|
+| The app's 44 tests | ✅ all pass |
+| AI code review (Nemotron 3 Ultra, full source + diff) | ✅ "safe" |
+| **Doppel** | ❌ **regression**: `GET /api/users` answers with `"password_hash": "scrypt:32768:8:1$…"` on every user object |
+
+The tests never looked at that field, and the reviewer didn't notice what one schema line does. Doppel
+didn't need to notice anything. It ran both versions, saw the field appear and showed the evidence.
+
+## Results on 30 pull requests to a real app
+
+20 PRs carry a regression (3 of them are real upstream bug fixes, reverted) and 10 are safe.
+Each PR has a description written the way authors write them: *"simplify the feed query"*, *"cheaper count for pagination"*.
+
+| | Regressions caught | False alarms on safe PRs | Cost / PR | Time / PR |
+|---|---|---|---|---|
+| App's own test suite (44 tests) | 12/20 | 0/10 | $0 | 11 s |
+| AI code review (Nemotron 3 Ultra) | 17/20 | 1/10 | $0.03 | 3 s |
+| **Review-guided Doppel** | **16/20** | **0/10** | $0.25 | 147 s |
+| **Tests + Doppel** | **20/20** | 0/10 | | |
+| AI review + Doppel | 19/20 | 1/10 | | |
+
+These methods catch **different** bugs. Doppel caught every regression the test suite missed. It also caught
+the two the AI reviewer called safe: the hash leak, and a token-revoke request that crashes with a 500. On the
+one safe PR where the reviewer raised a false alarm, Doppel sent the requests it was worried about
+(`limit=0`, `limit=abc`, `limit=30`) to both versions, got identical answers and cleared the PR.
+
+Doppel doesn't beat an AI reviewer on recall alone, and the numbers vary between runs (complete runs scored
+15, 17, 16 and 15 of 20). Its strength is that **every catch comes with proof and it raised no false alarms**.
+A held-out set of 10 PRs written after tuning gave the same result: tests 6/7, AI review 5/7, Doppel 6/7,
+0 false alarms. [Every PR, every verdict, and how the numbers were produced](bench/results/results.md).
+
+## How it works
+
+1. **Build the twin once.** In a Nebius sandbox, Doppel installs the app, loads its starting data and saves a checkpoint.
+2. **Fork two worlds.** The base world is the main branch. The head world is the same checkpoint with the PR's files laid on top, then installed and migrated again. Both start from identical data, so any difference comes from the code change.
+3. **Write the users.** Nemotron 3.5 Lightning reads the app and the diff and writes personas: ordinary users, power users and careless users who send zero, negative, empty or unknown values. In **review-guided mode**, Nemotron 3 Ultra first lists the regressions it suspects, and Doppel writes a probe persona to test each one.
+4. **Replay in isolation.** Every persona runs in its own throwaway fork of each world, all in parallel, so one user's order or deleted post can't leak into another user's results. Personas that get stuck at a login are rehearsed on the base world and repaired first.
+5. **Compare.** Doppel lines up every request in the two worlds and flags new errors, status changes, changed values (naming the exact field) and large slowdowns. It ignores fields such as timestamps that differ even when the same code runs twice.
+6. **Judge and report.** Nemotron 3 Ultra labels each distinct difference as *intended*, *regression* or *needs a human*. It checks each one against the PR description, never the diff alone. Each suspicion ends up **confirmed**, **refuted** or **untested**, with the recorded requests as evidence. Doppel posts one PR comment, writes a pytest for each regression, and fails the check.
+
+**The reviewer guesses, the twin proves.** The AI reviewer is good at suspecting and Doppel is good at proving.
+Review-guided mode combines them.
+
+### Two modes, one check
+
+| | **Test mode** | **Guided twin** |
 |---|---|---|
-| 1 | Local twin: seed once, fresh world per persona, replay, diff, Markdown report | done |
-| 2 | Nebius Sandboxes backend (checkpoint + parallel forks) and Nemotron personas | done: live run found all 6 changes in 7.4 s |
-| 3 | Nemotron judge: intended vs regression, using the PR description; writes a test per regression | done |
-| 4 | GitHub Action: comment on every PR, artifacts, fails the check on regressions | done: live on a demo repo |
-| 5 | Benchmark on a real app (30 PRs to microblog-api + 10 held out): tests 12/20, AI review 17/20, review-guided Doppel 16/20 with 0 false alarms; tests + Doppel together 20/20 | done |
-| 5b | `doppel init`: Nemotron drafts the twin spec and seed, boots them, fixes what breaks, finds noisy keys | done: microblog-api (Flask) and linkding (Django) set up with no hand edits; on linkding it found the same 3 noise keys as the hand-written answer key ([bench/init](bench/init)) |
-| 6 | README results, video, submission | in progress |
+| Who the users are | Your own test suite, recorded request by request | Personas and probes written by Nemotron |
+| Setup | None: the commands come from `tox.ini`, your CI workflow, a Makefile or a noxfile | A `doppel.toml`, written by `doppel init` |
+| Catches | Everything that changed in responses your tests already produce, including fields no assertion checks | Paths no test calls at all |
+| Frameworks | Flask/Werkzeug, Django (+ DRF), FastAPI/Starlette, live-server tests via `requests`/`httpx` | Any HTTP + JSON app |
 
-## Try it (stage 1, offline)
+`doppel check` runs both in parallel and merges them into one report. When a mode can't run, the report
+says why, and that never counts as a pass.
+
+## Try it in one minute (offline, no keys)
 
 ```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate    macOS/Linux: source .venv/bin/activate
+git clone https://github.com/Maukthik/doppel && cd doppel
+python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
-python -m pytest -q
 doppel run --base examples/shop/base --head examples/shop/head --personas examples/shop/personas.json
 ```
 
-The shop example's pull request (`examples/shop/PR.md`) says it only adds an `in_stock` flag.
-Doppel also finds the two changes it doesn't mention: coupon orders now cost more, and an order
-with quantity 0 is accepted instead of rejected.
+The shop's PR ([`examples/shop/PR.md`](examples/shop/PR.md)) says it only adds an `in_stock` flag. Doppel
+finds two more changes the PR doesn't mention: coupon orders now cost more, and an order for quantity 0 is
+accepted instead of rejected.
 
-## Run it on Nebius (stage 2)
+With a Nebius key in `.env` (copy [`.env.example`](.env.example)), the same run happens in sandboxes, with
+invented users and the judge:
 
 ```bash
 pip install -e ".[nebius,dev]"
-cp .env.example .env        # fill in NEBIUS_API_KEY and NEBIUS_PROJECT_ID
-# 1. the same hand-written personas, now in sandboxes: must match the local report
-doppel run --backend nebius --base examples/shop/base --head examples/shop/head --personas examples/shop/personas.json
-# 2. let Nemotron 3.5 Lightning invent personas, half of them aimed at what the PR changed
-doppel personas --app examples/shop/base --head examples/shop/head -n 12 --out generated.json
-doppel run --backend nebius --base examples/shop/base --head examples/shop/head --personas generated.json
-```
-
-How the twin uses sandbox checkpoints: base code is uploaded, dependencies installed and data
-seeded once (checkpoint). The base world forks from it; the head world forks from it with the
-PR's files laid on top. Every persona then runs in its own disposable fork of its world, all in
-parallel, so no persona sees another's side effects.
-
-## See a run
-
-Every run now says whether the users actually ran the code the PR changed ("Changed code reached by the
-users: 3 of 3 change(s)"): a line tracer in each world records which changed functions executed.
-
-```bash
-doppel run ... --json run.json
-doppel view run.json        # one web page: both worlds per user, every difference, verdicts, reach
-```
-
-The GitHub Action saves the same page as `doppel-run.html` in each run's artifacts.
-
-## Judge the changes (stage 3)
-
-```bash
 doppel run --backend nebius --base examples/shop/base --head examples/shop/head \
-  --personas examples/shop/personas.json --pr examples/shop/PR.md \
-  --out report.md --tests-out test_doppel_regressions.py
+  --personas examples/shop/personas.json --pr examples/shop/PR.md --tests-out test_regressions.py
 ```
 
-Nemotron 3 Ultra reads the PR description and diff and labels each distinct change `intended`,
-`regression` or `needs_human`. The report leads with regressions; intended changes fold away.
-`--tests-out` writes one pytest per regression that replays the persona and expects the base
-behavior: these tests pass on the main branch and fail on the PR. `--strict` exits 1 on regressions.
+## Put it on your pull requests
 
-## Use it on your pull requests (stage 4)
-
-`.github/workflows/doppel.yml` in your repo:
+Add `.github/workflows/doppel.yml` and two repository secrets, `NEBIUS_API_KEY` and `NEBIUS_PROJECT_ID`:
 
 ```yaml
 name: doppel
 on: pull_request
-permissions: { contents: read, pull-requests: write }
-jobs:
-  twin:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: Maukthik/doppel@main
-        with:
-          app-dir: .                     # folder with doppel.toml
-          nebius-api-key: ${{ secrets.NEBIUS_API_KEY }}
-          nebius-project-id: ${{ secrets.NEBIUS_PROJECT_ID }}
-```
-
-Every PR gets one comment (updated on each push), the report in the job summary, and the personas,
-raw recordings and regression tests as run artifacts. The check fails on regressions, and a persona that
-runs on base but fails on head (say the app no longer starts) counts as one; a run where no persona replayed
-at all exits 2 instead of passing. Personas come from `doppel-personas.json` on the base branch, so a PR
-can't pick the users that test it; without one, Nemotron invents them. PRs from forks don't get secrets, so the twin
-runs on branches of the repo itself. `examples/demo-repo` sets up a repo to watch it work.
-
-## Benchmark on a real app (stage 5)
-
-30 pull requests to [microblog-api](https://github.com/miguelgrinberg/microblog-api) (Flask, 44 tests):
-20 carry a regression (3 are reverted upstream bug fixes), 10 are safe. Its own test suite catches
-12 of the 20, an AI code reviewer (Nemotron 3 Ultra reading the diff) 17 with 1 false alarm, and
-review-guided Doppel 16 with no false alarms. They catch different bugs: the app's tests plus Doppel
-catch all 20. On 10 held-out PRs written afterwards: tests 6/7, AI review 5/7, Doppel 6/7, no false alarms.
-Results vary between runs, and the judge was improved after the held-out run; both are disclosed in the method.
-Method and honest limits: [bench/README.md](bench/README.md). Results: [bench/results/results.md](bench/results/results.md).
-
-Personas can log in: a step can send HTTP Basic credentials (`"auth": ["alice", "pw"]`), save the
-returned token, and later steps send it in a header (`"headers": {"Authorization": "Bearer {token}"}`).
-With `--rehearse` (on in the Action), personas first run once on base; any stuck at 401/403/404 go back
-to Nemotron with the app's real answers and are fixed before the comparison. Every report states
-coverage ("the app served X of Y requests"), so "no regressions" is never confused with "couldn't test".
-
-## Replay site
-
-`doppel site` turns recorded runs into a static site: the hash-leak story up front, a gallery of
-runs, and the benchmark. Each run page shows what happened inside the twin on one time axis (the
-checkpoint, the two worlds, every user's throwaway run), then every request in both worlds and the
-judge's verdicts. Nothing runs when a page opens; it replays what was recorded and says when.
-
-```bash
-doppel site --gallery site/gallery.json --out _site    # then open _site/index.html
-```
-
-`site/gallery.json` lists the runs to publish: a `doppel run --json` file, or a benchmark result with
-the arm to show. Credentials and password hashes are masked before publishing (the hash scheme stays
-visible, so a leak is still a leak), and the build fails if any credential from the environment would
-appear on a page. `.github/workflows/site.yml` publishes it on GitHub Pages on every push to main
-(one-time setup: Settings, Pages, Source: GitHub Actions).
-
-## Twin spec
-
-Let Doppel write it (needs `NEBIUS_API_KEY` and `NEBIUS_PROJECT_ID`):
-
-```bash
-cd your-app
-doppel init            # writes doppel.toml (+ doppel_seed.json / doppel_seed.py), proven in a sandbox
-doppel probe           # just print what Doppel learns about the app: routes, database, login, models
-```
-
-`doppel init` sets an app up in three layers, each catching what the one before missed:
-
-1. **Ask the app, don't guess.** It installs the app in a sandbox and imports it the way its framework does
-   (Flask, Django, FastAPI): the real routes and what each view reads, where the database lives, which view
-   is the login, the models' required fields, the app's own commands, and any import error.
-2. **Seed through the front door.** The preferred starting data is `doppel_seed.json`: ordinary HTTP steps
-   (sign up, log in, create records) sent once to the running app before the checkpoint, so the app itself
-   hashes passwords, fills required fields and picks its database. A seed script remains for data no route
-   can create.
-3. **An agent when the drafts fail.** Nemotron 3 Ultra drafts the files from those facts (`--tries 2`); if
-   they fail, a setup agent takes over in a live sandbox with `shell`, `read`, `serve` (start the app and
-   send it requests) and `try` (the full twin check), up to 20 steps, like a developer setting up an
-   unfamiliar repo. `--no-agent` stops after the drafts.
-
-Finally it replays invented users against the **same** code twice: any JSON key that differs between two
-identical runs is noise and is added to `[diff] ignore`. Review the files before committing. Use
-`--backend local` to try it on your machine.
-
-- `doppel init --trace` saves every attempt to `.doppel-trace/`: the prompt, the reply, each check, what the
-  twin did, the database scan, and why init kept or dropped the attempt.
-- `doppel view .doppel-trace` turns that trace into one web page (opened in your browser): each attempt on a
-  five-stage rail, with the checks, smoke requests, database scan and drafted files one click away.
-- `doppel init --check` tests the `doppel.toml` and `doppel_seed.py` already in the app, with no drafting:
-  the way to finish a setup by hand (add `--calibrate` to replay invented users too).
-
-Or write it by hand. Put a `doppel.toml` next to your app:
-
-```toml
-[app]
-image = "python:3.12-slim"              # sandbox image
-install = "pip install -r requirements.txt"
-start = "python app.py"   # must listen on $PORT
-ready = "/health"
-seed = "python seed.py"   # runs once on the base code; both worlds start from this data
-migrate = ""              # runs in each world after its code is in place
-env = { DATABASE_URL = "sqlite:///twin.db" }   # one set of env vars for install, seed, migrate and start
-
-[diff]
-ignore = ["created_at"]   # JSON keys allowed to differ
-slow_ratio = 2.0
-slow_min_ms = 50
-```
-
-On a pull request, `[app]` is read from the PR (it may add a dependency or a migration) and `[diff]` from
-the base branch, so a PR can't add the fields it changes to `ignore`. A PR that edits `doppel.toml`,
-`doppel_seed.py` or the personas file gets a warning in its comment.
-
-## One command, both modes
-
-```bash
-doppel check --base main-checkout --head pr-checkout --pr PR.md --strict
-```
-
-`doppel check` runs **test mode** (your own test suite, compared response by response; nothing to set up) and,
-when the repo has a `doppel.toml`, the **guided twin** (Nemotron's invented users, steered by an AI reviewer's
-suspicions, exploring what no test calls) at the same time. Both are judged against the PR description and become
-one report: regressions with the old and new value and which mode found them, then what needs a human, then the
-intended changes, then the reviewer's suspicions as the twin checked them. A mode that can't run says why; it never
-becomes a verdict. Exit codes: 0 no regressions, 1 regressions (with `--strict`), 2 neither mode could compare.
-
-In GitHub Actions it is one workflow file and two secrets; no `doppel.toml` needed for test mode:
-
-```yaml
-on: pull_request
 jobs:
   doppel:
     runs-on: ubuntu-latest
-    permissions: { contents: write, pull-requests: write }   # write: to publish the check page
+    permissions: { contents: write, pull-requests: write }   # write: publishes the check page
     steps:
       - uses: Maukthik/doppel@main
         with:
@@ -233,36 +126,151 @@ jobs:
           nebius-project-id: ${{ secrets.NEBIUS_PROJECT_ID }}
 ```
 
-The PR comment links to the full check page on the repo's GitHub Pages: after the first run creates the `gh-pages`
-branch, turn on Settings → Pages → Deploy from a branch → `gh-pages`. Without that (or on PRs from forks, whose
-token can't write), the page is in the run's artifacts instead.
+Test mode needs nothing else. With a `doppel.toml` in the repo, the guided twin runs too.
 
-## Test mode: no setup at all
+On every PR, Doppel posts **one comment**, updated on each push. It starts with the regressions the PR doesn't
+mention, each with the request, the old value, the new value and the reason, followed by what needs a human
+and the suspicions as checked. Intended changes are folded away. The full check page goes to GitHub Pages
+(or the run's artifacts), and **the check fails** on a regression.
+[`examples/demo-repo`](examples/demo-repo) sets up a repo where you can watch a red comment turn green.
+
+| Input | Default | What it does |
+|---|---|---|
+| `app-dir` | `.` | Folder holding `doppel.toml` |
+| `twin` | `auto` | `auto` also runs the guided twin when there's a `doppel.toml`; `off` = test mode only |
+| `guided` | `true` | AI reviewer suspicions become probe personas |
+| `personas` | `doppel-personas.json` | Personas file, **read from the base branch**; if missing, Nemotron writes `personas-count` (12) |
+| `judge` | `true` | Label each change intended / regression against the PR description |
+| `publish-page` | `true` | Publish the check page to `gh-pages` and link it from the comment |
+| `fail-on-regression` | `true` | Fail the check when the judge finds a regression |
+
+### A PR can't game its own check
+
+- **Test mode runs the base branch's tests on the head**, so editing a test can't hide a change.
+- **`[diff] ignore` and the personas come from the base branch**, so a PR can't add the fields it changes to the ignore list or choose its own testers.
+- **Every difference is confirmed** by rerunning the tests involved on base and head. One that doesn't happen again is dropped as noise.
+- **A pass has to mean something.** If the head no longer starts, that counts as a regression. If nothing could be replayed, the exit code is 2, not 0. If a suspicion couldn't be tested, the comment says so plainly instead of reporting "no regressions". Each report also states its coverage ("the app served X of Y requests").
+- **A PR that edits Doppel's own setup** (`doppel.toml`, the seed or the personas) gets a warning in its comment.
+
+## Evidence beyond the benchmark
+
+**Zero setup on real apps.** Test mode was run on 30 open-source Python web apps (Flask, Django and FastAPI)
+pinned to fixed commits, with nothing configured by hand. The predictions and the run rules were committed
+before each set ran.
+
+| App set | How it was used | Works | False differences |
+|---|---|---|---|
+| [Dev set](bench/results/fresh-rerun) (ctfd, wger, paperless-ngx, label-studio, mealie…) | Gaps were fixed against these apps: 1/10 before, 8/10 after | 8/10 | 0 |
+| [Held-out, round 1](bench/results/heldout) (pretalx, tandoor, ihatemoney…) | Run once, then fixed: 3/10, then [5/10](bench/results/heldout-rerun) on rerun | 3/10 → 5/10 | 0 |
+| [Held-out, round 2](bench/results/round2) (prefect, privacyidea, fava, isso…) | **First sight**, predicted 3–6 | **4/10** | **0** |
+
+Where it works, it ran up to 10,214 tests and recorded thousands of requests per app without a single false
+difference. Every stop gives a readable reason, usually that the tests need PostgreSQL or Redis or that the
+install failed. A stop never turns into a verdict.
+
+**Test mode on the benchmark (raw, before judging).** 21 of the 27 regressions changed a response the suite
+already sends. In 3 of those, every test still passed (the hash leak, a renamed error field, a field that
+disappeared). The other 6 were never requested by the suite. The guided twin caught 5 of those 6
+([details](bench/results/testmode)).
+
+**Real bugs, replayed.** We took real fixes from BugsInPy (FastAPI, Tornado) and from fava, isso, privacyidea
+and prefect, and replayed each one as the PR that brings its bug back. Test mode caught 2 of 15 runnable
+BugsInPy bugs. It caught 0 of 14 recent real fixes and raised 0 false alarms. In nearly every case, **the
+test suite never sent a request through the buggy code**, so there was nothing to compare. This is test
+mode's ceiling, and it's why the guided twin exists: it writes the requests no test sends
+([BugsInPy](bench/results/bugsinpy), [real fixes](bench/results/fixes)).
+
+**`doppel init` with no hand edits.** It set up microblog-api (Flask) and linkding (Django). On linkding it
+found the same 3 noisy fields as the hand-written answer key ([bench/init](bench/init)).
+
+## Setting up the twin
 
 ```bash
-doppel tests --base main-checkout --head pr-checkout --pr PR.md --strict
+cd your-app
+doppel init      # writes doppel.toml + doppel_seed.json, proven in a sandbox
+doppel probe     # just print what Doppel learns: routes, database, login, models
 ```
 
-Doppel runs the app's **own test suite** three times (base, base again, head), with a recorder inside the test
-process that captures every request the tests send through a framework test client (Flask/Werkzeug, Django/DRF,
-FastAPI/Starlette) and how each test ended. Then it compares every response field by field. The tests already
-know how to build the app, its database and its logged-in users, so there is nothing to set up: the test and
-install commands come from the repo's `tox.ini`, CI workflow or layout. The tests' assertions catch what someone
-thought to check; test mode catches everything else in the same responses, like a password hash that appears in
-`/api/users` while every test still passes.
+`doppel init` doesn't guess:
 
-Recorded: Flask/Werkzeug, Django (sync and async clients, DRF's APIClient), FastAPI/Starlette (TestClient and
-`httpx.AsyncClient` over `ASGITransport`), and live-server tests through `requests` or `httpx` to a local address
-(the app's own calls to outside services are never recorded). Commands come from `tox.ini`, the CI workflow, a
-Makefile test target or a noxfile; a monorepo gets the subfolders that have a suite named. Large pytest suites are
-split by test file across sandboxes.
+- **It asks the app.** It installs and imports the app the way its framework does, then reads the real routes, the database, the login view, the required fields and any import error.
+- **It seeds through the front door.** `doppel_seed.json` holds ordinary HTTP steps (sign up, log in, create records) that run once before the checkpoint, so the app itself hashes passwords and fills required fields.
+- **It brings in an agent when drafts fail.** Nemotron 3 Ultra drafts the files. If they don't work, a setup agent takes over in a live sandbox with `shell`, `read`, `serve` and `try` tools, for up to 20 steps.
+- **It calibrates noise.** It replays invented users against the same code twice, and any field that differs goes into `[diff] ignore`.
 
-Safeguards: the base must run (no tests, a collection error or mostly failing tests stop the check with the test
-runner's own output, never a verdict); base vs base again finds noisy fields and flaky tests (Diffy's
-primary/secondary idea); every world gets the same clean, seeded environment; the head world runs the **base
-branch's tests**, so a PR can't hide a change by editing a test; and every difference is **confirmed** by
-rerunning just those tests on base and head, so one that doesn't happen again is dropped as noise. Apps without tests, or whose tests never call
-what a PR changed, still have the HTTP twin. [bench/results/testmode](bench/results/testmode) has the first run.
+`--trace` saves every attempt, and `doppel view .doppel-trace` turns the trace into a web page.
+`--check` tests a hand-written setup. The format is:
+
+```toml
+[app]
+image   = "python:3.12-slim"
+install = "pip install -r requirements.txt"
+start   = "python app.py"          # must listen on $PORT
+ready   = "/health"
+seed    = "python seed.py"         # runs once; both worlds start from this data
+migrate = ""                       # runs in each world after its code is in place
+env     = { DATABASE_URL = "sqlite:///twin.db" }
+
+[personas]
+guide = "Log in with HTTP Basic as alice / pw, then send the token as Bearer."
+
+[diff]
+ignore      = ["created_at"]       # read from the base branch
+slow_ratio  = 2.0
+slow_min_ms = 50
+```
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `doppel check` | Both modes in parallel, one report. Exit 0 = clean, 1 = regressions (`--strict`), 2 = couldn't compare |
+| `doppel tests` | Test mode only: base, base again and head, compared response by response |
+| `doppel run` | Guided twin only: replay personas on base and head, diff, judge |
+| `doppel personas` | Have Nemotron write personas for an app and a diff |
+| `doppel init` / `doppel probe` | Generate and prove the twin setup / print what Doppel learns about the app |
+| `doppel view` | Turn a run or an init trace into one web page |
+| `doppel site` | Build the [replay site](https://maukthik.github.io/doppel/) from recorded runs (credentials masked; the build fails if any would leak) |
+| `doppel comment` | Post or update the PR comment (used by the Action) |
+
+## Built on
+
+| | Role |
+|---|---|
+| **Nebius Token Factory Sandboxes** (ConTree) | Checkpoint a running app in ~2 s and fork a throwaway copy in ~1.4 s, dozens in parallel. This is what makes a copy per user per world affordable on every PR |
+| **NVIDIA Nemotron 3.5 Lightning** | Writes personas and probes. Its long context reads a whole small app at once |
+| **NVIDIA Nemotron 3 Ultra** | Reviewer (lists suspicions) and judge (intended vs regression), with reasoning off and JSON output, about $0.001–0.002 per judgment |
+
+No model is fine-tuned.
+
+## How it compares
+
+Doppel isn't a new idea from scratch. Its novelty is the combination, running automatically on every PR.
+
+| | Does well | What Doppel adds |
+|---|---|---|
+| Traffic replay ([Diffy](https://github.com/opendiffy/diffy), [Keploy](https://github.com/keploy/keploy), Speedscale) | Compare versions using recorded production traffic | No production traffic needed: AI writes the users. The whole app and its data are forked per user, and an AI separates intended changes from bugs |
+| AI code review (Claude Code, Copilot, CodeRabbit) | Spots suspicious code quickly and cheaply | Runs the code and shows old vs new values. It refutes false suspicions too |
+| Your test suite | Checks what someone thought to check | Compares every field of every response the tests already produce, then explores what they never call |
+
+Doppel is not a simulation or a forecast. Every finding is a real request answered by real code, recorded in both worlds.
+
+## Limits
+
+- **It only sees what is exercised.** A bug on a path no test or persona reaches stays hidden. Coverage is the main lever (see the real-bug results above).
+- **It compares two versions; it doesn't know the truth.** If old and new are wrong in the same way, there's no difference to find.
+- **The judge can be wrong.** It depends on the PR description, which is why "needs a human" exists and the evidence is always shown.
+- **It covers HTTP + JSON APIs in Python.** Browser UIs, background jobs and apps that need PostgreSQL or Redis inside the sandbox are not covered yet.
+- **PRs from forks don't get secrets on GitHub**, so the twin runs on branches inside the repo.
+- **The benchmark is one app with PRs we wrote**, plus 3 reverted real fixes. The PR list was frozen before any method ran on it. That's evidence, not proof, and the harness reruns on any app.
+
+## Develop
+
+```bash
+pip install -e ".[dev]" && ruff check . && python -m pytest -q    # offline: no keys, no network
+```
+
+Build history: [docs/STAGES.md](docs/STAGES.md).
 
 ## License
 
