@@ -13,6 +13,9 @@ installing packages; stop wherever you have seen enough.
 | [4. The full product on Nebius](#level-4-the-full-product-on-nebius) | Sandboxes, the guided twin, `doppel init` | A Nebius key and project | 10–30 min | ~$0.25 per check |
 | [5. The benchmark](#level-5-the-benchmark) | The README's numbers come from the recorded results, and you can re-derive them | Levels 0 and 2; a key for 5b and 5d | 1 min to 1.5 h | $0 to ~$12 |
 
+To run the same checks on five apps Doppel was never tuned for (httpbin, flasky, django-allauth, Kinto,
+Datasette), see [TESTING-APPS.md](TESTING-APPS.md).
+
 [For contributors](#for-contributors): the development loop, how the suite stays offline, writing a test,
 debugging a run. [Troubleshooting](#troubleshooting) and [sharing a result](#share-a-result) are at the end.
 
@@ -29,7 +32,7 @@ work/
 
 ## Level 0: install and run the test suite
 
-**Proves:** Doppel installs, and its 396 offline tests pass: test mode, the twin, the judge's rules, the
+**Proves:** Doppel installs, and its 403 offline tests pass: test mode, the twin, the judge's rules, the
 setup agent and the pages, all run against small Flask, Django and FastAPI apps the tests build on the fly.
 
 PowerShell:
@@ -59,7 +62,7 @@ ruff check .
 python -m pytest -q
 ```
 
-**You should see:** `doppel 1.0.0`, `All checks passed!`, then `396 passed` after about four minutes.
+**You should see:** `doppel 1.0.0`, `All checks passed!`, then `403 passed` after about four minutes.
 
 The `nebius` extra is only needed from Level 3 on; installing it now saves a step. Keep this terminal and
 its activated `.venv`: every later command uses it.
@@ -271,7 +274,8 @@ echo $?
 ```
 
 All 30 benchmark PRs are in [`bench/microblog/prs`](bench/microblog/prs), with their titles, descriptions
-and what each really does in `index.json`.
+and what each really does in `index.json`. The same procedure on five other apps, each pinned to a commit with
+its own planted regression, safe change and real PR: [TESTING-APPS.md](TESTING-APPS.md).
 
 ---
 

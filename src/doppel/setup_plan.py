@@ -225,6 +225,54 @@ def _joined_lines(text: str) -> list[str]:
     return out
 
 
+def python_files(repo: Path) -> list[str]:
+    """The file patterns pytest collects in this repo: `python_files` from pytest.ini, pyproject.toml, tox.ini or
+    setup.cfg (in pytest's order), else its default. django-allauth's tests live in tests.py and *_tests.py."""
+    import configparser
+    import tomllib
+    for name, section in (("pytest.ini", "pytest"), ("pyproject.toml", ""), ("tox.ini", "pytest"),
+                          ("setup.cfg", "tool:pytest")):
+        f = repo / name
+        if not f.is_file():
+            continue
+        value = None
+        if name == "pyproject.toml":
+            try:
+                opts = tomllib.loads(f.read_text("utf-8")).get("tool", {}).get("pytest", {}).get("ini_options", {})
+            except (ValueError, OSError):
+                continue
+            value = opts.get("python_files")
+        else:
+            cp = configparser.ConfigParser(interpolation=None, strict=False)
+            try:
+                cp.read(f, encoding="utf-8")
+            except (configparser.Error, OSError, UnicodeDecodeError):
+                continue
+            if cp.has_option(section, "python_files"):
+                value = cp.get(section, "python_files")
+        if value:
+            return value.split() if isinstance(value, str) else [str(v) for v in value]
+        if name == "pytest.ini":   # a pytest.ini is pytest's whole configuration, even without the option
+            break
+    return ["test_*.py", "*_test.py"]
+
+
+def names_tests(repo: Path, cmd: str) -> bool:
+    """False when a pytest command names folders that hold no test file: a stale Makefile target
+    (django-allauth's `pytest allauth/`, from before its tests moved to tests/) collects nothing."""
+    import shlex
+    try:
+        words = shlex.split(cmd)
+    except ValueError:
+        return True
+    if "pytest" not in words:
+        return True
+    targets = [w for w in words[words.index("pytest") + 1:] if not w.startswith("-") and (repo / w).exists()]
+    pats = python_files(repo)
+    return not targets or any((repo / t).is_file() or any(next((repo / t).rglob(p), None) for p in pats)
+                              for t in targets)
+
+
 def from_makefile(repo: Path) -> str:
     """The pytest/manage.py/unittest line in a Makefile's test target (`make` itself may not exist in a slim
     image, so the recipe line is run directly)."""
@@ -836,7 +884,7 @@ def plan(repo: str | Path) -> SetupPlan:
             p.source["install"] = "the project's dependencies" + (" + the same CI job" if ci.install else "")
     else:
         layout = [(from_script, "test script"), (from_makefile, "Makefile"), (from_noxfile, "noxfile.py")]
-        test, source = next(((t, s) for fn, s in layout if (t := fn(repo))), ("", ""))
+        test, source = next(((t, s) for fn, s in layout if (t := fn(repo)) and names_tests(repo, t)), ("", ""))
         if not test and (repo / "manage.py").exists() and not uses_pytest(repo):
             test, source = "python manage.py test", "manage.py (Django's test runner)"
         elif not test and has_tests(repo):

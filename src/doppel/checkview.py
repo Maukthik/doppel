@@ -127,6 +127,9 @@ def _group_card(k: int, g: dict, clean) -> str:
     seen = ", ".join(_seen(g["rows"], s) for s in g["sources"])
     routes = ", ".join(f"<code>{_e(r)}</code>" for r in g["routes"][:4]) + (
         f" and {len(g['routes']) - 4} more" if len(g["routes"]) > 4 else "")
+    from doppel.check import suite_wide
+    if suite_wide(g):
+        routes, seen = "the whole test suite", "no test could run on the PR's code"
     why = f'<p class="why {label}">{_e(clean(g["why"]))}</p>' if g.get("why") else ""
     rows = "".join(f"<tr><td>{_e(r['source'])}</td><td>{_e(r['who'])}</td><td><code>{_e(r['request'])}</code></td>"
                    f"<td>{_e(r['detail'])}</td></tr>" for r in g["rows"])
@@ -151,6 +154,8 @@ def headline(g: dict) -> str:
     ex = g["example"]
     kind, detail = ex.get("kind", ""), ex.get("detail", "")
     detail = re.sub(r"\s*\(the base branch's test fails on this\)", "", detail)
+    if ex.get("request") == "(test suite)":       # the PR's code stops the whole suite from running
+        return detail[:1].upper() + detail[1:]
     if kind == "body" and detail.startswith("changed: "):
         from doppel.check import MISSING, leaf
         added, removed, changed = [], [], []
@@ -229,13 +234,14 @@ def render_check(data: dict, public: bool = False, nav: str = "") -> str:
     intended = group([r for r in rows if r["label"] == "intended"])
     unjudged = bool(regressions) and all(g["label"] == "unjudged" for g in regressions)
     tests, twin = data.get("tests") or {}, data.get("twin") or {}
-    n_req = sum(len(g["rows"]) for g in regressions)
+    from doppel.check import suite_wide
+    n_req = sum(len(g["rows"]) for g in regressions if not suite_wide(g))
     if not tests.get("ran") and not twin.get("ran"):
         verdict, tone = "Couldn't check this PR", "grey"
     elif regressions:
         noun = "behavior change" if unjudged else "regression"
         verdict = (f"{_plural(len(regressions), noun)}" + ("" if unjudged else " the PR doesn't mention")
-                   + f", seen in {_plural(n_req, 'request')}")
+                   + (f", seen in {_plural(n_req, 'request')}" if n_req else ""))
         tone = "red"
     else:
         from doppel.check import untested

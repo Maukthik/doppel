@@ -220,15 +220,22 @@ def _group_table(groups: list[dict], why: bool) -> list[str]:
     for k, g in enumerate(groups, 1):
         ex = g["example"]
         from doppel.checkview import headline
-        change = _cell(headline(g), 90)      # the same plain words as the check page
+        change = _cell(headline(g), 200 if suite_wide(g) else 90)   # the same plain words as the check page
         where = "<br>".join(f"`{_cell(r, 45)}`" for r in g["routes"][:3]) + (
             f"<br>+{len(g['routes']) - 3} more" if len(g["routes"]) > 3 else "")
         seen = ", ".join(_seen(g["rows"], src) for src in g["sources"])
+        if suite_wide(g):
+            where, seen = "the whole test suite", "every test"
         cells = [str(k), change, where, seen, example(ex["base"], ex["head"])]
         if why:
             cells.append(_cell(g["why"], 600))     # the reason is the point of the row: never cut mid-thought
         out.append("| " + " | ".join(cells) + " |")
     return out
+
+
+def suite_wide(g: dict) -> bool:
+    """The PR's code stopped the whole test suite from running: one change, not a request."""
+    return g["routes"] == ["(test suite)"]
 
 
 def _n(n: int, word: str) -> str:
@@ -280,14 +287,14 @@ def report(tests: dict, twin: dict) -> str:
     human = group([r for r in rows if r["label"] == "needs_human"])
     intended = group([r for r in rows if r["label"] == "intended"])
     unjudged = bool(regressions) and all(g["label"] == "unjudged" for g in regressions)
-    n_requests = sum(g["requests"] for g in regressions)
+    n_requests = sum(g["requests"] for g in regressions if not suite_wide(g))
+    seen_in = f", seen in {_n(n_requests, 'request')}" if n_requests else ""
     if not tests.get("ran") and not twin.get("ran"):
         title = "## Doppel: couldn't check this PR"
     elif regressions and unjudged:
-        title = f"## Doppel: {_n(len(regressions), 'behavior change')}, seen in {_n(n_requests, 'request')}"
+        title = f"## Doppel: {_n(len(regressions), 'behavior change')}{seen_in}"
     elif regressions:
-        title = (f"## Doppel: {_n(len(regressions), 'regression')} the PR doesn't mention, "
-                 f"seen in {_n(n_requests, 'request')}")
+        title = f"## Doppel: {_n(len(regressions), 'regression')} the PR doesn't mention{seen_in}"
     else:
         open_, total = untested(twin)
         title = (f"## Doppel: no regressions found, but {open_} of the reviewer's {_n(total, 'suspicion')} "
@@ -296,8 +303,10 @@ def report(tests: dict, twin: dict) -> str:
     summary = []
     if tests.get("ran"):
         st = tests["result"]["stats"]
+        head_ran = ((tests["result"].get("worlds") or {}).get("B") or {}).get("tests")   # B: the PR's code
+        where = ("on base; on the PR's code none ran." if head_ran == 0 else "on base and on head.")
         summary.append(f"- **Your tests** (test mode, no setup): {st['tests']} tests sent {st['requests']} requests "
-                       "through the app, on base and on head.")
+                       f"through the app, {where}")
     else:
         reason = tests["reason"].splitlines()[0].split(" Use the HTTP twin")[0]   # the twin is right below
         summary.append(f"- **Your tests** (test mode): couldn't compare: {reason[:300]}")

@@ -721,7 +721,9 @@ the fly, so it needs no keys. Every model call is a fake passed in through the f
 [changelog](CHANGELOG.md) under Unreleased. CI runs it on Python 3.11, 3.12 and 3.13
 ([`tests.yml`](.github/workflows/tests.yml)).
 
-End-to-end testing, from install to the benchmark, with expected outputs: [TESTING.md](TESTING.md).
+End-to-end testing, from install to the benchmark, with expected outputs: [TESTING.md](TESTING.md). The same
+on five apps Doppel was never tuned for (httpbin, flasky, django-allauth, Kinto, Datasette), each with a planted
+regression, a safe change and a real merged PR: [TESTING-APPS.md](TESTING-APPS.md).
 [`bench/verify_numbers.py`](bench/verify_numbers.py) recomputes the results table from the recorded results,
 offline.
 
@@ -736,6 +738,8 @@ They need Nebius keys; their GitHub workflows run them with the repo's secrets.
 ## Limits
 
 - **It only sees what is exercised.** A bug on a path no test or persona reaches stays hidden. Coverage is the main lever (see the real-bug results above).
+- **Test mode compares status codes and response bodies, not headers.** A PR that only adds or changes a
+  response header (django-allauth's new `Cache-Control`) passes unflagged.
 - **It compares two versions; it doesn't know the truth.** If old and new are wrong in the same way, there's no difference to find.
 - **The judge can be wrong, both ways.** It depends on the PR description. On the benchmark it flagged 2 of 10 safe PRs, and it has let regressions through as "intended". That is why "needs a human" exists and the evidence is always shown.
 - **A probe can test the right code without being able to show the result.** A refutation must name a value a probe really sent, but on isso the email probe sent a quote and was refuted although isso never returns email addresses, so no response could have differed.

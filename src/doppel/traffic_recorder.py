@@ -140,6 +140,22 @@ class _Outermost:
 
 # ---------------------------------------------------------------- hooks, one per test client
 
+def _werkzeug_target(args, kwargs) -> tuple[str, str, str]:
+    """(method, path, query) of a Client.open call, whatever it was given: a path, an EnvironBuilder (Flask
+    before 2.0 passes one, so the response has no .request: flasky's requests were recorded as "GET "), or an
+    environ dict."""
+    first = args[0] if args else kwargs.get("path", "")
+    if isinstance(first, dict):
+        return (first.get("REQUEST_METHOD", "GET"), first.get("PATH_INFO", ""), first.get("QUERY_STRING", ""))
+    if isinstance(first, str):
+        path, _, query = first.partition("?")
+        return kwargs.get("method") or "GET", path, query or kwargs.get("query_string", "") or ""
+    query = getattr(first, "query_string", "") or ""
+    query = query.decode("latin-1") if isinstance(query, bytes) else query
+    return (kwargs.get("method") or getattr(first, "method", None) or "GET", getattr(first, "path", "") or "",
+            query if isinstance(query, str) else "")
+
+
 def _hook_werkzeug(module) -> None:
     Client = getattr(module, "Client", None)  # noqa: N806
     if Client is None or getattr(Client.open, "_doppel", False):
@@ -153,19 +169,18 @@ def _hook_werkzeug(module) -> None:
                 response = original(self, *args, **kwargs)
             except Exception as e:   # Flask propagates app errors in testing mode: record the crash
                 if outermost:
-                    first = args[0] if args else kwargs.get("path", "")
-                    path = first if isinstance(first, str) else getattr(first, "path", "")
-                    record(kwargs.get("method", getattr(first, "method", "GET")), str(path).split("?")[0], "",
-                           kwargs.get("json", kwargs.get("data")), 0, "text/plain", crash_text(e),
-                           (time.perf_counter() - t0) * 1000)
+                    method, path, _ = _werkzeug_target(args, kwargs)
+                    record(method, str(path), "", kwargs.get("json", kwargs.get("data")), 0, "text/plain",
+                           crash_text(e), (time.perf_counter() - t0) * 1000)
                 raise
             if outermost:
                 try:
                     req = getattr(response, "request", None)
-                    method = getattr(req, "method", kwargs.get("method", "GET"))
-                    path = getattr(req, "path", args[0] if args and isinstance(args[0], str) else "")
-                    query = getattr(req, "query_string", b"")
-                    query = query.decode("latin-1") if isinstance(query, bytes) else query
+                    method, path, query = _werkzeug_target(args, kwargs)
+                    if req is not None:
+                        method, path = getattr(req, "method", method), getattr(req, "path", path)
+                        query = getattr(req, "query_string", query)
+                        query = query.decode("latin-1") if isinstance(query, bytes) else query
                     sent = kwargs.get("json", kwargs.get("data"))
                     record(method, path, query, sent, response.status_code, response.headers.get("Content-Type", ""),
                            response.get_data(), (time.perf_counter() - t0) * 1000)
@@ -638,6 +653,7 @@ def _hook_django_all(module) -> None:
 # The registry: module -> hook. Adding a client = an extractor above and one line here.
 HOOKS = {"werkzeug.test": _hook_werkzeug, "django.test.client": _hook_django_all,
          "starlette.testclient": _hook_starlette_all, "httpx": _hook_httpx, "requests.adapters": _hook_requests,
+         "httpx2": _hook_httpx,   # httpx's fork with the same transports (datasette's test client since 1.0a)
          "tornado.httpclient": _hook_tornado, "aiohttp.test_utils": _hook_aiohttp, "webtest.app": _hook_webtest,
          "falcon.testing.client": _hook_falcon}
 

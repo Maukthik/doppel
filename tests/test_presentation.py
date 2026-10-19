@@ -57,3 +57,17 @@ def test_a_python_that_does_not_exist_is_named_not_reported_as_a_failing_suite(t
     code = cli.main(["check", "--backend", "local", "--no-twin", "--base", str(base), "--head", str(base),
                      "--python", str(tmp_path / "nope" / "python")])
     assert code == 2 and "no such interpreter" in capsys.readouterr().out
+
+
+def test_a_pr_that_stops_the_suite_from_running_is_one_clear_change(tmp_path, capsys):
+    from doppel import cli
+    from tests.test_traffic import FLASK_APP, flask_repo
+    base = flask_repo(tmp_path / "b")
+    import textwrap
+    head = flask_repo(tmp_path / "h", "import not_installed_anywhere\n" + textwrap.dedent(FLASK_APP))
+    code = cli.main(["check", "--backend", "local", "--no-twin", "--base", str(base), "--head", str(head), "--strict"])
+    md = capsys.readouterr().out
+    assert code == 1
+    assert "The tests can't run on the PR's code: ModuleNotFoundError: No module named 'not_installed_anywhere'" in md
+    assert "no longer exists in head" not in md and "seen in" not in md.splitlines()[0]
+    assert "on the PR's code none ran" in md
