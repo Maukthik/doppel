@@ -94,7 +94,7 @@ def test_the_summary_says_which_changes_users_reached_and_which_none_did():
     summary = reach.summarize(found, worlds)
     assert [(c["reached_by"], c["reached_in"]) for c in summary] == [
         (["careless"], ["base"]), (["shopper"], ["head"]), ([], [])]
-    assert reach.reach_line(summary) == ("Changed code reached by the users: 2 of 3 change(s). "
+    assert reach.reach_line(summary) == ("Changed code reached by the users: 2 of 3 changes. "
                                          "Not reached by any user: `refund` (app.py).")
 
 
@@ -117,4 +117,4 @@ def test_a_shop_run_reports_reach_in_the_comment_and_the_json(tmp_path):
     data = json.loads(out.read_text())
     assert [c["where"] for c in data["changes"]] == ["product_json", "order_total", "Handler.do_POST"]
     assert all(c["reached_by"] for c in data["changes"])
-    assert "Changed code reached by the users: 3 of 3 change(s)." in (tmp_path / "report.md").read_text()
+    assert "Changed code reached by the users: 3 of 3 changes." in (tmp_path / "report.md").read_text()

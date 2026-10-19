@@ -482,6 +482,9 @@ def open_session(backend: str, base: Path, head: Path, install: str, log=lambda 
     """python: a version ("3.8": installed in the sandbox with uv, on the standard image) or, locally, an
     interpreter path (its venv runs the tests). Empty: the image's Python; locally, your environment."""
     if backend == "local":
+        if python and not PYTHON_VERSION.match(python) and not Path(python).exists():
+            raise FileNotFoundError(f"--python {python}: no such interpreter (give the full path to the python of "
+                                    "the venv with the app's requirements)")
         return LocalSession(base, head, install, log, python=python, extra_env=extra_env, workdir=workdir)
     return NebiusSession(base, head, install, log=log, extra_env=extra_env, python=python, workdir=workdir)
 

@@ -56,7 +56,7 @@ def test_judge_labels_every_finding_and_report_puts_regressions_first():
     assert labels[("careless clicker", "POST /orders")] == "regression"
     assert labels[("window shopper", "GET /products")] == "intended"
     md = markdown(findings, len(PERSONAS), 11, judged)
-    assert md.startswith("## Doppel: 2 regression(s)")
+    assert md.startswith("## Doppel: 2 regressions")
     assert md.index("Regressions") < md.index("<details>")      # intended changes fold away
     assert "Two unmentioned changes." in md
 
@@ -106,7 +106,7 @@ def test_cli_with_pr_writes_judged_report_and_tests(tmp_path, monkeypatch):
                      "--personas", str(SHOP / "personas.json"), "--pr", str(SHOP / "PR.md"),
                      "--out", str(tmp_path / "r.md"), "--tests-out", str(tmp_path / "test_reg.py"), "--strict"])
     assert code == 1                                            # regressions fail CI
-    assert "regression(s)" in (tmp_path / "r.md").read_text(encoding="utf-8")
+    assert "the PR doesn't mention" in (tmp_path / "r.md").read_text(encoding="utf-8")
     assert "def test_" in (tmp_path / "test_reg.py").read_text(encoding="utf-8")
 
 

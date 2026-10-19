@@ -8,6 +8,8 @@ from doppel.diff import Finding
 ICON = {"error": "🔴", "test": "🧪", "status": "🟠", "body": "🟡", "request": "🔀", "slow": "🐢"}
 TITLE = {"error": "Errors", "test": "Test outcomes changed", "status": "Status changes", "body": "Response changes",
          "request": "Different requests", "slow": "Slower"}
+ONE = {"error": "error", "test": "test outcome changed", "status": "status change", "body": "response change",
+       "request": "different request", "slow": "slower"}
 SECTION = {"regression": "🚨 Regressions: not mentioned in the PR",
            "needs_human": "❓ Needs a human",
            "intended": "✅ Intended: matches the PR description"}
@@ -27,8 +29,9 @@ _who = ["persona"]   # set by markdown(); the table helpers read it
 def _row(f: Finding, why: str | None = None) -> str:
     unit = WHO[_who[0]][2]
     where = f"{_short_test(f.persona)} ({unit} {f.step})" if _who[0] == "test" else f"{f.persona} ({unit} {f.step})"
-    cells = [ICON[f.kind], where, f"`{f.request}`", f.detail,
-             f"`{_short(f.base, 60)}`", f"`{_short(f.head, 60)}`"]
+    from doppel.check import _cell, sides
+    base, head = sides(f.base, f.head)     # "(absent)" in words, secrets masked: the same as the check comment
+    cells = [ICON[f.kind], where, f"`{f.request}`", f.detail, f"`{_cell(base, 60)}`", f"`{_cell(head, 60)}`"]
     if why is not None:
         cells.append(why.replace("|", "\\|"))
     return "| " + " | ".join(cells) + " |"
@@ -54,7 +57,8 @@ def coverage_line(cov: dict | None) -> str:
     if cov.get("stuck_personas"):
         line += f" Stuck at login or a missing route: {', '.join(cov['stuck_personas'][:5])}."
     if cov.get("repaired"):
-        line += f" Fixed in rehearsal: {len(cov['repaired'])} persona(s)."
+        n = len(cov["repaired"])
+        line += f" Fixed in rehearsal: {n} persona{'' if n == 1 else 's'}."
     if cov.get("reach"):
         from doppel.reach import reach_line
         line += " " + reach_line(cov["reach"])
@@ -152,8 +156,10 @@ def _markdown(findings: list[Finding], personas: int, steps: int, judged: dict |
         replayed = warn + replayed
     if not judged or not judged.get("verdicts"):
         counts = {k: sum(f.kind == k for f in findings) for k in ICON}
-        summary = " · ".join(f"{ICON[k]} {counts[k]} {TITLE[k].lower()}" for k in ICON if counts[k])
-        lines = [f"## Doppel: {len(findings)} behavior change(s)", "", f"{replayed} {summary}", "",
+        summary = " · ".join(f"{ICON[k]} {counts[k]} {(TITLE if counts[k] > 1 else ONE)[k].lower()}"
+                             for k in ICON if counts[k])
+        n = len(findings)
+        lines = [f"## Doppel: {n} behavior change{'' if n == 1 else 's'}", "", f"{replayed} {summary}", "",
                  "| | Persona | Request | What changed | Base | Head |", "|---|---|---|---|---|---|"]
         lines += [_row(f) for f in findings]
         return "\n".join(lines) + "\n"
@@ -163,7 +169,8 @@ def _markdown(findings: list[Finding], personas: int, steps: int, judged: dict |
                 for label in SECTION}
     # the judge shares one verdict per distinct change, so count verdicts, not rows
     n_reg, n_hum, n_int = (len({id(v) for _, v in by_label[k]}) for k in ("regression", "needs_human", "intended"))
-    head = f"## Doppel: {n_reg} regression(s) the PR doesn't mention" if n_reg else "## Doppel: no regressions"
+    head = (f"## Doppel: {n_reg} regression{'' if n_reg == 1 else 's'} the PR doesn't mention" if n_reg
+            else "## Doppel: no regressions")
     lines = [head, "", f"{replayed} Distinct changes: {n_reg} regression · {n_hum} need a human · "
              f"{n_int} intended.", ""]
     if judged.get("summary"):

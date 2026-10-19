@@ -27,6 +27,14 @@ What a reader sees, made to read like a product (each pinned in `tests/test_pres
 - The check page wraps values at spaces instead of mid-word and says "Checked in 39 s"; a page with no changes
   doesn't claim "each change above"; method notes say "1 test", not "1 test(s)".
 
+[TESTING.md](TESTING.md): testing Doppel end to end, level by level (offline twin, offline test mode on the
+password-hash leak, the judge, Nebius, the benchmark), with expected outputs for PowerShell and bash.
+[`bench/verify_numbers.py`](bench/verify_numbers.py) recomputes the README's results table from the recorded
+results, offline; `tests/test_bench_numbers.py` pins it. The `doppel run` report and the reach line now say
+fields in words and use real plurals, like the check comment. A local `--python` that doesn't exist is named
+as such instead of surfacing as a test suite that ran nothing; `bench/run_bench.py --app-python` accepts a
+relative path.
+
 The 17 Oct benchmark recordings judged again with the per-route grouping (nothing else run), three times with
 identical results: review-guided Doppel 17/20 with 2/10 false alarms (was 16/20; r11 changed from missed to
 caught), held-out 7/7 with 0/3, consequence 2/3 with 0/5. Results in `bench/results/guided-rerun-grouping/`.

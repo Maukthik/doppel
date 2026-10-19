@@ -342,6 +342,8 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=str(RESULTS))
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args(argv)
+    if Path(a.app_python).exists():   # the arms run in each PR's folder: a relative path would point nowhere
+        a.app_python = str(Path(a.app_python).absolute())
     arms = [x.strip() for x in a.arms.split(",") if x.strip()]
     prs = json.loads((APP / "prs" / "index.json").read_text(encoding="utf-8"))
     if a.only:

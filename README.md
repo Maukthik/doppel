@@ -32,7 +32,8 @@ request, the old answer and the new answer.
 [Try it on any PR](#try-it-on-any-public-pull-request) ·
 [Put it on your pull requests](#put-it-on-your-pull-requests) ·
 [What you get](#what-you-get-on-every-pull-request) ·
-[Try it offline](#try-it-in-one-minute-offline-no-keys)
+[Try it offline](#try-it-in-one-minute-offline-no-keys) ·
+[Test it end to end](TESTING.md)
 
 **Understand it**
 [How it works](#how-it-works) ·
@@ -160,6 +161,9 @@ pip install -e ".[nebius,dev]"
 doppel run --backend nebius --base examples/shop/base --head examples/shop/head \
   --personas examples/shop/personas.json --pr examples/shop/PR.md --tests-out test_regressions.py
 ```
+
+To test everything yourself, level by level, from this example to the password-hash leak on a real app
+and re-deriving the benchmark's numbers: [TESTING.md](TESTING.md).
 
 To use the CLI without cloning: `pip install "doppel-check[nebius] @ git+https://github.com/Maukthik/doppel@v1"`.
 The package is named `doppel-check` because `doppel` on PyPI is an unrelated project; the command is `doppel`.
@@ -716,6 +720,10 @@ the fly, so it needs no keys. Every model call is a fake passed in through the f
 [`tests/test_hardening.py`](tests/test_hardening.py) pins the seven fixes listed in the
 [changelog](CHANGELOG.md) under Unreleased. CI runs it on Python 3.11, 3.12 and 3.13
 ([`tests.yml`](.github/workflows/tests.yml)).
+
+End-to-end testing, from install to the benchmark, with expected outputs: [TESTING.md](TESTING.md).
+[`bench/verify_numbers.py`](bench/verify_numbers.py) recomputes the results table from the recorded results,
+offline.
 
 Benchmarks: [`bench/run_bench.py`](bench/run_bench.py) runs the four arms on the 30 microblog-api PRs,
 [`bench/rejudge.py`](bench/rejudge.py) re-runs only the judge on recorded results,

@@ -141,8 +141,8 @@ def sides(base, head) -> tuple[str, str]:
 
     def side(mine: dict, other: dict) -> str:
         present = [(k, v) for k, v in mine.items() if not (isinstance(v, str) and v in MISSING)]
-        if present:
-            return "; ".join(f"{leaf(k)}: {_value(v)}" for k, v in present)
+        if present:   # list items show the same field once: "in_stock: true", not "in_stock: true; in_stock: true"
+            return "; ".join(dict.fromkeys(f"{leaf(k)}: {_value(v)}" for k, v in present))
         return "no " + ", ".join(dict.fromkeys(leaf(k) for k in (mine or other)))
     return side(base, head), side(head, base)
 

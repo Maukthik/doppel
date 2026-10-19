@@ -140,7 +140,7 @@ def reach_line(summary: list[dict] | None) -> str:
     if not summary:
         return ""
     hit = [c for c in summary if c["reached_by"]]
-    line = f"Changed code reached by the users: {len(hit)} of {len(summary)} change(s)"
+    line = f"Changed code reached by the users: {len(hit)} of {len(summary)} change{'' if len(summary) == 1 else 's'}"
     missed = [f"`{c['where']}` ({c['file']})" for c in summary if not c["reached_by"]]
     if missed:
         line += f". Not reached by any user: {', '.join(missed[:5])}" + (" …" if len(missed) > 5 else "")

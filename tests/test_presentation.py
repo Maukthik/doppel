@@ -48,3 +48,12 @@ def test_the_check_page_shows_fields_line_by_line_and_how_long_it_took():
 def test_no_value_in_the_comment_shows_a_secret_or_the_absent_marker():
     md = report({"ran": False, "reason": "x", "rows": [LEAK]}, {"ran": False, "reason": "off"})
     assert HASH not in md and "(absent)" not in md and "The request behind this" in md
+
+
+def test_a_python_that_does_not_exist_is_named_not_reported_as_a_failing_suite(tmp_path, capsys):
+    from doppel import cli
+    from tests.test_traffic import flask_repo
+    base = flask_repo(tmp_path / "b")
+    code = cli.main(["check", "--backend", "local", "--no-twin", "--base", str(base), "--head", str(base),
+                     "--python", str(tmp_path / "nope" / "python")])
+    assert code == 2 and "no such interpreter" in capsys.readouterr().out
