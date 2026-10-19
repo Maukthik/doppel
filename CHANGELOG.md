@@ -24,7 +24,8 @@ What a reader sees, made to read like a product (each pinned in `tests/test_pres
 - Nemotron's reason is never cut mid-sentence, and long values are cut at a word.
 - The test-mode method notes fold under "How Doppel checked this", so the verdict reads first; the comment's
   footer puts the check-page link on its own line.
-- The check page wraps values at spaces instead of mid-word and says "Checked in 39 s".
+- The check page wraps values at spaces instead of mid-word and says "Checked in 39 s"; a page with no changes
+  doesn't claim "each change above"; method notes say "1 test", not "1 test(s)".
 
 The 17 Oct benchmark recordings judged again with the per-route grouping (nothing else run), three times with
 identical results: review-guided Doppel 17/20 with 2/10 false alarms (was 16/20; r11 changed from missed to

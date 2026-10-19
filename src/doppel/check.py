@@ -53,8 +53,8 @@ def twin_mode(a, pr_text_file: str | None, log) -> dict:
     base, head = Path(a.base), Path(a.head)
     if not (base / "doppel.toml").exists() and not (head / "doppel.toml").exists():
         return {"ran": False, "skipped": True,
-                "reason": "off (this repo has no doppel.toml). `doppel init` writes one, so invented users can "
-                          "explore what no test calls"}
+                "reason": "off (this repo has no doppel.toml). Run `doppel init` to add one, and invented users "
+                          "will explore what no test calls."}
     from doppel import cli
     with tempfile.TemporaryDirectory(prefix="doppel-check-") as tmp:
         personas = a.personas or str(base / "doppel-personas.json")

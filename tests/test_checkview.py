@@ -36,7 +36,7 @@ def test_base_and_head_side_by_side_raw_locally_masked_on_the_public_site():
 def test_the_page_says_what_each_mode_did_and_how_doppel_decides():
     page = render_check(DATA)
     assert "<b>44</b> tests sent <b>117</b> requests" in page and "(from tox.ini)" in page
-    assert "turned off (--no-twin)" in page and "Base vs base again" in page
+    assert "Turned off (--no-twin)" in page and "Base vs base again" in page
 
 
 def test_no_differences_and_no_comparison_read_differently():

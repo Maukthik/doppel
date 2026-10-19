@@ -1116,7 +1116,8 @@ def report(result: dict, judged: dict | None = None) -> str:
              + (f"Left out: {'; '.join(left_out)}. " if left_out else "")
              + (f"Ignored as noise (they differ between two runs of the same code): "
                 f"{', '.join(f'`{k}`' for k in result['noise_keys'][:12])}. " if result["noise_keys"] else "")
-             + (f"{st['new_tests']} test(s) the PR adds have no baseline and are not compared. " if st["new_tests"]
+             + (("1 test the PR adds has no baseline and is not compared. " if st["new_tests"] == 1 else
+                 f"{st['new_tests']} tests the PR adds have no baseline and are not compared. ") if st["new_tests"]
                 else "")
              + (f"{st['order_only']} response(s) had the same items in another order while their tests passed on "
                 "both: counted, not flagged. " if st.get("order_only") else "")
@@ -1126,7 +1127,8 @@ def report(result: dict, judged: dict | None = None) -> str:
 
 def _confirmation_line(c: dict) -> str:
     if c.get("ran"):
-        return (f"Every difference was re-checked by rerunning its {c['tests']} test(s) on base and head"
+        tests = f"{c['tests']} test{'' if c['tests'] == 1 else 's'}"
+        return (f"Every difference was re-checked by rerunning its {tests} on base and head"
                 + (f"; {c['dropped']} that did not happen again were dropped as noise." if c.get("dropped") else "."))
     if c.get("reason") and c["reason"] != "no differences":
         return f"Differences were not re-checked ({c['reason']})."

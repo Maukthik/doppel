@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from pathlib import Path
 
 from doppel.viewer import CSS
@@ -73,7 +74,8 @@ def _modes(data: dict) -> str:
         if st.get("flaky"):
             left.append(f"{st['flaky']} flaky")
         if st.get("unstable"):
-            left.append(f"{st['unstable']} compared on outcome only")
+            left.append(f"{_plural(st['unstable'], 'test')} compared on pass or fail only (its requests differ "
+                        "from run to run)")
         conf = st.get("confirmation") or {}
         facts = [f"<b>{st.get('tests', 0)}</b> tests sent <b>{st.get('requests', 0)}</b> requests",
                  f"command <code>{_e(tests.get('test', ''))}</code> (from {_e(tests.get('source', ''))})"]
@@ -101,8 +103,10 @@ def _modes(data: dict) -> str:
                      f'<li><b>{twin.get("personas", 0)}</b> users ({_e(twin.get("source", ""))}), replayed in both '
                      f'worlds{served}</li><li>an AI reviewer\'s suspicions turned into probe users</li></ul></div>')
     else:
+        reason = _e((twin.get("reason") or "did not run").splitlines()[0][:400])
+        reason = re.sub(r"`([^`]+)`", r"<code>\1</code>", reason)        # `doppel init` reads as a command
         cards.append(f'<div class="mode off"><h3>Invented users <span>the guided twin</span></h3>'
-                     f'<p>{_e((twin.get("reason") or "did not run").splitlines()[0][:400])}</p></div>')
+                     f'<p>{reason[:1].upper() + reason[1:]}</p></div>')
     return f'<div class="modes">{"".join(cards)}</div>'
 
 
@@ -262,8 +266,9 @@ response, and had NVIDIA Nemotron judge each difference against what the pull re
 {WORLDS}
 {''.join(sections)}
 {_suspicions(data, clean)}
-<footer>Each change above comes from real runs of the code before and after the PR, in Nebius sandboxes; the
-verdicts are NVIDIA Nemotron's, judged against the PR description.{_took(data.get('seconds'))}
+<footer>{"Each change above comes from real runs of the code before and after the PR, in Nebius sandboxes; the "
+          "verdicts are NVIDIA Nemotron's, judged against the PR description." if regressions or human or intended
+          else "Both versions of the code ran in Nebius sandboxes."}{_took(data.get('seconds'))}
 <br><a href="https://github.com/Maukthik/doppel">What is Doppel? Add it to your repo in one file →</a></footer>"""
     title = f"doppel check: {pr.get('title') or data.get('app', '')}"
     return PAGE.replace("__TITLE__", _e(title)).replace("__CSS__", CSS + CHECK_CSS).replace("__BODY__", body)
