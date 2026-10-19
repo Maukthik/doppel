@@ -97,10 +97,59 @@ def _short_test(test_id: str) -> str:
     return f"{parts[0].rsplit('/', 1)[-1]}::{parts[-1]}" if len(parts) > 1 else test_id
 
 
+def _cut(text: str, n: int) -> str:
+    """At most n characters, cut at a word when there is one in the last third, so a sentence never ends
+    in half a word."""
+    if len(text) <= n:
+        return text
+    head = text[: n - 1]
+    space = len(head) if text[n - 1] == " " else head.rfind(" ")   # already at a word's end: keep the word
+    return (head[:space] if space > n * 2 // 3 else head).rstrip(" ,;:") + "…"
+
+
 def _cell(value, n: int = 70) -> str:
     text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
-    text = text if len(text) <= n else text[: n - 1] + "…"
-    return text.replace("|", "\\|").replace("`", "'").replace("\n", " ")
+    return _cut(text, n).replace("|", "\\|").replace("`", "'").replace("\n", " ")
+
+
+MISSING = ("(absent)", "(not sent)")   # how the recorder writes "this field wasn't there"
+
+
+def leaf(key: str) -> str:
+    """data.0.author.password_hash -> password_hash: the field's name, without where in the body it sits."""
+    parts = [p for p in str(key).split(".") if p and not p.isdigit() and p != "*"]
+    return parts[-1] if parts else str(key)
+
+
+def _value(v, n: int = 32) -> str:
+    return _cut(v if isinstance(v, str) and v in MISSING else json.dumps(v, default=str, ensure_ascii=False), n)
+
+
+def sides(base, head) -> tuple[str, str]:
+    """The two sides of a change as a reader takes them in at once: `no password_hash` / `password_hash:
+    "scrypt:…"`, `message: "Unauthorized"` / `name: "Unauthorized"`. A field one side didn't have is said in
+    words, never shown as the string "(absent)". Secrets and password hashes are masked: the comment is public
+    on the PR, the same as the check page."""
+    from doppel.site import MASK, sanitize
+    base, head = (sanitize(x) for x in (base, head))
+    if MASK in json.dumps([base, head], ensure_ascii=False, default=str):
+        base, head = (json.loads(json.dumps(x, ensure_ascii=False, default=str).replace(MASK, "[hidden]"))
+                      for x in (base, head))
+    if not (isinstance(base, dict) and isinstance(head, dict)):
+        return (base if isinstance(base, str) else json.dumps(base, default=str, ensure_ascii=False),
+                head if isinstance(head, str) else json.dumps(head, default=str, ensure_ascii=False))
+
+    def side(mine: dict, other: dict) -> str:
+        present = [(k, v) for k, v in mine.items() if not (isinstance(v, str) and v in MISSING)]
+        if present:
+            return "; ".join(f"{leaf(k)}: {_value(v)}" for k, v in present)
+        return "no " + ", ".join(dict.fromkeys(leaf(k) for k in (mine or other)))
+    return side(base, head), side(head, base)
+
+
+def example(base, head, n: int = 48) -> str:
+    b, h = sides(base, head)
+    return f"`{_cell(b, n)}` → `{_cell(h, n)}`"
 
 
 def _pattern(request: str) -> str:
@@ -175,9 +224,9 @@ def _group_table(groups: list[dict], why: bool) -> list[str]:
         where = "<br>".join(f"`{_cell(r, 45)}`" for r in g["routes"][:3]) + (
             f"<br>+{len(g['routes']) - 3} more" if len(g["routes"]) > 3 else "")
         seen = ", ".join(_seen(g["rows"], src) for src in g["sources"])
-        cells = [str(k), change, where, seen, f"`{_cell(ex['base'], 40)}` → `{_cell(ex['head'], 40)}`"]
+        cells = [str(k), change, where, seen, example(ex["base"], ex["head"])]
         if why:
-            cells.append(_cell(g["why"], 220))
+            cells.append(_cell(g["why"], 600))     # the reason is the point of the row: never cut mid-thought
         out.append("| " + " | ".join(cells) + " |")
     return out
 
@@ -197,9 +246,9 @@ def _seen(rows: list[dict], source: str) -> str:
 def _all_requests(rows: list[dict]) -> list[str]:
     out = ["| Found by | Who | Request | What changed | Base | Head |", "|---|---|---|---|---|---|"]
     for r in rows:
+        b, h = sides(r["base"], r["head"])
         out.append("| " + " | ".join([r["source"], _cell(r["who"], 45), f"`{_cell(r['request'], 45)}`",
-                                      _cell(r["detail"], 70), f"`{_cell(r['base'], 35)}`",
-                                      f"`{_cell(r['head'], 35)}`"]) + " |")
+                                      _cell(r["detail"], 70), f"`{_cell(b, 40)}`", f"`{_cell(h, 40)}`"]) + " |")
     return out
 
 
@@ -207,8 +256,9 @@ def _section(title: str, groups: list[dict], why: bool, open_: bool = True) -> l
     rows = [r for g in groups for r in g["rows"]]
     lines = ["", title, ""] if open_ else ["", f"<details><summary>{title}</summary>", ""]
     lines += _group_table(groups, why)
-    lines += ["", f"<details><summary>All {_n(len(rows), 'request')} behind "
-                  f"{'this' if len(groups) == 1 else 'these'}</summary>", ""]
+    behind = "this" if len(groups) == 1 else "these"
+    lines += ["", f"<details><summary>{'The request' if len(rows) == 1 else f'All {len(rows)} requests'} behind "
+                  f"{behind}</summary>", ""]
     lines += _all_requests(rows) + ["", "</details>"]
     if not open_:
         lines += ["", "</details>"]
@@ -276,8 +326,9 @@ def report(tests: dict, twin: dict) -> str:
     if tests.get("ran"):
         from doppel.traffic import report as tests_report
         foot = tests_report(tests["result"]).strip().splitlines()[-1]
-        if foot.startswith("<sub>"):
-            lines += ["", foot]
+        if foot.startswith("<sub>"):   # the method, for whoever wants it; folded so the verdict reads first
+            lines += ["", "<details><summary>How Doppel checked this</summary>", "",
+                      foot.removeprefix("<sub>").removesuffix("</sub>"), "", "</details>"]
     if not tests.get("ran") and not twin.get("ran"):
         from doppel.errors import head_and_tail
         lines += ["", "> " + head_and_tail(tests["reason"], 2500).replace("\n", "\n> ")]
@@ -306,7 +357,7 @@ def cmd_check(a) -> int:
     if not a.no_twin:
         threads.append(threading.Thread(target=run, args=("twin", twin_mode, a, a.pr, log)))
     else:
-        results["twin"] = {"ran": False, "skipped": True, "reason": "turned off (--no-twin)"}
+        results["twin"] = {"ran": False, "skipped": True, "reason": "not part of this check (test mode only)"}
     for t in threads:
         t.start()
     for t in threads:

@@ -40,6 +40,24 @@ def _pretty(value) -> str:
     return json.dumps(value, indent=1, ensure_ascii=False, default=str)
 
 
+def _side(value) -> str:
+    """One side of the example, as a reader wants it: each field on its own line (`data[0].password_hash:
+    "scrypt:…"`), and a field this side didn't have said in words rather than shown as the string "(absent)"."""
+    import re
+
+    from doppel.check import MISSING
+    if not isinstance(value, dict):
+        return _pretty(value)
+    lines = []
+    for key, v in value.items():
+        where = re.sub(r"\.(\d+)(?=\.|$)", r"[\1]", str(key))
+        if isinstance(v, str) and v in MISSING:
+            lines.append(f"{where}: " + ("not sent" if v == "(not sent)" else "not in the response"))
+        else:
+            lines.append(f"{where}: {json.dumps(v, ensure_ascii=False, default=str)}")
+    return "\n".join(lines) or "{}"
+
+
 def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
@@ -112,9 +130,9 @@ def _group_card(k: int, g: dict, clean) -> str:
     return f"""<article class="change {label}">
 <header><span class="n">{k}</span><div><h3>{_e(changes)}</h3><p>{routes} · {_e(seen)}</p></div>
 <span class="pill {label}">{tag}</span></header>{why}
-<div class="sbs"><div><p>Base <span>before the PR</span></p><pre>{_e(clean(_pretty(ex["base"])))}</pre></div>
-<div><p>Head <span>with the PR</span></p><pre>{_e(clean(_pretty(ex["head"])))}</pre></div></div>
-<details><summary>All {_plural(len(g["rows"]), "request")} behind this change</summary>
+<div class="sbs"><div><p>Base <span>before the PR</span></p><pre>{_e(clean(_side(ex["base"])))}</pre></div>
+<div><p>Head <span>with the PR</span></p><pre>{_e(clean(_side(ex["head"])))}</pre></div></div>
+<details><summary>{"The request" if len(g["rows"]) == 1 else f"All {len(g['rows'])} requests"} behind this change</summary>
 <table class="reqs"><colgroup><col style="width:14%"><col style="width:30%"><col style="width:26%"><col style="width:30%">
 </colgroup><thead><tr><th>Found by</th><th>Who</th><th>Request</th><th>What changed</th></tr></thead>
 <tbody>{rows}</tbody></table></details></article>"""
@@ -130,11 +148,25 @@ def headline(g: dict) -> str:
     kind, detail = ex.get("kind", ""), ex.get("detail", "")
     detail = re.sub(r"\s*\(the base branch's test fails on this\)", "", detail)
     if kind == "body" and detail.startswith("changed: "):
+        from doppel.check import MISSING, leaf
         added, removed, changed = [], [], []
         for f in _fields(detail).split(", "):
             (added if f.endswith("(added)") else removed if f.endswith("(removed)") else changed).append(
                 f.replace(" (added)", "").replace(" (removed)", ""))
-        parts = []
+        # a field that left and another that arrived holding the same value is one field renamed
+        base, head = ex.get("base"), ex.get("head")
+        had = {leaf(k): v for k, v in (base or {}).items() if not (isinstance(v, str) and v in MISSING)} \
+            if isinstance(base, dict) else {}
+        has = {leaf(k): v for k, v in (head or {}).items() if not (isinstance(v, str) and v in MISSING)} \
+            if isinstance(head, dict) else {}
+        renamed = []
+        for old in list(removed):
+            new = next((a for a in added if old in had and a in has and had[old] == has[a]), None)
+            if new:
+                renamed.append(f"{old} → {new}")
+                removed.remove(old)
+                added.remove(new)
+        parts = ["Field renamed in responses: " + ", ".join(renamed)] if renamed else []
         if added:
             parts.append("Responses now include " + ", ".join(added))
         if removed:
@@ -231,10 +263,18 @@ response, and had NVIDIA Nemotron judge each difference against what the pull re
 {''.join(sections)}
 {_suspicions(data, clean)}
 <footer>Each change above comes from real runs of the code before and after the PR, in Nebius sandboxes; the
-verdicts are NVIDIA Nemotron's, judged against the PR description. Seconds: {_e(data.get('seconds', '?'))}.
+verdicts are NVIDIA Nemotron's, judged against the PR description.{_took(data.get('seconds'))}
 <br><a href="https://github.com/Maukthik/doppel">What is Doppel? Add it to your repo in one file →</a></footer>"""
     title = f"doppel check: {pr.get('title') or data.get('app', '')}"
     return PAGE.replace("__TITLE__", _e(title)).replace("__CSS__", CSS + CHECK_CSS).replace("__BODY__", body)
+
+
+def _took(seconds) -> str:
+    try:
+        s = round(float(seconds))
+    except (TypeError, ValueError):
+        return ""
+    return f" Checked in {s // 60} min {s % 60} s." if s >= 60 else f" Checked in {s} s."
 
 
 def write_check_view(path: Path, out: Path | None = None, public: bool = False) -> Path:
@@ -278,7 +318,7 @@ padding:16px 18px;margin:0 0 14px}
 .why.intended{border-color:var(--pass)}.why.needs_human{border-color:#C08A1E}
 .sbs{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin:12px 0 0}
 .sbs p{margin:0 0 4px;font-weight:600;font-size:.88rem}.sbs p span{color:var(--quiet);font-weight:400;margin-left:4px}
-.sbs pre{max-height:260px;overflow-wrap:anywhere;word-break:break-all}
+.sbs pre{max-height:260px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal}
 table.reqs,table.sus{width:100%;table-layout:fixed;font-size:.88rem;border-collapse:collapse;background:var(--paper)}
 table.reqs td,table.sus td,table.reqs code{overflow-wrap:anywhere;word-break:break-word}
 table.reqs th,table.sus th{text-align:left;color:var(--quiet);font-weight:500;padding:6px 10px;border-bottom:1px solid var(--line)}

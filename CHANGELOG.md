@@ -16,6 +16,16 @@ Seven gaps found while writing the architecture guide, each pinned by a test in 
 - The setup agent's `read` reads the sandbox it works in (including files its shell commands wrote), and a
   re-read is allowed again after a shell command; `./.env` and `env` are no longer the same path.
 
+What a reader sees, made to read like a product (each pinned in `tests/test_presentation.py`):
+- A field that one side didn't have is said in words ("no password_hash", "not in the response"), never shown
+  as the recorder's `"(absent)"` marker; a field that moved to a new name with the same value is called a rename
+  ("Field renamed in responses: message → name").
+- The PR comment's example and its per-request table mask secrets and password hashes, like the check page.
+- Nemotron's reason is never cut mid-sentence, and long values are cut at a word.
+- The test-mode method notes fold under "How Doppel checked this", so the verdict reads first; the comment's
+  footer puts the check-page link on its own line.
+- The check page wraps values at spaces instead of mid-word and says "Checked in 39 s".
+
 The 17 Oct benchmark recordings judged again with the per-route grouping (nothing else run), three times with
 identical results: review-guided Doppel 17/20 with 2/10 false alarms (was 16/20; r11 changed from missed to
 caught), held-out 7/7 with 0/3, consequence 2/3 with 0/5. Results in `bench/results/guided-rerun-grouping/`.

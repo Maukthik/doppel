@@ -121,7 +121,8 @@ def test_one_leak_judged_place_by_place_is_still_one_regression():
 
 def test_the_public_page_shows_absent_as_absent_and_masks_the_hash_once():
     page = render_check(LIVE, public=True)
-    assert "(absent)" in page                                         # base really didn't have it
+    assert "password_hash: not in the response" in page               # base really didn't have it, in words
+    assert "(absent)" not in page                                     # never the recorder's marker as a value
     assert "scrypt:32768:8:1$[hidden on the site]" in page            # the scheme stays visible: it IS a hash
     assert "on the site] on the site]" not in page and HASH not in page
 
