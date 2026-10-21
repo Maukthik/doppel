@@ -2,7 +2,7 @@
 
 [TESTING.md](TESTING.md) proves Doppel on microblog-api, the app its benchmark was built on. This guide does
 the harder test: five open-source Python web apps Doppel was never tuned for, from a 70-test Flask service
-to a 2,266-test Django library. For each app you run three checks:
+to a 2,250-test Django library. For each app you run three checks:
 
 1. **A planted regression.** One small edit that changes what the app answers, while every one of the
    app's own tests still passes. Doppel should find it.
@@ -10,15 +10,23 @@ to a 2,266-test Django library. For each app you run three checks:
    proves nothing.
 3. **A real merged pull request** from the app's history, compared the way a reviewer would have seen it.
 
-Everything here was run on 19 Oct 2026, at the commits pinned below, and the outputs shown are from those
-runs. Running them also found eight gaps in Doppel, all fixed and listed [at the end](#what-these-apps-taught-doppel).
+Everything here was run on 19–21 Oct 2026, at the commits pinned below, and the outputs shown are from those
+runs.
+
+**Read the results as a development set, not a score.** On first contact, three of the five didn't work
+properly: django-allauth ran half its tests, Datasette recorded nothing and then raised a false alarm, and
+flasky's report had no routes. Those runs found nine gaps in Doppel; all are fixed (listed
+[at the end](#what-these-apps-taught-doppel), each pinned by a test), and the table shows results *after* the
+fixes. The planted regressions were also chosen to be ones the apps' own tests miss, to show what Doppel adds.
+So these five show what Doppel does on unfamiliar code and how it was hardened; an unbiased measure needs apps
+picked in advance and run once without fixes, as [`bench/fresh_apps.py`](bench/fresh_apps.py) did for 30 apps.
 
 | App | Framework | Tests | Planted regression | Safe change | Real PR | Local time per check |
 |---|---|---|---|---|---|---|
 | [httpbin](#1-httpbin-flask) | Flask | 70 | Caught: `origin` dropped from `GET /get` (9 requests) | No regressions | #66: no regressions | ~15 s |
 | [flasky](#2-flasky-flask-old-pins) | Flask, 2017 pins | 34 | Caught: `author_email` added to every post (5 requests) | No regressions | Chapter 16a: no regressions | ~15 s |
-| [django-allauth](#3-django-allauth-django) | Django | 2,266 | Caught: `track_activity` flipped in the config endpoints (2 requests) | No regressions | IdP key rotation: no regressions | 3–7 min |
-| [Kinto](#4-kinto-pyramid--webtest) | Pyramid + WebTest | ~2,040 | Caught: `storage_backend` exposed on the root endpoint (94 requests) | No regressions | #3793: no regressions | 6–7 min |
+| [django-allauth](#3-django-allauth-django) | Django | ~2,250 | Caught: `track_activity` flipped in the config endpoints (2 requests) | No regressions | IdP key rotation: no regressions | 3–7 min |
+| [Kinto](#4-kinto-pyramid--webtest) | Pyramid + WebTest | ~2,040 | Caught: `storage_backend` exposed on the root endpoint (~95 requests) | No regressions | #3793: no regressions | 6–7 min |
 | [Datasette](#5-datasette-asgi) | ASGI | ~2,800 | Caught: `uvicorn` dropped from `GET /-/versions.json` (28 requests) | No regressions | #2951: no regressions | ~9 min |
 
 ---
@@ -65,6 +73,20 @@ mkdir -p apps && cd apps
 source ../doppel/.venv/bin/activate
 doppel --version
 ```
+
+**Fastest: one script prepares everything.** From the `doppel` folder, with Doppel's venv active:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File demo\prepare-apps.ps1 -Work ..\apps -Verify
+```
+
+It needs git and [uv](https://docs.astral.sh/uv/) (`winget install --id astral-sh.uv -e`, or `pip install uv`),
+which fetches each app's Python. For every app it clones the pinned commit, makes `<app>-planted` (the planted
+regression), `<app>-safe` (the docstring change), `<app>-pr-base` and `<app>-pr-head` (the real PR), builds
+`<app>-venv`, and with `-Verify` runs the app's own tests on base and on the planted copy, so you can show both
+pass. It writes every `doppel check` command to `apps\commands.txt`. All five take 20–30 minutes (most of it
+installing and running allauth, Kinto and Datasette's suites); `-Apps httpbin,flasky` does just the fast two.
+The sections below do the same by hand, step by step.
 
 Keep this terminal: every command below runs from `work/apps` with Doppel's venv active. Each app gets its
 **own** venv for its own dependencies (`hb-venv`, `fl-venv`, …). You never activate those; Doppel is told
@@ -318,7 +340,7 @@ doppel check --no-twin --base fl-base --head fl-head --python 3.8 --command "SER
 ## 3. django-allauth (Django)
 
 [pennersr/django-allauth](https://github.com/pennersr/django-allauth): authentication for Django, with a
-large test suite (2,266 tests). Its tests live in `tests.py` and `*_tests.py` files as well as `test_*.py`
+large test suite (about 2,250 tests). Its tests live in `tests.py` and `*_tests.py` files as well as `test_*.py`
 (set in its `pytest.ini`), and its CI runs them through nox.
 
 ### Get it
@@ -345,7 +367,8 @@ aa-venv/bin/python -m pip install -e "./aa-base[headless,socialaccount,mfa,idp-o
 (cd aa-base && ../aa-venv/bin/python -m pytest -q)
 ```
 
-**Expect:** `2266 passed` in about a minute. The test dependencies are the ones its noxfile installs. The
+**Expect:** about `2250 passed` in a minute or two (2,247 to 2,266 here, depending on the Django version pip
+picks). The test dependencies are the ones its noxfile installs. The
 `saml` extra is left out: it needs `xmlsec`, which often has to be compiled on Windows, and allauth's own CI
 leaves SAML out too.
 
@@ -361,7 +384,7 @@ In `aa-head/allauth/headless/usersessions/response.py`:
 ```
 
 Front ends that read this config to decide whether to show session activity now get the wrong answer.
-`test_config` only checks the keys, so all 2,266 tests still pass. Run:
+`test_config` only checks the keys, so every test still passes. Run:
 
 PowerShell:
 
@@ -503,7 +526,8 @@ doppel check --backend local --no-twin --base kinto-base --head kinto-head --pyt
 | 1 | Responses now include storage_backend | `GET /v0/`<br>`POST /v0/batch`<br>`GET /v1/` | 94 requests from 79 tests | `no storage_backend` → `storage_backend: "kinto.core.storage.memory"` |
 ```
 
-94 requests, one change: the root answer, plus the same answer nested inside batch responses.
+About 95 requests (94 or 95, depending on which tests the run reaches first), one change: the root
+answer, plus the same answer nested inside batch responses.
 
 ### Safe change
 
@@ -689,7 +713,7 @@ app, commit | how its tests ran (command, count, time) | planted: caught? | safe
 
 ## What these apps taught Doppel
 
-Running these five apps found eight gaps. All are fixed and each is pinned by a test in
+Running these five apps found nine gaps. All are fixed and each is pinned by a test in
 [`tests/test_new_apps.py`](tests/test_new_apps.py) or [`tests/test_presentation.py`](tests/test_presentation.py):
 
 | App | What happened | Fixed |
@@ -701,4 +725,5 @@ Running these five apps found eight gaps. All are fixed and each is pinned by a 
 | flasky | With Flask 0.12's test client, every request was recorded as `GET ` with no path | The recorder reads the path from what the client was given |
 | Datasette | Its test client uses `httpx2`, which the recorder didn't know, so nothing was recorded | `httpx2` is recorded like `httpx` |
 | httpbin | A head whose tests can't import showed as "this test no longer exists" seventy times | One change: "The tests can't run on the PR's code" with the error |
+| flasky | Under load, the planted leak was sometimes missed: the two base runs fell in the same second, so `timestamp` didn't look like noise, the finding read "author_email (added), timestamp", and when the confirmation reruns showed the timestamp varying, the whole finding was dropped | Confirmation compares the first run's differences with everything the reruns show to vary left out, so the real part survives (6 of 6 concurrent runs caught it) |
 | Datasette | The safe change came back as a difference on an error page, every run: the `.egg-info` an editable install leaves in the base folder was copied into the base worlds only, so pytest loaded the app differently there | Build leftovers (`*.egg-info`) stay out of every world |

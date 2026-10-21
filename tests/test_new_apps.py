@@ -67,3 +67,29 @@ def test_build_leftovers_in_the_base_checkout_stay_out_of_every_world(tmp_path):
             sorted(p.name for p in session.code["head"].iterdir())
     finally:
         session.close()
+
+
+def test_a_real_change_that_came_with_a_timestamp_survives_its_confirmation(monkeypatch):
+    # flasky under load: both base runs fell in the same second, so `timestamp` didn't look like noise and the
+    # first comparison said "author_email (added), timestamp". The reruns, a second later, showed the timestamp
+    # varying; the finding no longer matched them word for word and was dropped whole, author_email with it.
+    from doppel import traffic
+
+    def world(email, stamp):
+        body = {"id": 1, "timestamp": stamp} | ({"author_email": email} if email else {})
+        return {"tests": {"t::posts": {"outcome": "passed", "requests": [
+            {"sig": "GET /posts/1", "status": 200, "body": body}]}}, "exit": "0", "output": "", "recorder_errors": ""}
+    a, a2, b = world(None, "10:00:01"), world(None, "10:00:01"), world("j@x.com", "10:00:02")
+    nz = traffic.noise(a, a2)
+    findings, _ = traffic.compare_worlds(a, b, nz, set())
+    assert [f.detail for f in findings] == ["changed: author_email (added), timestamp"]
+    reruns = iter([world(None, "10:00:05"), world("j@x.com", "10:00:06"),
+                   world(None, "10:00:07"), world("j@x.com", "10:00:08")])
+
+    class Session:
+        def run(self, jobs):
+            return [next(reruns) for _ in jobs]
+    monkeypatch.setattr(traffic, "read_world", lambda w: w)
+    monkeypatch.setattr(traffic, "confirm_command", lambda *a, **k: "python -m pytest t")
+    kept, info = traffic.confirm(Session(), None, "python -m pytest", findings, a, b, nz, set())
+    assert [f.detail for f in kept] == ["changed: author_email (added)"] and info["dropped"] == 0

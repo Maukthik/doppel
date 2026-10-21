@@ -35,9 +35,9 @@ fields in words and use real plurals, like the check comment. A local `--python`
 as such instead of surfacing as a test suite that ran nothing; `bench/run_bench.py --app-python` accepts a
 relative path.
 
-[TESTING-APPS.md](TESTING-APPS.md): five apps Doppel was never tuned for (httpbin, flasky, django-allauth, Kinto,
+[TESTING-APPS.md](TESTING-APPS.md) and `demo/prepare-apps.ps1` (prepares all five for a demo): five apps Doppel was never tuned for (httpbin, flasky, django-allauth, Kinto,
 Datasette), each with a planted regression, a safe change and a real merged PR, at pinned commits. Running them
-found eight gaps, each now pinned in `tests/test_new_apps.py` or `tests/test_presentation.py`:
+found nine gaps, each now pinned in `tests/test_new_apps.py` or `tests/test_presentation.py`:
 - A Makefile or script command whose pytest targets hold no test file is passed over (django-allauth's stale
   `pytest allauth/`).
 - Test files are found with the repo's own pytest `python_files` setting, and `tests.py` / `*_tests.py` files
@@ -48,6 +48,9 @@ found eight gaps, each now pinned in `tests/test_new_apps.py` or `tests/test_pre
 - `httpx2`, httpx's fork, is recorded like httpx (Datasette's test client).
 - A PR whose code stops the whole suite from importing is one change, "The tests can't run on the PR's code",
   with the error, instead of every test "no longer existing".
+- A difference confirmed by rerunning its tests is compared with everything the reruns show to vary left out:
+  flasky's planted leak arrived with a timestamp the two base runs happened to share, didn't match its rerun
+  word for word, and was dropped whole (missed in 2 of 4 concurrent runs; caught in 6 of 6 now).
 - Build leftovers (`*.egg-info`) in the base checkout are kept out of every world: copied into base's worlds
   only, an editable install's metadata changed how pytest loaded the app there (a false alarm on Datasette).
 

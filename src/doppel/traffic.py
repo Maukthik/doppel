@@ -913,8 +913,13 @@ def confirm(session, base: Path, test: str, findings: list[Finding], a: dict, b:
                           noise(again_b, again_b2))
     seen_again = ({_key(f) for f in compare_worlds(again_a, again_b, merged, excluded)[0]}
                   & {_key(f) for f in compare_worlds(again_a2, again_b2, merged, excluded)[0]})   # both rounds
-    kept = [f for f in findings if _key(f) in seen_again and f.persona not in merged["flaky"]]
-    gone = [f for f in findings if f not in kept]
+    # the first run's differences again, with everything now known to vary left out: a real change that came
+    # with a timestamp the two base runs happened to share (both in the same second) was compared with that
+    # timestamp in it, didn't match its rerun, and was dropped whole (flasky, under load)
+    first = compare_worlds(a, b, merged, excluded)[0]
+    kept = [f for f in first if _key(f) in seen_again and f.persona not in merged["flaky"]]
+    still = {(f.persona, f.step, f.request) for f in kept}
+    gone = [f for f in findings if (f.persona, f.step, f.request) not in still]
     if gone:
         log(f"[tests] {len(gone)} difference(s) did not happen again and were dropped as noise")
     # kept for audit, never as findings: a difference that depends on test order (state left by earlier tests)

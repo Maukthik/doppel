@@ -32,7 +32,7 @@ work/
 
 ## Level 0: install and run the test suite
 
-**Proves:** Doppel installs, and its 403 offline tests pass: test mode, the twin, the judge's rules, the
+**Proves:** Doppel installs, and its 404 offline tests pass: test mode, the twin, the judge's rules, the
 setup agent and the pages, all run against small Flask, Django and FastAPI apps the tests build on the fly.
 
 PowerShell:
@@ -62,7 +62,7 @@ ruff check .
 python -m pytest -q
 ```
 
-**You should see:** `doppel 1.0.0`, `All checks passed!`, then `403 passed` after about four minutes.
+**You should see:** `doppel 1.0.0`, `All checks passed!`, then `404 passed` after about four minutes.
 
 The `nebius` extra is only needed from Level 3 on; installing it now saves a step. Keep this terminal and
 its activated `.venv`: every later command uses it.
