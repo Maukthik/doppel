@@ -361,7 +361,11 @@ def derived_install(repo: str | Path) -> str:
     reqs, _ = dependencies(repo)
     keep = []
     for r in reqs:
-        swap = NEEDS_COMPILER.get(_req_name(r), r) if _req_name(r) in NEEDS_COMPILER else r
+        swap = r
+        if _req_name(r) in NEEDS_COMPILER:
+            to = NEEDS_COMPILER[_req_name(r)]
+            # psycopg2==2.9.9 -> psycopg2-binary==2.9.9: the binary build keeps the version the app pinned
+            swap = to and to + re.sub(r"^\s*[A-Za-z0-9_.-]+", "", r.strip(), count=1)
         if swap:
             keep.append("'" + swap.replace("'", "") + "'")
     return "pip install --quiet " + " ".join(keep) if keep else ""
@@ -834,11 +838,16 @@ def removed_api_uses(repo: str | Path, tree: ast.Module) -> list[str]:
     return problems
 
 
+STATUS_BEFORE = re.compile(r"(?:\banswered|\bstatus|\brefused with|\bHTTP|->|\u2192)\s*$")
+
+
 def same_error(a: str, b: str) -> bool:
     """Two error lines say the same thing once temp paths, ports and ids are blanked out."""
     def norm(line: str) -> str:
         line = re.sub(r"(?:[A-Za-z]:)?[\\/][^\s'\":]*doppel-[^\s'\":]*", "<tmp>", line)
-        return re.sub(r"\d+", "N", line).strip()
+        # an HTTP status is the error itself (401 is not 403); other numbers are ports, ids and times
+        return re.sub(r"\d+", lambda m: m.group() if STATUS_BEFORE.search(line[:m.start()]) and
+                      re.fullmatch(r"[1-5]\d\d", m.group()) else "N", line).strip()
     return bool(a and b) and norm(a) == norm(b)
 
 
@@ -1388,7 +1397,8 @@ def check(repo: str | Path, backend: str = "nebius", calibrate: bool = False, ru
     """`doppel init --check`: test the doppel.toml and doppel_seed.py already in the repo, with no model
     drafting. For a human finishing the last step, and for seeing what each safety net catches."""
     repo = Path(repo).resolve()
-    files = {n: (repo / n).read_text("utf-8") for n in (SPEC_FILE, SEED_FILE) if (repo / n).is_file()}
+    files = {n: (repo / n).read_text("utf-8") for n in (SPEC_FILE, SEED_FILE, SEED_REQUESTS_FILE)
+             if (repo / n).is_file()}
     if SPEC_FILE not in files:
         return {"ok": False, "error": f"no {SPEC_FILE} in {repo}", "checks": []}
     checked = run_checks(repo, files)

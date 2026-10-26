@@ -56,6 +56,10 @@ call it a regression *and* it has to be on the right route. The AI reviewer only
 
 ## Results (3 Oct)
 
+> **Latest run (17 Oct):** review-guided Doppel 17/20 with 2/10 false alarms (s07, s09), $0.25 and 89 s per
+> PR; held-out 7/7 with 0/3 ([results/guided-rerun-grouping](results/guided-rerun-grouping/)). These are the
+> numbers the main README quotes. The tables below are the 3 Oct run, kept as it was recorded.
+
 **Main 30 PRs**
 
 | | Regressions caught | False alarms on safe PRs | Cost per PR | Time per PR |
@@ -175,7 +179,7 @@ in `results/` as the `doppel` arm.
 
 ```bash
 pip install -e ".[nebius,dev]"            # from the repo root; .env holds NEBIUS_API_KEY and NEBIUS_PROJECT_ID
-python bench/run_bench.py --arms doppel,review   # all 30 PRs, about $2-3 of credits
+python bench/run_bench.py --arms doppel,review   # all 30 PRs, about $5 of credits
 python bench/rejudge.py                    # optional: re-label recorded findings with the current judge
 python bench/summarize.py                  # -> results/results.md and results/chart.svg
 ```

@@ -16,7 +16,7 @@ doesn't mention. The reply links a check page with the evidence: the request, th
 
 ## What it runs
 
-- [`.github/workflows/try.yml`](.github/workflows/try.yml): one job per new issue.
+- [`.github/workflows/try.yml`](https://github.com/Maukthik/doppel-try/blob/main/.github/workflows/try.yml): one job per new issue.
 - [`scripts/try_pr.py`](scripts/try_pr.py): reads the link, checks the daily limit, checks out the PR, replies
   and labels. What the issue's author wrote is passed through environment variables and never pasted into a
   shell command.

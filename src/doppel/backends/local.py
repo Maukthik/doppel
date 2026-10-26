@@ -196,11 +196,6 @@ def replay_world(world: Path, spec: TwinSpec, personas: list[dict], work: Path, 
     return out
 
 
-def run_world(code_dir: Path, seeded: Path, spec: TwinSpec, personas: list[dict], work: Path) -> list[dict]:
-    world = build_world(code_dir, seeded, spec, work)
-    return [r for r in replay_world(world, spec, personas, work) if isinstance(r, dict)]
-
-
 def run_twin(base_dir: str | Path, head_dir: str | Path, spec: TwinSpec, personas: list[dict],
              refine=None, watch: dict | None = None) -> dict:
     """Returns {"base": recordings, "head": recordings, "failed": [...], "personas": [...],

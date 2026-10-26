@@ -75,9 +75,10 @@ def decline(text: str) -> int:
 
 
 def runs_today(repo: str, now: dt.datetime) -> int:
-    """Issues opened in this repo during the last 24 hours (this one included)."""
+    """Runs started in this repo during the last 24 hours (this one included). Issues declined without a run
+    (labelled "not run": no link, a private PR, a repo too big) don't count, so they can't use up the day."""
     since = (now - dt.timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    query = urllib.parse.quote(f"repo:{repo} is:issue created:>={since}")
+    query = urllib.parse.quote(f'repo:{repo} is:issue created:>={since} -label:"{LABELS[3][0]}"')
     return int(_request("GET", f"/search/issues?q={query}&per_page=1").get("total_count", 0))
 
 

@@ -439,7 +439,7 @@ LOGIN_SPEC = ('[app]\ninstall = "pip install django"\nstart = "python app.py"\nr
 def test_install_is_derived_from_the_dependency_list_without_compiled_packages(tmp_path):
     (tmp_path / "pyproject.toml").write_text(PYPROJECT)
     cmd = bootstrap.derived_install(tmp_path)
-    assert cmd == ("pip install --quiet 'django>=6.0.7' 'djangorestframework>=3.16' 'psycopg2-binary' "
+    assert cmd == ("pip install --quiet 'django>=6.0.7' 'djangorestframework>=3.16' 'psycopg2-binary>=2.9' "
                    "'huey>=2.5'")
     hint = bootstrap.install_hint(tmp_path)
     assert "derived by Doppel from pyproject.toml (uwsgi, psycopg2 removed" in hint and cmd in hint

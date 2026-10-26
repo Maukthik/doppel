@@ -15,12 +15,6 @@ SECTION = {"regression": "🚨 Regressions: not mentioned in the PR",
            "intended": "✅ Intended: matches the PR description"}
 
 
-def _short(value, n: int = 120) -> str:
-    text = json.dumps(value, ensure_ascii=False, default=str)
-    text = text if len(text) <= n else text[: n - 1] + "…"
-    return text.replace("|", "\\|").replace("`", "'")  # keep the Markdown table intact
-
-
 WHO = {"persona": ("Persona", "personas replayed", "step"),
        "test": ("Test", "of the app's own tests sent", "request")}
 _who = ["persona"]   # set by markdown(); the table helpers read it
@@ -67,7 +61,7 @@ def coverage_line(cov: dict | None) -> str:
     return line + note
 
 
-CHECK = {"confirmed": "🔴 confirmed", "intended": "🟢 confirmed, intended", "refuted": "🟢 refuted",
+CHECK = {"confirmed": "🔴 confirmed", "intended": "🟢 confirmed, intended", "refuted": "⚪ refuted",
          "untested": "⚪ untested"}
 
 
@@ -167,8 +161,10 @@ def _markdown(findings: list[Finding], personas: int, steps: int, judged: dict |
     verdicts = judged["verdicts"]
     by_label = {label: [(f, v) for f, v in zip(findings, verdicts, strict=True) if v.label == label]
                 for label in SECTION}
-    # the judge shares one verdict per distinct change, so count verdicts, not rows
-    n_reg, n_hum, n_int = (len({id(v) for _, v in by_label[k]}) for k in ("regression", "needs_human", "intended"))
+    # one verdict per distinct change: count verdicts, not rows. The judge's later rules (a secret field, a new
+    # route, a confirmed suspicion) replace a verdict finding by finding with equal ones, so count by content
+    n_reg, n_hum, n_int = (len({(v.label, v.why) for _, v in by_label[k]})
+                           for k in ("regression", "needs_human", "intended"))
     head = (f"## Doppel: {n_reg} regression{'' if n_reg == 1 else 's'} the PR doesn't mention" if n_reg
             else "## Doppel: no regressions")
     lines = [head, "", f"{replayed} Distinct changes: {n_reg} regression · {n_hum} need a human · "

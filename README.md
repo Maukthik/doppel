@@ -261,7 +261,7 @@ The twin ([`backends/nebius.py`](src/doppel/backends/nebius.py), [`runner.py`](s
 app as a live server and explores what no test calls. It needs a [`doppel.toml`](#doppeltoml).
 
 **1. Build the twin once, then fork it.** Nebius Token Factory Sandboxes (ConTree) can checkpoint a running
-sandbox and fork throwaway copies from it in about a second:
+sandbox and fork throwaway copies from it in about 1.4 seconds:
 
 ```
 image ─ upload base code ─ install ─ seed ──────────────────► SEEDED
@@ -369,7 +369,7 @@ and project ID replaced by `***`.
 
 ```bash
 cd your-app
-doppel init      # writes doppel.toml + doppel_seed.json, proven in a sandbox
+doppel init      # writes doppel.toml + a seed (doppel_seed.json and/or doppel_seed.py), proven in a sandbox
 doppel probe     # just print what Doppel learns: routes, database, login, models
 ```
 
@@ -480,8 +480,8 @@ disappeared). The other 6 were never requested by the suite. The guided twin cau
 ([details](bench/results/testmode)).
 
 **Real bugs, replayed.** We took real fixes from BugsInPy (FastAPI, Tornado) and from fava, isso, privacyidea
-and prefect, and replayed each one as the PR that brings its bug back. Test mode caught 2 of 15 runnable
-BugsInPy bugs. It caught 0 of 14 recent real fixes and raised 0 false alarms. In nearly every case, **the
+and prefect, and replayed each one as the PR that brings its bug back. Test mode caught 2 of the 15
+BugsInPy bugs that ran (22 of 37 didn't run: harness and connection errors, and failed installs). It caught 0 of 14 recent real fixes and raised 0 false alarms. In nearly every case, **the
 test suite never sent a request through the buggy code**, so there was nothing to compare. This is test
 mode's ceiling, and it's why the guided twin exists: it writes the requests no test sends
 ([BugsInPy](bench/results/bugsinpy), [real fixes](bench/results/fixes)). The guided twin, with a setup written
@@ -625,7 +625,9 @@ there's an unaccepted regression.
 
 Output: `exit-code` (0 no regressions, 1 regressions, 2 couldn't compare). The check page lands at
 `https://<owner>.github.io/<repo>/doppel/pr-<number>/` once GitHub Pages serves the `gh-pages` branch.
-PRs from forks get no secrets on GitHub, so Doppel checks branches inside the repo.
+PRs from forks get no secrets on GitHub, so Doppel checks branches inside the repo: a fork's PR (or a repo
+without the two secrets) fails at the first step with an error that says which secret is missing, and posts
+no comment.
 
 ### Output files
 
@@ -718,7 +720,7 @@ pip install -e ".[dev]" && ruff check . && python -m pytest -q    # offline: no 
 The test suite runs the twin with the local backend against small Flask, Django and FastAPI apps it builds on
 the fly, so it needs no keys. Every model call is a fake passed in through the functions' `chat=` argument.
 [`tests/test_hardening.py`](tests/test_hardening.py) pins the seven fixes listed in the
-[changelog](CHANGELOG.md) under Unreleased. CI runs it on Python 3.11, 3.12 and 3.13
+[changelog](CHANGELOG.md) under 1.1.0. CI runs it on Python 3.11, 3.12 and 3.13
 ([`tests.yml`](.github/workflows/tests.yml)).
 
 End-to-end testing, from install to the benchmark, with expected outputs: [TESTING.md](TESTING.md). The same

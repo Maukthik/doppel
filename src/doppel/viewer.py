@@ -310,11 +310,16 @@ def is_run(path: Path) -> bool:
         return False
 
 
-def load_run(path: Path) -> dict:
+def load_run(path: Path, public: bool = False) -> dict:
+    """public: mask secrets, tokens and password hashes first, as the replay site and the check page do."""
     path = Path(path)
     if path.is_dir():
         path = path / "run.json"
-    return run_data(json.loads(path.read_text("utf-8")), path.resolve().parent.name)
+    raw = json.loads(path.read_text("utf-8"))
+    if public:
+        from doppel.site import sanitize
+        raw = sanitize(raw)
+    return run_data(raw, path.resolve().parent.name)
 
 
 def run_data(raw: dict, app: str = "app") -> dict:
@@ -359,10 +364,16 @@ def render_run(data: dict, nav: str = "") -> str:
             .replace("__NAV__", nav).replace("__DATA__", payload))
 
 
-def write_run_view(path: Path, out: Path | None = None) -> Path:
+def write_run_view(path: Path, out: Path | None = None, public: bool = False) -> Path:
+    """public: a page others will see (the Action publishes it as replay.html): credentials are masked, and a
+    page that would still show a credential from this environment is never written."""
     path = Path(path)
     out = Path(out) if out else (path if path.is_dir() else path.parent) / "doppel-run.html"
-    out.write_text(render_run(load_run(path)), encoding="utf-8")
+    page = render_run(load_run(path, public=public))
+    if public:
+        from doppel.site import check_secrets
+        check_secrets(page, out.name)
+    out.write_text(page, encoding="utf-8")
     return out
 
 

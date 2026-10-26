@@ -2,7 +2,7 @@
 
 Each bug is a PR that brings a real, fixed bug back (base = the fix, head = the buggy commit), with the test written after the bug was found hidden. Python and libraries are the bug's own (BugsInPy).
 
-**2 caught · 13 invisible (the suite never sent a request through the bug) · 22 not runnable · 0 infrastructure errors (rerun)** — of 37 run.
+**2 caught · 13 invisible (the suite never sent a request through the bug) · 22 not run** — of 37: 5 Sanic installs failed on the bug's own Python, and 17 runs broke before Doppel started (12 checkouts in this benchmark's harness, 5 sandbox connection errors). Only the 15 that ran are counted in the README.
 
 Unconfirmed = differences seen once but not when their tests were rerun (dropped as noise by safeguard S5, kept in each bug's JSON under stats.confirmation.unconfirmed for audit).
 
@@ -28,18 +28,18 @@ Unconfirmed = differences seen once but not when their tests were rerun (dropped
 | tornado #2 | 3.7 | caught | 978 | 668 |  | PUT /put: status 200 -> 0 (the base branch's test fails on this) |
 | tornado #3 | 3.7 | invisible | 967 | 659 | 1 |  |
 | tornado #4 | 3.7 | invisible | 965 | 651 |  |  |
-| tornado #5 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', 'D:\\MyAIProjects\\doppel\\bench\\.cache\ |
-| tornado #6 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', 'D:\\MyAIProjects\\doppel\\bench\\.cache\ |
-| tornado #7 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', 'D:\\MyAIProjects\\doppel\\bench\\.cache\ |
-| tornado #8 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', 'D:\\MyAIProjects\\doppel\\bench\\.cache\ |
-| tornado #9 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', 'D:\\MyAIProjects\\doppel\\bench\\.cache\ |
-| tornado #10 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', 'D:\\MyAIProjects\\doppel\\bench\\.cache\ |
-| tornado #11 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', 'D:\\MyAIProjects\\doppel\\bench\\.cache\ |
-| tornado #12 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', 'D:\\MyAIProjects\\doppel\\bench\\.cache\ |
-| tornado #13 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', 'D:\\MyAIProjects\\doppel\\bench\\.cache\ |
-| tornado #14 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', 'D:\\MyAIProjects\\doppel\\bench\\.cache\ |
-| tornado #15 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', 'D:\\MyAIProjects\\doppel\\bench\\.cache\ |
-| tornado #16 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', 'D:\\MyAIProjects\\doppel\\bench\\.cache\ |
+| tornado #5 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', '<repo>\\bench\\.cache\ |
+| tornado #6 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', '<repo>\\bench\\.cache\ |
+| tornado #7 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', '<repo>\\bench\\.cache\ |
+| tornado #8 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', '<repo>\\bench\\.cache\ |
+| tornado #9 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', '<repo>\\bench\\.cache\ |
+| tornado #10 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', '<repo>\\bench\\.cache\ |
+| tornado #11 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', '<repo>\\bench\\.cache\ |
+| tornado #12 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', '<repo>\\bench\\.cache\ |
+| tornado #13 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', '<repo>\\bench\\.cache\ |
+| tornado #14 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', '<repo>\\bench\\.cache\ |
+| tornado #15 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', '<repo>\\bench\\.cache\ |
+| tornado #16 | 3.7 | not runnable |  |  |  | CalledProcessError: Command '['tar', '-x', '-C', '<repo>\\bench\\.cache\ |
 | sanic #1 | 3.8 | not runnable |  |  |  | the install command failed: |
 | sanic #2 | 3.8 | not runnable |  |  |  | the install command failed: |
 | sanic #3 | 3.8 | not runnable |  |  |  | the install command failed: |

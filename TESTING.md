@@ -32,7 +32,7 @@ work/
 
 ## Level 0: install and run the test suite
 
-**Proves:** Doppel installs, and its 404 offline tests pass: test mode, the twin, the judge's rules, the
+**Proves:** Doppel installs, and its 415 offline tests pass: test mode, the twin, the judge's rules, the
 setup agent and the pages, all run against small Flask, Django and FastAPI apps the tests build on the fly.
 
 PowerShell:
@@ -62,7 +62,7 @@ ruff check .
 python -m pytest -q
 ```
 
-**You should see:** `doppel 1.0.0`, `All checks passed!`, then `404 passed` after about four minutes.
+**You should see:** `doppel 1.1.0`, `All checks passed!`, then `415 passed` after about four minutes.
 
 The `nebius` extra is only needed from Level 3 on; installing it now saves a step. Keep this terminal and
 its activated `.venv`: every later command uses it.
@@ -250,7 +250,7 @@ head folder (`$prs` is from 2.1; set it again in a new terminal):
 
 | PR | What it really does | Expect |
 |---|---|---|
-| `r03-auth-error-field` | "Small cleanup in auth error handlers", renames `message` to `name` in every 401 | `1 behavior change, seen in 13 requests`: **Field renamed in responses: message → name**, exit 1 |
+| `r03-auth-error-field` | "Small cleanup in auth error handlers", renames `message` to `name` in every 401 and 403 | `1 behavior change, seen in 13 requests`: **Field renamed in responses: message → name**, exit 1 |
 | `s02-docstrings` | Only docstrings change | `no regressions`, exit 0 |
 
 PowerShell (repeat with `s02-docstrings`):

@@ -158,7 +158,7 @@ def cmd_tests(a) -> int:
     return 0
 
 
-SETUP_FILES = ("doppel.toml", "doppel_seed.py", "doppel-personas.json")
+SETUP_FILES = ("doppel.toml", "doppel_seed.py", "doppel_seed.json", "doppel-personas.json")
 
 
 def load_spec(base, head, explicit: str | None = None) -> TwinSpec:
@@ -268,7 +268,7 @@ def cmd_view(a) -> int:
     if is_check(path):
         out = write_check_view(path, Path(a.out) if a.out else None, public=getattr(a, "public", False))
     elif is_run(path):
-        out = write_run_view(path, Path(a.out) if a.out else None)
+        out = write_run_view(path, Path(a.out) if a.out else None, public=getattr(a, "public", False))
     elif is_trace(path):
         out = write_view(path, Path(a.out) if a.out else None)
     else:
@@ -353,7 +353,8 @@ def main(argv=None) -> int:
     g.add_argument("-n", type=int, default=12, help="how many personas")
     g.add_argument("--model", help="default: $PERSONA_MODEL or nvidia/Nemotron-3_5-Lightning")
     g.add_argument("--out", default="personas.json")
-    i = sub.add_parser("init", help="write doppel.toml and doppel_seed.py for an app, checked in the twin")
+    i = sub.add_parser("init", help="write doppel.toml and a seed (doppel_seed.json / .py) for an app, "
+                                    "checked in the twin")
     i.add_argument("app", nargs="?", default=".", help="the app's folder (default: current folder)")
     i.add_argument("--backend", choices=["local", "nebius"], default="nebius",
                    help="where to try the setup (local uses your current Python environment)")
@@ -368,12 +369,13 @@ def main(argv=None) -> int:
     i.add_argument("--trace", action="store_true",
                    help="save every attempt (prompt, reply, checks, boot, evidence) to .doppel-trace/")
     i.add_argument("--check", action="store_true",
-                   help="test the doppel.toml and doppel_seed.py already in the app, without drafting")
+                   help="test the doppel.toml and seed already in the app, without drafting")
     i.add_argument("--calibrate", action="store_true",
                    help="with --check: also replay invented users (costs model calls and a second boot)")
-    i.add_argument("--force", action="store_true", help="overwrite existing doppel.toml / doppel_seed.py")
+    i.add_argument("--force", action="store_true", help="overwrite existing doppel.toml / seed files")
     i.add_argument("--keep-draft", action="store_true", help="write the last draft even if it failed")
-    v = sub.add_parser("view", help="turn a run (run.json) or an init trace into a web page and open it")
+    v = sub.add_parser("view", help="turn a run (run.json), a check (check.json) or an init trace into a web "
+                                    "page and open it")
     v.add_argument("path", nargs="?", default=".doppel-trace",
                    help="run.json, a folder holding it, or an init trace folder (default: .doppel-trace)")
     v.add_argument("--out", help="where to write the page (default: doppel-view.html next to the trace)")

@@ -44,7 +44,8 @@ Seed once, a fresh world per persona, replay, diff, Markdown report, offline tes
 - [x] Suspicion table agrees with the verdicts; transport errors retried.
 - [x] `doppel init` on linkding (Django), compared with the answer key in `bench/init/linkding/`:
   no hand edits, 64% served, the same 3 noise keys; 15 attempts over four runs, with four fixes to init's feedback.
-- [ ] Doppel on 3–5 real recent PRs of a second repo.
+- [x] Doppel on real merged PRs of other repos: five apps it was never tuned for, each with a real PR
+  ([TESTING-APPS.md](../TESTING-APPS.md)), and 14 real fixes ([bench/results/fixes](../bench/results/fixes)).
 
 ## Stage 6: ship (planned Oct 25–28)
 - [ ] README first screen: claim with the number, chart, 15-second GIF, real badges.
@@ -62,5 +63,5 @@ Seed once, a fresh world per persona, replay, diff, Markdown report, offline tes
 - [x] A pass means something: a persona that fails only on head is an error finding (a head that no
   longer starts used to pass as "no behavior changes"), a run with nothing replayed exits 2, `[diff]` and
   personas come from base, and PRs that edit Doppel's setup are flagged (`tests/test_trust.py`).
-- [ ] Record one fresh Nebius run for the site, so its timeline shows parallel sandboxes.
-- Tag: `v1.0-submission`
+- [x] Record one fresh Nebius run for the site, so its timeline shows parallel sandboxes.
+- Tags: `v1.0.0`, `v1.1.0`; `v1.0-submission` marks the submitted commit.

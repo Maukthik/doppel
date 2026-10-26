@@ -138,10 +138,21 @@ def from_bench(result: dict, arm: str = "doppel_guided", pr: dict | None = None)
             "app": "microblog-api"}
 
 
-def bench_scores(folder: Path, set_name: str = "main") -> dict:
-    """Same scoring as bench/summarize.py: caught on regression PRs, alarms on safe PRs."""
+def bench_scores(folder: Path, set_name: str = "main", guided: Path | None = None) -> dict:
+    """Same scoring as bench/summarize.py: caught on regression PRs, alarms on safe PRs.
+    guided: a later rerun's folder; its review-guided results replace the first run's, and the arms the README
+    doesn't quote (Doppel without the reviewer) are left out, so the site shows the README's numbers."""
     rows = [json.loads(p.read_text("utf-8")) for p in sorted(Path(folder).glob("*.json"))]
     rows = [r for r in rows if r.get("set", "main") == set_name]
+    if guided:
+        for r in rows:
+            later = Path(guided) / f"{r.get('id')}.json"
+            r.pop("doppel", None)
+            r.pop("doppel_guided", None)
+            if later.is_file():
+                arm = json.loads(later.read_text("utf-8")).get("doppel_guided")
+                if isinstance(arm, dict):
+                    r["doppel_guided"] = arm
     reg = [r for r in rows if r["kind"] == "regression"]
     safe = [r for r in rows if r["kind"] == "safe"]
     out = {}
@@ -224,7 +235,9 @@ def build(gallery: Path, out: Path, root: Path | None = None, env: dict | None =
                       "story": entry.get("story", ""), "tone": tone, "verdict": verdict, "compare": compare,
                       "recorded": entry.get("recorded", ""), "users": len(data["users"]),
                       "requests": sum(len(u["steps"]) for u in data["users"])})
-    scores = bench_scores(root / cfg["bench"]) if cfg.get("bench") and (root / cfg["bench"]).is_dir() else {}
+    guided = root / cfg["bench_guided"] if cfg.get("bench_guided") else None
+    scores = bench_scores(root / cfg["bench"], guided=guided) if cfg.get("bench") and (root / cfg["bench"]).is_dir() \
+        else {}
     chart = root / cfg["chart"] if cfg.get("chart") else None
     if chart and chart.is_file():
         shutil.copy(chart, out / "chart.svg")

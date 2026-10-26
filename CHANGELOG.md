@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 (October 2026)
 
 Seven gaps found while writing the architecture guide, each pinned by a test in `tests/test_hardening.py`:
 - Test mode expands tox's own substitutions (`{posargs:tests}`, `{posargs}`, `{toxinidir}`, `{envpython}`),
@@ -56,6 +56,21 @@ found nine gaps, each now pinned in `tests/test_new_apps.py` or `tests/test_pres
 
 The README's Limits now say test mode doesn't compare response headers.
 
+Nine more gaps, found by reading every module line by line, each pinned in `tests/test_final_gaps.py`:
+- The replay page the Action publishes next to the check page (`replay.html`) is masked like the check page;
+  `doppel view run.json --public` masks secrets and password hashes and refuses to write a page that would show
+  a credential from the environment.
+- `doppel init --check` reads `doppel_seed.json` too, so a setup that seeds through the app's routes passes its
+  own check.
+- `psycopg2` swapped for `psycopg2-binary` keeps the version the app pinned.
+- `doppel init` no longer calls a 401 and a 403 "the same error" (ports, ids and times still blur).
+- The comment's heading counts distinct changes after the judge's own rules (a secret field, a new route, a
+  confirmed suspicion), not one per request.
+- A refuted suspicion is marked ⚪ in the comment, as on the check page.
+- The example workflow has `contents: write`, so it can publish its check page.
+- Try issues declined without a run (no link, a private PR, a repo too big) don't count toward the daily cap.
+- A PR that edits `doppel_seed.json` gets the setup warning, like one that edits `doppel_seed.py`.
+
 The 17 Oct benchmark recordings judged again with the per-route grouping (nothing else run), three times with
 identical results: review-guided Doppel 17/20 with 2/10 false alarms (was 16/20; r11 changed from missed to
 caught), held-out 7/7 with 0/3, consequence 2/3 with 0/5. Results in `bench/results/guided-rerun-grouping/`.
@@ -89,5 +104,5 @@ The first release meant to be installed: `uses: Maukthik/doppel@v1` in a workflo
 
 ## Earlier tags
 
-`v0.1-local-twin`, `v0.2-nebius-twin`, `v0.3-judge`, `v0.4-action`, `v0.5-evidence`, `v0.6-init`,
-`v0.7-glass-box`: the build stages, described in [docs/STAGES.md](docs/STAGES.md).
+`v0.1-local-twin`, `v0.2-nebius-twin`, `v0.3-judge`, `v0.4-action`, `v0.5-evidence`, `v0.6-evidence`,
+`v0.6-init`, `v0.7-glass-box`, `v0.8-replay-site`, `v0.9-two-apps`: the build stages, described in [docs/STAGES.md](docs/STAGES.md).

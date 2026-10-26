@@ -1,7 +1,7 @@
 # Live demo: a fresh repo, zero setup
 
 `demo/setup-demo-repo.ps1` builds a public repo with microblog-api (MIT, commit `e250d71`), its own tests as a
-`tests` check, and one workflow that runs `Maukthik/doppel@main` with no `doppel.toml` (test mode only). The pull
+`tests` check, and one workflow that runs `Maukthik/doppel@v1` with no `doppel.toml` (test mode only). The pull
 request *"Describe has_password in the API schema"* (r17 from the benchmark) says it only documents a field. It
 actually puts every user's password hash into the API's responses.
 

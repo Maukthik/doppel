@@ -34,7 +34,19 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--guided", type=Path, default=RESULTS / "guided-rerun-grouping",
                     help="folder with the review-guided Doppel results (default: the one the README quotes)")
+    ap.add_argument("--chart", type=Path,
+                    help="also write the bar chart of these numbers (the replay site shows it), e.g. "
+                         "bench/results/guided-rerun-grouping/chart.svg")
     a = ap.parse_args(argv)
+    if a.chart:
+        import sys
+        sys.path.insert(0, str(BENCH))
+        from summarize import chart
+
+        from doppel.site import bench_scores
+        scores = bench_scores(RESULTS, guided=a.guided)
+        a.chart.write_text(chart({k: v for k, v in scores.items() if k in ("tests", "review", "doppel_guided")}),
+                           encoding="utf-8")
     prs = json.loads((BENCH / "microblog" / "prs" / "index.json").read_text(encoding="utf-8"))
     print(f"Review-guided Doppel from {a.guided}\n")
     for set_name in ("main", "heldout", "consequence"):
