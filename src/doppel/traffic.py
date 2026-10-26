@@ -886,6 +886,26 @@ def _merge_noise(*parts: dict) -> dict:
             "order": set().union(*(p.get("order", set()) for p in parts))}
 
 
+def _with_evidence(kept: list[Finding], original: list[Finding]) -> list[Finding]:
+    """The recomputed findings say WHAT changed with everything known to vary left out, but a value that only
+    exists on one side can vary too: a password hash's salt differs between two head runs, so the recomputed
+    example read `password_hash: "(noise)"`. Show the value the first run actually recorded there instead."""
+    seen = {(f.persona, f.step, f.request): f for f in original}
+
+    def fill(new, old):
+        if new == "(noise)":
+            return old
+        if isinstance(new, dict) and isinstance(old, dict):
+            return {k: (old[k] if v == "(noise)" and k in old else v) for k, v in new.items()}
+        return new
+    out = []
+    for f in kept:
+        o = seen.get((f.persona, f.step, f.request))
+        out.append(f if o is None else Finding(f.kind, f.persona, f.step, f.request, f.detail,
+                                                fill(f.base, o.base), fill(f.head, o.head)))
+    return out
+
+
 def confirm(session, base: Path, test: str, findings: list[Finding], a: dict, b: dict, nz: dict,
             excluded: set[str], log=lambda m: None) -> tuple[list[Finding], dict]:
     """S5: run only the tests that showed a difference again, twice on base and on head, and keep a difference only
@@ -917,7 +937,8 @@ def confirm(session, base: Path, test: str, findings: list[Finding], a: dict, b:
     # with a timestamp the two base runs happened to share (both in the same second) was compared with that
     # timestamp in it, didn't match its rerun, and was dropped whole (flasky, under load)
     first = compare_worlds(a, b, merged, excluded)[0]
-    kept = [f for f in first if _key(f) in seen_again and f.persona not in merged["flaky"]]
+    kept = _with_evidence([f for f in first if _key(f) in seen_again and f.persona not in merged["flaky"]],
+                          findings)
     still = {(f.persona, f.step, f.request) for f in kept}
     gone = [f for f in findings if (f.persona, f.step, f.request) not in still]
     if gone:

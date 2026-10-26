@@ -93,3 +93,29 @@ def test_a_real_change_that_came_with_a_timestamp_survives_its_confirmation(monk
     monkeypatch.setattr(traffic, "confirm_command", lambda *a, **k: "python -m pytest t")
     kept, info = traffic.confirm(Session(), None, "python -m pytest", findings, a, b, nz, set())
     assert [f.detail for f in kept] == ["changed: author_email (added)"] and info["dropped"] == 0
+
+
+def test_a_leaked_hash_is_shown_as_recorded_not_as_noise(monkeypatch):
+    # doppel-demo#1 on the Try bot: each head run salts the hash differently, so the reruns learned
+    # password_hash as noise and the comment's example read `password_hash: "(noise)"`
+    from doppel import traffic
+
+    def world(salt):
+        body = {"id": 1} | ({"password_hash": f"scrypt:32768:8:1${salt}$abc"} if salt else {})
+        return {"tests": {"t::users": {"outcome": "passed", "requests": [
+            {"sig": "GET /api/users/1", "status": 200, "body": body}]}}, "exit": "0", "output": "",
+            "recorder_errors": ""}
+    a, a2, b = world(None), world(None), world("s1")
+    nz = traffic.noise(a, a2)
+    findings, _ = traffic.compare_worlds(a, b, nz, set())
+    reruns = iter([world(None), world("s2"), world(None), world("s3")])
+
+    class Session:
+        def run(self, jobs):
+            return [next(reruns) for _ in jobs]
+    monkeypatch.setattr(traffic, "read_world", lambda w: w)
+    monkeypatch.setattr(traffic, "confirm_command", lambda *a, **k: "python -m pytest t")
+    kept, info = traffic.confirm(Session(), None, "python -m pytest", findings, a, b, nz, set())
+    assert [f.detail for f in kept] == ["changed: password_hash (added)"]
+    assert kept[0].head == {"password_hash": "scrypt:32768:8:1$s1$abc"}
+    assert kept[0].base == {"password_hash": "(absent)"}

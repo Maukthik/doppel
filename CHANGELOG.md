@@ -70,6 +70,8 @@ Nine more gaps, found by reading every module line by line, each pinned in `test
 - The example workflow has `contents: write`, so it can publish its check page.
 - Try issues declined without a run (no link, a private PR, a repo too big) don't count toward the daily cap.
 - A PR that edits `doppel_seed.json` gets the setup warning, like one that edits `doppel_seed.py`.
+- A confirmed change shows the value the first run recorded: a password hash salted differently on each head
+  run read `password_hash: "(noise)"` in the comment's example (doppel-demo#1 on the Try bot).
 
 The 17 Oct benchmark recordings judged again with the per-route grouping (nothing else run), three times with
 identical results: review-guided Doppel 17/20 with 2/10 false alarms (was 16/20; r11 changed from missed to
