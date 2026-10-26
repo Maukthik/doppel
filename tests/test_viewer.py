@@ -40,7 +40,7 @@ def test_the_page_is_self_contained_and_keeps_script_tags_out_of_the_data(tmp_pa
 
 def test_the_command_refuses_a_folder_that_is_not_a_trace(tmp_path, capsys):
     assert cli.main(["view", str(tmp_path), "--no-open"]) == 2
-    assert "is neither a run" in capsys.readouterr().err
+    assert "is not a check" in capsys.readouterr().err
     app = traced_shop_run(tmp_path)
     assert cli.main(["view", str(app / ".doppel-trace"), "--no-open"]) == 0
     assert (app / "doppel-view.html").exists()

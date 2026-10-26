@@ -32,7 +32,7 @@ work/
 
 ## Level 0: install and run the test suite
 
-**Proves:** Doppel installs, and its 416 offline tests pass: test mode, the twin, the judge's rules, the
+**Proves:** Doppel installs, and its 423 offline tests pass: test mode, the twin, the judge's rules, the
 setup agent and the pages, all run against small Flask, Django and FastAPI apps the tests build on the fly.
 
 PowerShell:
@@ -62,7 +62,7 @@ ruff check .
 python -m pytest -q
 ```
 
-**You should see:** `doppel 1.1.0`, `All checks passed!`, then `416 passed` after about four minutes.
+**You should see:** `doppel 1.1.0`, `All checks passed!`, then `423 passed` after about four minutes.
 
 The `nebius` extra is only needed from Level 3 on; installing it now saves a step. Keep this terminal and
 its activated `.venv`: every later command uses it.
@@ -135,7 +135,7 @@ The benchmark pins the app at commit `e250d71`. Clone it twice, base and head, a
 `$prs` holds the full path to the benchmark's patches (`git -C <folder>` reads relative paths from inside
 that folder, so a full path avoids surprises).
 
-PowerShell (from `work/`; skip the `mkdir` if Level 1 made the folder):
+PowerShell (from `work/`: `cd ..` first if you're still in `doppel`; skip the `mkdir` if Level 1 made the folder):
 
 ```powershell
 mkdir doppel-e2e; cd doppel-e2e
@@ -148,7 +148,7 @@ git -C mb-head apply "$prs\r17-hash-leak.patch"
 git -C mb-head diff --stat
 ```
 
-bash (from `work/`):
+bash (from `work/`: `cd ..` first if you're still in `doppel`):
 
 ```bash
 mkdir -p doppel-e2e && cd doppel-e2e
@@ -416,8 +416,9 @@ The GitHub Action runs `doppel check` on every PR. To see it end to end on a rep
 1. Create an empty public repo on GitHub and add `NEBIUS_API_KEY` and `NEBIUS_PROJECT_ID` under
    Settings → Secrets and variables → Actions.
 2. From the `doppel` folder, run
-   `powershell -ExecutionPolicy Bypass -File demo\setup-demo-repo.ps1 -Owner <you> -Repo <repo>`. It pushes
-   microblog-api with one workflow file, plus a branch with the hash-leak change.
+   `powershell -ExecutionPolicy Bypass -File demo\setup-demo-repo.ps1 -Owner <you> -Repo <repo>`
+   (macOS/Linux: install PowerShell 7 and run `pwsh -File demo/setup-demo-repo.ps1 -Owner <you> -Repo <repo>`).
+   It pushes microblog-api with one workflow file, plus a branch with the hash-leak change.
 3. Open the pull request from that branch. The check runs in about a minute, comments on the PR and fails.
 
 To add Doppel to any repo, the README's [Put it on your pull requests](README.md#put-it-on-your-pull-requests)
@@ -429,6 +430,7 @@ has the workflow file.
 
 The README's table comes from 30 PRs to microblog-api (20 regressions, 10 safe), 10 held-out PRs written
 after tuning, and 8 "consequence" PRs. How they were made and scored: [bench/README.md](bench/README.md).
+Level 5 runs from the `doppel` folder: `cd ../doppel` if you're still in `doppel-e2e`.
 
 ### 5a. Re-derive the numbers from the recorded results (offline, one second)
 
@@ -605,7 +607,7 @@ Slow sandbox calls: raise `DOPPEL_HTTP_TIMEOUT` (seconds, default 180). Other mo
 | `44 passed` on base fails, or many tests return 401 | The app's dependencies aren't the pinned ones: install `requirements-dev.txt` into a fresh 3.12 venv |
 | Test mode says `couldn't compare` | Read the reason under it. Usually `--python` points at the wrong interpreter, or the tests fail on base too |
 | `No module named 'openai'` with `--pr` | Install the extra: `pip install -e ".[nebius,dev]"` |
-| `NEBIUS_API_KEY` not set | Put `.env` in the `doppel` folder (installed with `-e`), or set the variables in your shell |
+| `NEBIUS_API_KEY ... not set` (it says so before any work starts) | Put `.env` (from `.env.example`) in the folder you run `doppel` from, or in the `doppel` folder, or set the variables in your shell. Without a key: `--backend local` and no `--pr` |
 | The twin on microblog-api fails locally on Windows | Its `doppel.toml` starts the app with gunicorn, which doesn't run on Windows. Use `--backend nebius` (Level 4), or the shop (Level 1), which runs anywhere |
 | `doppel view` opens nothing | Add `--no-open` and open the `.html` it wrote |
 | A Nebius call times out or is throttled | Run again; set `DOPPEL_HTTP_TIMEOUT=300` |

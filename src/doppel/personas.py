@@ -185,6 +185,18 @@ ATTEMPTS = (
 )
 
 
+def require_nebius(sandboxes: bool = False) -> None:
+    """Say what's missing before any work starts, instead of a KeyError or a 403 from deep inside a run."""
+    need = ["NEBIUS_API_KEY"] + (["NEBIUS_PROJECT_ID"] if sandboxes else [])
+    missing = [name for name in need if not os.getenv(name, "").strip()]
+    if missing:
+        what = "Nebius sandboxes" if sandboxes else "NVIDIA Nemotron on Nebius Token Factory"
+        raise RuntimeError(f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} not set, and this "
+                           f"needs {what}. Put {'it' if len(missing) == 1 else 'them'} in a .env file in the folder "
+                           "you run doppel from (see .env.example), or set them in your shell. Without a key: "
+                           "--backend local, and leave out --pr.")
+
+
 def nemotron_chat(model: str, prompt: str, temperature: float = 0.7) -> tuple[str, int, int]:
     """One Token Factory call. Returns (text, input tokens, output tokens). Tests replace this."""
     from openai import (
@@ -195,6 +207,7 @@ def nemotron_chat(model: str, prompt: str, temperature: float = 0.7) -> tuple[st
         OpenAI,
         UnprocessableEntityError,
     )
+    require_nebius()
     client = OpenAI(base_url=os.getenv("NEBIUS_BASE_URL", "https://api.tokenfactory.nebius.com/v1"),
                     api_key=os.environ["NEBIUS_API_KEY"], max_retries=3, timeout=600)
     messages = [{"role": "system", "content": "Reply with the JSON object only. No reasoning, no prose."},

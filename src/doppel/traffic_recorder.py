@@ -593,14 +593,22 @@ def _hook_webtest(module) -> None:
     if cls is None:
         return
 
+    def path(req):
+        try:
+            return req.path
+        except UnicodeDecodeError:   # a test that sends a path that isn't UTF-8 on purpose (Kinto)
+            e = req.environ
+            raw = e.get("SCRIPT_NAME", "") + e.get("PATH_INFO", "")
+            return raw.encode("latin-1", "replace").decode("utf-8", "replace")
+
     def read(self, args, kwargs, response):
         req = args[0] if args else kwargs.get("req")
-        return (req.method, req.path, req.query_string, getattr(req, "body", b""), response.status_int,
+        return (req.method, path(req), req.query_string, getattr(req, "body", b""), response.status_int,
                 response.headers.get("Content-Type", ""), response.body)
 
     def request_of(self, args, kwargs):
         req = args[0] if args else kwargs.get("req")
-        return req.method, req.path, req.query_string, getattr(req, "body", b"")
+        return req.method, path(req), req.query_string, getattr(req, "body", b"")
     _wrap(cls, "do_request", read, request_of=request_of)
 
 

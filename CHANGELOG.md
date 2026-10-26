@@ -73,6 +73,26 @@ Nine more gaps, found by reading every module line by line, each pinned in `test
 - A confirmed change shows the value the first run recorded: a password hash salted differently on each head
   run read `password_hash: "(noise)"` in the comment's example (doppel-demo#1 on the Try bot).
 
+Found by following the README and TESTING.md as a new user and running the five-app demo end to end, each pinned
+in `tests/test_final_gaps.py`:
+- Without `NEBIUS_API_KEY` (or `NEBIUS_PROJECT_ID` for sandboxes), Doppel says so before any work starts, with
+  what to do, instead of a `KeyError` after the whole test suite ran or a 403 from the sandbox service.
+- A `.env` in the folder you run `doppel` from is read, so a pip-installed Doppel finds its keys too.
+- The check page and the run page say Nemotron judged the changes only when it did, and say "on this machine"
+  for a local run instead of "in Nebius sandboxes".
+- Tests skipped on base (a Selenium test without a browser) aren't counted as tests that sent requests.
+- A request path that isn't UTF-8 is recorded (Kinto), and recorder problems print as one line each, not a
+  traceback in the middle of the run.
+- The internal `(whole body)` marker is never shown as a noisy field name.
+- `doppel comment` and `doppel accepted` outside GitHub Actions explain what they need instead of a traceback;
+  `doppel view` says when a file doesn't exist and lists check.json among what it opens.
+- `doppel probe` calls an app Flask only when its code imports Flask, not because Flask is installed.
+- The Nebius backend without its extra says which install it needs.
+- `demo/prepare-apps.ps1`: `-Verify` shows a failing suite's exit code, pip's upgrade notice can't stop
+  Windows PowerShell 5.1, the base copy is cleaned on a rerun, and Datasette installs with a relative path.
+- README and TESTING.md: one command per line (Windows PowerShell 5.1 has no `&&`), the offline demo's expected
+  output, when to change folders, and `pwsh` for the demo-repo script on macOS and Linux.
+
 The 17 Oct benchmark recordings judged again with the per-route grouping (nothing else run), three times with
 identical results: review-guided Doppel 17/20 with 2/10 false alarms (was 16/20; r11 changed from missed to
 caught), held-out 7/7 with 0/3, consequence 2/3 with 0/5. Results in `bench/results/guided-rerun-grouping/`.

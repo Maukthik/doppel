@@ -408,7 +408,7 @@ border:0;border-bottom:1px solid var(--line);background:none;font:inherit;color:
 .why{grid-column:1/-1;margin:0;padding:10px 14px;border-left:4px solid var(--stop);background:#FFF;font-size:.92rem}
 .why.intended{border-color:var(--pass)}
 table.sus{width:100%;background:var(--paper);border:1px solid var(--line);border-radius:14px;border-collapse:separate;overflow:hidden}
-table.sus td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+table.sus td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
 tr.grp-item td{background:#F7F9FB;font-size:.9rem;padding-top:6px;padding-bottom:6px}
 .grp-toggle{font:inherit;font-size:.85rem;color:var(--free);background:none;border:1px solid var(--line);border-radius:8px;padding:2px 10px;margin-top:6px;cursor:pointer}
 .grp-toggle:focus-visible{outline:3px solid var(--free);outline-offset:2px}
@@ -495,12 +495,12 @@ const steps = D.users.reduce((n, u) => n + u.steps.length, 0);
 document.getElementById('title').textContent = D.pr.title || D.app;
 const v = document.getElementById('verdict');
 if (!D.findings.length) { v.textContent = 'No behavior changed: same answers in both worlds.'; v.className = 'verdict-big green'; }
-else if (!D.judged) { v.textContent = `${D.findings.length} behavior change(s), not judged (no PR description given).`; v.className = 'verdict-big'; }
+else if (!D.judged) { v.textContent = `${D.findings.length} behavior change${D.findings.length === 1 ? '' : 's'}, not judged (no PR description given).`; v.className = 'verdict-big'; }
 else if (regressions.length) { const g = regGroups.length, n = regressions.length;
   v.textContent = `${g} regression${g > 1 ? 's' : ''} the pull request doesn't mention` + (n > g ? `, seen in ${n} answers.` : '.'); v.className = 'verdict-big red'; }
 else { v.textContent = 'No regressions: every change matches the pull request description.'; v.className = 'verdict-big green'; }
-document.getElementById('lede').textContent = `${D.users.length} invented users sent the same ${steps} requests to both worlds. ` +
-  'Where the two answered differently, the judge compared the difference with what the pull request says it does.';
+document.getElementById('lede').textContent = `${D.users.length} users sent the same ${steps} requests to both worlds.` +
+  (D.judged ? ' Where the two answered differently, the judge compared the difference with what the pull request says it does.' : '');
 
 if (D.recorded && D.recorded.note) document.getElementById('recorded').textContent = D.recorded.note;
 

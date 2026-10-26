@@ -102,6 +102,7 @@ def test_cli_with_pr_writes_judged_report_and_tests(tmp_path, monkeypatch):
     import doppel.judge as j
     monkeypatch.setattr(j, "nemotron_chat", fake_ultra)
     monkeypatch.setattr("doppel.judge.judge.__defaults__", (None, fake_ultra))
+    monkeypatch.setenv("NEBIUS_API_KEY", "test-key")   # the CLI checks a key is set before a judged run
     code = cli.main(["run", "--base", str(SHOP / "base"), "--head", str(SHOP / "head"),
                      "--personas", str(SHOP / "personas.json"), "--pr", str(SHOP / "PR.md"),
                      "--out", str(tmp_path / "r.md"), "--tests-out", str(tmp_path / "test_reg.py"), "--strict"])

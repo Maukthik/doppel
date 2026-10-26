@@ -751,6 +751,21 @@ def _mask(value, paths: set[str], keys: set[str], prefix: str = ""):
     return "(noise)" if prefix.rstrip(".") in paths and prefix else value
 
 
+def recorder_summary(errors: str) -> str:
+    """One line per kind of recorder problem, not a traceback: they never affect the tests, so they shouldn't
+    read like a crash in the middle of the run (Kinto sends a path that isn't UTF-8 on purpose)."""
+    kinds: dict[str, int] = {}
+    for block in errors.split("--- ")[1:]:
+        lines = [ln for ln in block.strip().splitlines() if ln.strip()]
+        if lines:
+            what = f"{lines[-1].split(':')[0].strip()} in {lines[0].strip()}"
+            kinds[what] = kinds.get(what, 0) + 1
+    if not kinds:
+        return "the recorder reported a problem (it never affects the tests)"
+    parts = [f"{n} \u00d7 {what}" for what, n in sorted(kinds.items(), key=lambda kv: -kv[1])[:5]]
+    return "some requests weren't recorded (this never affects the tests): " + "; ".join(parts)
+
+
 def first_error(output: str) -> str:
     """The line that says why a test run stopped: "ModuleNotFoundError: No module named 'flasgger'"."""
     import re
@@ -775,6 +790,8 @@ def compare_worlds(a: dict, b: dict, nz: dict, excluded: set[str]) -> tuple[list
     for test, ta in sorted(a["tests"].items()):
         if test in excluded or test in nz["flaky"]:
             continue
+        if ta["outcome"] == "skipped" and not ta["requests"]:
+            continue   # skipped on base (a Selenium test without a browser): it sent nothing to compare
         tb = b["tests"].get(test)
         if tb is None:
             stats["removed_tests"] += 1
@@ -1148,8 +1165,7 @@ def check(base: str | Path, head: str | Path, backend: str = "nebius", test: str
     stats.update(passed=passed, failing_on_base=len(failing_on_base), flaky=len(nz["flaky"]),
                  unstable=len(nz["unstable"]), noisy_keys=len(nz["keys"]), recorded_requests=requests)
     if a["recorder_errors"] or b["recorder_errors"]:
-        log("[tests] note: the recorder reported problems (they never affect the tests):\n"
-            + (a["recorder_errors"] or b["recorder_errors"])[-1500:])
+        log("[tests] note: " + recorder_summary(a["recorder_errors"] or b["recorder_errors"]))
     log(f"[tests] {passed} tests passed on base; {requests} requests recorded; {len(nz['flaky'])} flaky, "
         f"{len(nz['unstable'])} with varying requests, {len(nz['keys'])} noisy field name(s); "
         f"{len(findings)} difference(s)")
@@ -1164,6 +1180,7 @@ def report(result: dict, judged: dict | None = None) -> str:
     from doppel.report import markdown
     st = result["stats"]
     body = markdown(result["findings"], st["tests"], st["requests"], judged, who="test")
+    shown_keys = [k for k in result["noise_keys"] if k != "(whole body)"]   # internal marker, not a field name
     left_out = []
     if result["excluded"]:
         left_out.append(f"{len(result['excluded'])} failing on unchanged code")
@@ -1177,7 +1194,7 @@ def report(result: dict, judged: dict | None = None) -> str:
              f"on head, with the base branch's tests in both. {st['passed']} tests passed on base. "
              + (f"Left out: {'; '.join(left_out)}. " if left_out else "")
              + (f"Ignored as noise (they differ between two runs of the same code): "
-                f"{', '.join(f'`{k}`' for k in result['noise_keys'][:12])}. " if result["noise_keys"] else "")
+                f"{', '.join(f'`{k}`' for k in shown_keys[:12])}. " if shown_keys else "")
              + (("1 test the PR adds has no baseline and is not compared. " if st["new_tests"] == 1 else
                  f"{st['new_tests']} tests the PR adds have no baseline and are not compared. ") if st["new_tests"]
                 else "")

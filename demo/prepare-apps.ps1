@@ -26,6 +26,7 @@ param(
   [switch]$Verify
 )
 $ErrorActionPreference = "Stop"
+$env:PIP_DISABLE_PIP_VERSION_CHECK = "1"   # pip's upgrade notice goes to stderr, which 5.1 can treat as an error
 $Apps = @($Apps | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ })   # -File passes "a,b" as one word
 $onWindows = (-not (Test-Path variable:IsWindows)) -or $IsWindows   # Windows PowerShell 5.1 has no $IsWindows
 $utf8 = New-Object System.Text.UTF8Encoding $false
@@ -93,7 +94,9 @@ $catalog = [ordered]@{
     Url = "https://github.com/simonw/datasette.git"; Pin = "c435a80"; Py = "3.12"; Short = "ds"
     Install = { param($py, $base)
       & $py -m pip install -q -U pip
-      & $py -m pip install -q -e "$base" --group "$(Join-Path $base 'pyproject.toml'):dev" }
+      if ($LASTEXITCODE -ne 0) { return }
+      Push-Location $base   # a relative --group path: "C:\...\pyproject.toml:dev" has a second colon on Windows
+      try { & $py -m pip install -q -e . --group "pyproject.toml:dev" } finally { Pop-Location } }
     Suite = @("-m", "pytest", "-q", "-n", "4", "-m", "not serial")
     Planted = @{ File = "datasette/app.py"
       Old = "            `"uvicorn`": uvicorn_version,`n"
@@ -153,6 +156,7 @@ foreach ($name in $Apps) {
     Invoke-Git @("clone", "-q", "-c", "core.autocrlf=false", $app.Url, $base)
   }
   Invoke-Git @("-C", $base, "checkout", "-q", "--force", $app.Pin)
+  Invoke-Git @("-C", $base, "clean", "-q", "-fd")   # leftovers from an earlier run or a hand edit
 
   foreach ($kind in @("planted", "safe")) {
     $dest = Join-Path $Work "$s-$kind"
@@ -173,7 +177,9 @@ foreach ($name in $Apps) {
     if ($LASTEXITCODE -ne 0) { throw "uv venv failed for $name" }
   }
   Write-Host "installing $name and its test dependencies into $s-venv"
-  & $app.Install $py $base
+  $before = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"   # warnings on stderr are not failures; the exit code says what failed
+  try { & $app.Install $py $base } finally { $ErrorActionPreference = $before }
   if ($LASTEXITCODE -ne 0) { throw "installing $name failed (exit $LASTEXITCODE)" }
 
   if ($Verify) {
@@ -187,6 +193,9 @@ foreach ($name in $Apps) {
       try {
         $out = & $py @($app.Suite) 2>&1 | ForEach-Object { "$_" } | Select-Object -Last 1
         Write-Host "  $out"
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "  (exit ${LASTEXITCODE}: some tests fail here; TESTING-APPS.md says which failures are expected)" -ForegroundColor Yellow
+        }
       } finally { $ErrorActionPreference = $before; Pop-Location }
     }
     foreach ($e in $saved.GetEnumerator()) { [Environment]::SetEnvironmentVariable($e.Key, $e.Value) }

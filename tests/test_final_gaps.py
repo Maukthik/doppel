@@ -122,3 +122,78 @@ def test_the_replay_site_shows_the_numbers_the_readme_quotes(tmp_path):
 
 def test_a_pr_that_edits_the_front_door_seed_gets_the_setup_warning():
     assert "doppel_seed.json" in cli.SETUP_FILES
+
+
+# --- found by following the docs as a new user and running the five-app demo end to end (26 Oct) -------------
+
+def test_no_key_says_so_before_any_work_starts(tmp_path, monkeypatch, capsys):
+    import time
+    monkeypatch.delenv("NEBIUS_API_KEY", raising=False)
+    monkeypatch.delenv("NEBIUS_PROJECT_ID", raising=False)
+    (tmp_path / "PR.md").write_text("# Tidy\n", encoding="utf-8")
+    t0 = time.perf_counter()
+    code = cli.main(["check", "--backend", "local", "--no-twin", "--base", str(tmp_path), "--head", str(tmp_path),
+                     "--pr", str(tmp_path / "PR.md")])
+    err = capsys.readouterr().err
+    assert code == 2 and "NEBIUS_API_KEY is not set" in err and "--backend local" in err
+    assert time.perf_counter() - t0 < 5                       # no test suite ran first
+    assert cli.main(["tests", "--base", str(tmp_path), "--head", str(tmp_path)]) == 2   # nebius is the default
+    assert "NEBIUS_API_KEY and NEBIUS_PROJECT_ID are not set" in capsys.readouterr().err
+
+
+def test_github_only_commands_explain_themselves_outside_actions(tmp_path, monkeypatch, capsys):
+    for name in ("GITHUB_REPOSITORY", "GITHUB_TOKEN", "GITHUB_EVENT_PATH"):
+        monkeypatch.delenv(name, raising=False)
+    (tmp_path / "r.md").write_text("report", encoding="utf-8")
+    assert cli.main(["comment", "--report", str(tmp_path / "r.md")]) == 2
+    assert "GITHUB_REPOSITORY and GITHUB_TOKEN must be set" in capsys.readouterr().err
+    assert cli.main(["accepted"]) == 1                         # can't read the labels: not accepted, no traceback
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_a_dotenv_in_the_folder_you_run_from_is_read(tmp_path):
+    import os
+    import subprocess
+    import sys
+    (tmp_path / ".env").write_text("DOPPEL_DOTENV_PROBE=loaded\n", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k != "DOPPEL_DOTENV_PROBE"}
+    out = subprocess.run([sys.executable, "-c", "import os, doppel.cli; print(os.getenv('DOPPEL_DOTENV_PROBE'))"],
+                         cwd=tmp_path, env=env, capture_output=True, text=True, check=True).stdout
+    assert out.strip() == "loaded"
+
+
+def test_a_page_claims_only_what_happened():
+    from doppel.checkview import render_check
+    row = {"source": "your tests", "who": "t::a", "request": "GET /a", "kind": "body", "detail": "changed: x (added)",
+           "base": {"x": "(absent)"}, "head": {"x": 1}, "why": ""}
+    tests = {"ran": True, "stats": {"tests": 3, "requests": 4}, "noise_keys": ["(whole body)", "nonce"]}
+    local = render_check({"rows": [{**row, "label": "unjudged"}], "tests": tests, "twin": {}, "backend": "local"})
+    assert "Nemotron" not in local and "Nebius" not in local and "on this machine" in local
+    assert "(whole body)" not in local and "some plain-text answers as a whole" in local
+    judged = render_check({"rows": [{**row, "label": "regression", "why": "not announced"}], "tests": tests,
+                           "twin": {}, "backend": "nebius"})
+    assert "had NVIDIA Nemotron judge each difference" in judged and "in Nebius sandboxes" in judged
+
+
+def test_recorder_problems_are_one_line_each_not_a_traceback():
+    from doppel.traffic import recorder_summary
+    errors = ("--- TestApp.do_request\nTraceback (most recent call last):\n  File \"x\", line 1\n"
+              "UnicodeDecodeError: 'utf-8' codec can't decode byte 0x82\n") * 3
+    line = recorder_summary(errors)
+    assert "Traceback" not in line and "3 × UnicodeDecodeError in TestApp.do_request" in line
+
+
+def test_tests_skipped_on_base_are_not_counted_as_tests_that_sent_requests():
+    from doppel.traffic import compare_worlds
+    world = {"tests": {"t::ui": {"outcome": "skipped", "requests": []},
+                       "t::api": {"outcome": "passed", "requests": [{"sig": "GET /a", "status": 200, "body": {}}]}}}
+    nz = {"flaky": set(), "unstable": set(), "status": set(), "order": set(), "paths": {}, "keys": set()}
+    findings, stats = compare_worlds(world, world, nz, set())
+    assert findings == [] and stats["tests"] == 1 and stats["requests"] == 1
+
+
+def test_an_app_that_only_has_flask_installed_is_not_called_flask(tmp_path):
+    from doppel.probe import probe_local
+    (tmp_path / "app.py").write_text("from http.server import HTTPServer, BaseHTTPRequestHandler\n", encoding="utf-8")
+    facts = probe_local(tmp_path)
+    assert facts.get("framework") == "unknown"

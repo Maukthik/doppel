@@ -26,7 +26,7 @@ picked in advance and run once without fixes, as [`bench/fresh_apps.py`](bench/f
 | [httpbin](#1-httpbin-flask) | Flask | 70 | Caught: `origin` dropped from `GET /get` (9 requests) | No regressions | #66: no regressions | ~15 s |
 | [flasky](#2-flasky-flask-old-pins) | Flask, 2017 pins | 34 | Caught: `author_email` added to every post (5 requests) | No regressions | Chapter 16a: no regressions | ~15 s |
 | [django-allauth](#3-django-allauth-django) | Django | ~2,250 | Caught: `track_activity` flipped in the config endpoints (2 requests) | No regressions | IdP key rotation: no regressions | 3–7 min |
-| [Kinto](#4-kinto-pyramid--webtest) | Pyramid + WebTest | ~2,040 | Caught: `storage_backend` exposed on the root endpoint (~95 requests) | No regressions | #3793: no regressions | 6–7 min |
+| [Kinto](#4-kinto-pyramid--webtest) | Pyramid + WebTest | ~2,040 | Caught: `storage_backend` exposed on the root endpoint (~95 requests) | No regressions | #3793: no regressions | 6–8 min |
 | [Datasette](#5-datasette-asgi) | ASGI | ~2,800 | Caught: `uvicorn` dropped from `GET /-/versions.json` (28 requests) | No regressions | #2951: no regressions | ~9 min |
 
 ---
@@ -86,7 +86,9 @@ regression), `<app>-safe` (the docstring change), `<app>-pr-base` and `<app>-pr-
 `<app>-venv`, and with `-Verify` runs the app's own tests on base and on the planted copy, so you can show both
 pass. It writes every `doppel check` command to `apps\commands.txt`. All five take 20–30 minutes (most of it
 installing and running allauth, Kinto and Datasette's suites); `-Apps httpbin,flasky` does just the fast two.
-The sections below do the same by hand, step by step.
+The sections below do the same by hand, step by step. Names differ slightly: the script's changed copies are
+`<app>-planted` and `<app>-safe` (by hand, one `<app>-head` takes each change in turn), its reports are
+`<app>-planted.md` / `.json`, and Kinto's venv is `kinto-venv` (`kv` below).
 
 Keep this terminal: every command below runs from `work/apps` with Doppel's venv active. Each app gets its
 **own** venv for its own dependencies (`hb-venv`, `fl-venv`, …). You never activate those; Doppel is told
@@ -517,7 +519,7 @@ bash:
 doppel check --backend local --no-twin --base kinto-base --head kinto-head --python kv/bin/python --strict --out kinto.md --json kinto.json
 ```
 
-**Expect** (6 to 7 minutes; exit code 1):
+**Expect** (6 to 8 minutes, longer on 2 cores; exit code 1):
 
 ```
 [tests] 96 test files: split across 4 sandboxes per world

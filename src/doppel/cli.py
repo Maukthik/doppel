@@ -11,14 +11,17 @@ import sys
 import time
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from doppel import __version__
 from doppel.diff import compare
 from doppel.report import markdown
 from doppel.spec import TwinSpec
 
-load_dotenv()
+_here = find_dotenv(usecwd=True)   # a .env in the folder you run doppel from (works for a pip-installed doppel too)
+if _here:
+    load_dotenv(_here)
+load_dotenv()                      # ...and the one in the doppel checkout, for an editable install
 
 
 def cmd_run(a) -> int:
@@ -265,6 +268,9 @@ def cmd_view(a) -> int:
     from doppel.checkview import is_check, write_check_view
     from doppel.viewer import is_run, is_trace, write_run_view, write_view
     path = Path(a.path)
+    if not path.exists():
+        print(f"doppel view: {path} not found", file=sys.stderr)
+        return 2
     if is_check(path):
         out = write_check_view(path, Path(a.out) if a.out else None, public=getattr(a, "public", False))
     elif is_run(path):
@@ -272,8 +278,9 @@ def cmd_view(a) -> int:
     elif is_trace(path):
         out = write_view(path, Path(a.out) if a.out else None)
     else:
-        print(f"doppel view: {path} is neither a run (run.json from `doppel run --json`, or a folder holding "
-              "one) nor an init trace (a folder with attempt-N folders from `doppel init --trace`).",
+        print(f"doppel view: {path} is not a check (check.json from `doppel check --json`), a run (run.json from "
+              "`doppel run --json`, or a folder holding one) or an init trace (a folder with attempt-N folders from "
+              "`doppel init --trace`).",
               file=sys.stderr)
         return 2
     print(f"wrote {out}")
@@ -297,7 +304,10 @@ def cmd_comment(a) -> int:
     body = Path(a.report).read_text(encoding="utf-8")
     if a.footer:
         body += f"\n{a.footer}\n"
-    repo, token = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_TOKEN"]
+    repo, token = os.getenv("GITHUB_REPOSITORY"), os.getenv("GITHUB_TOKEN")
+    if not (repo and token):
+        raise RuntimeError("doppel comment posts to a pull request from GitHub Actions: GITHUB_REPOSITORY and "
+                           "GITHUB_TOKEN must be set")
     pr = a.pr_number or pr_number_from_event()
     print(f"PR #{pr}: comment {upsert_comment(body, repo, pr, token)}")
     return 0
@@ -309,8 +319,9 @@ def cmd_accepted(a) -> int:
     import os
 
     from doppel.github import has_label, pr_labels, pr_number_from_event
-    pr = a.pr_number or pr_number_from_event()
+    pr = a.pr_number
     try:
+        pr = pr or pr_number_from_event()
         labels = pr_labels(os.environ["GITHUB_REPOSITORY"], pr, os.environ["GITHUB_TOKEN"])
     except Exception as e:  # noqa: BLE001 - not accepted, and say why
         print(f"PR #{pr}: couldn't read its labels ({type(e).__name__}: {e}), so the findings stay unaccepted",
@@ -321,6 +332,16 @@ def cmd_accepted(a) -> int:
         return 0
     print(f"PR #{pr}: no label {a.label!r}, so the findings stand")
     return 1
+
+
+def preflight(a) -> None:
+    """Fail in a second, with what to do, when a command will need Nebius and the keys aren't there."""
+    from doppel.personas import require_nebius
+    backend = getattr(a, "backend", "local")
+    if a.cmd in ("check", "tests", "run", "init", "probe") and backend == "nebius":
+        require_nebius(sandboxes=True)
+    if a.cmd in ("personas", "init") or getattr(a, "pr", None) or getattr(a, "guided", False):
+        require_nebius()
 
 
 def main(argv=None) -> int:
@@ -352,7 +373,7 @@ def main(argv=None) -> int:
     g.add_argument("--head", help="pull request code: about half the personas will target what changed")
     g.add_argument("-n", type=int, default=12, help="how many personas")
     g.add_argument("--model", help="default: $PERSONA_MODEL or nvidia/Nemotron-3_5-Lightning")
-    g.add_argument("--out", default="personas.json")
+    g.add_argument("--out", default="personas.json", help="where to write them (default: personas.json)")
     i = sub.add_parser("init", help="write doppel.toml and a seed (doppel_seed.json / .py) for an app, "
                                     "checked in the twin")
     i.add_argument("app", nargs="?", default=".", help="the app's folder (default: current folder)")
@@ -377,8 +398,10 @@ def main(argv=None) -> int:
     v = sub.add_parser("view", help="turn a run (run.json), a check (check.json) or an init trace into a web "
                                     "page and open it")
     v.add_argument("path", nargs="?", default=".doppel-trace",
-                   help="run.json, a folder holding it, or an init trace folder (default: .doppel-trace)")
-    v.add_argument("--out", help="where to write the page (default: doppel-view.html next to the trace)")
+                   help="check.json (doppel check --json), run.json or a folder holding it, or an init trace "
+                        "folder (default: .doppel-trace)")
+    v.add_argument("--out", help="where to write the page (default: doppel-check.html, doppel-run.html or "
+                                 "doppel-view.html next to the input)")
     v.add_argument("--no-open", action="store_true", help="write the page without opening a browser")
     st = sub.add_parser("site", help="build the static replay site from recorded runs (for GitHub Pages)")
     st.add_argument("--gallery", default="site/gallery.json", help="which runs to publish (default: site/gallery.json)")
@@ -431,11 +454,12 @@ def main(argv=None) -> int:
     ac.add_argument("--label", default="doppel: accepted")
     ac.add_argument("--pr-number", type=int, help="default: from the GitHub event")
     a = ap.parse_args(argv)
-    if a.cmd == "comment":
-        return cmd_comment(a)
-    if a.cmd == "accepted":
-        return cmd_accepted(a)
     try:
+        if a.cmd == "comment":
+            return cmd_comment(a)
+        if a.cmd == "accepted":
+            return cmd_accepted(a)
+        preflight(a)
         if a.cmd == "personas":
             return cmd_personas(a)
         if a.cmd == "init":

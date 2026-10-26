@@ -54,6 +54,7 @@ def test_a_regression_test_for_an_added_field_asserts_the_field_is_absent():
 
 
 def test_a_regression_the_twin_confirmed_gets_its_regression_test(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEBIUS_API_KEY", "test-key")   # the CLI checks a key is set before a judged run
     import doppel.personas
     import doppel.suspects
     monkeypatch.setattr(doppel.suspects, "suspect", lambda *a, **k: {"suspicions": [

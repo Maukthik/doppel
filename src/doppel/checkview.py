@@ -74,13 +74,16 @@ def _modes(data: dict) -> str:
         if st.get("flaky"):
             left.append(f"{st['flaky']} flaky")
         if st.get("unstable"):
-            left.append(f"{_plural(st['unstable'], 'test')} compared on pass or fail only (its requests differ "
+            left.append(f"{_plural(st['unstable'], 'test')} compared on pass or fail only (their requests differ "
                         "from run to run)")
         conf = st.get("confirmation") or {}
         facts = [f"<b>{st.get('tests', 0)}</b> tests sent <b>{st.get('requests', 0)}</b> requests",
                  f"command <code>{_e(tests.get('test', ''))}</code> (from {_e(tests.get('source', ''))})"]
-        if tests.get("noise_keys"):
-            facts.append("noise ignored: " + ", ".join(f"<code>{_e(k)}</code>" for k in tests["noise_keys"][:8]))
+        keys = [k for k in tests.get("noise_keys") or [] if k != "(whole body)"]
+        whole = "(whole body)" in (tests.get("noise_keys") or [])
+        if keys or whole:
+            facts.append("noise ignored: " + ", ".join([f"<code>{_e(k)}</code>" for k in keys[:8]]
+                                                      + (["some plain-text answers as a whole"] if whole else [])))
         if left:
             facts.append("left out: " + "; ".join(left))
         if conf.get("ran"):
@@ -116,7 +119,7 @@ WORLDS = """<section class="worlds3" aria-label="How Doppel decides">
 <div class="w after"><b>Head</b><span>the code with the PR</span></div></div>
 <div class="wcap"><p><b>Base vs base again:</b> whatever differs between two runs of the same code is noise, and is
 ignored.</p><p><b>Base vs head:</b> every other difference is a behavior change. It is re-checked by running it
-again, then judged by Nemotron against the PR description.</p></div></section>"""
+again__JUDGED__.</p></div></section>"""
 
 
 def _group_card(k: int, g: dict, clean) -> str:
@@ -249,6 +252,8 @@ def render_check(data: dict, public: bool = False, nav: str = "") -> str:
         verdict, tone = (f"No regressions found, but {open_} of the reviewer's {_plural(total, 'suspicion')} "
                          "couldn't be tested", "grey") if open_ else ("No regressions", "green")
     pr = data.get("pr") or {}
+    judged = bool(regressions and not unjudged) or bool(human or intended)
+    where = "on this machine" if data.get("backend") == "local" else "in Nebius sandboxes"
     sections = []
     if regressions:
         title = "Behavior changes (not judged: no PR description given)" if unjudged else \
@@ -265,16 +270,18 @@ def render_check(data: dict, public: bool = False, nav: str = "") -> str:
                         "(after ignoring what differs between two runs of the same code).</p>")
     body = f"""{nav}<p class="brand">doppel check · {_e(data.get('app', ''))}</p>
 <h1>{_e(pr.get('title') or 'Behavior check')}</h1>
-<p class="what">Doppel ran this app's code from before and after the pull request side by side, compared every
-response, and had NVIDIA Nemotron judge each difference against what the pull request says it does.</p>
+<p class="what">Doppel ran this app's code from before and after the pull request side by side{
+    "" if where == "in Nebius sandboxes" else " " + where}, compared every response{
+    ", and had NVIDIA Nemotron judge each difference against what the pull request says it does" if judged else ""}.</p>
 <div class="banner {tone}">{_e(verdict)}</div>
 {_modes(data)}
-{WORLDS}
+{WORLDS.replace("__JUDGED__", ", then judged by Nemotron against the PR description" if judged else "")}
 {''.join(sections)}
 {_suspicions(data, clean)}
-<footer>{"Each change above comes from real runs of the code before and after the PR, in Nebius sandboxes; the "
-          "verdicts are NVIDIA Nemotron's, judged against the PR description." if regressions or human or intended
-          else "Both versions of the code ran in Nebius sandboxes."}{_took(data.get('seconds'))}
+<footer>{(f"Each change above comes from real runs of the code before and after the PR, {where}"
+           + ("; the verdicts are NVIDIA Nemotron's, judged against the PR description." if judged else "."))
+          if regressions or human or intended
+          else f"Both versions of the code ran {where}."}{_took(data.get('seconds'))}
 <br><a href="https://github.com/Maukthik/doppel">What is Doppel? Add it to your repo in one file →</a></footer>"""
     title = f"doppel check: {pr.get('title') or data.get('app', '')}"
     return PAGE.replace("__TITLE__", _e(title)).replace("__CSS__", CSS + CHECK_CSS).replace("__BODY__", body)

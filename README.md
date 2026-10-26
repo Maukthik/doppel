@@ -143,15 +143,18 @@ Every input of the Action is listed under [The GitHub Action](#the-github-action
 ## Try it in one minute (offline, no keys)
 
 ```bash
-git clone https://github.com/Maukthik/doppel && cd doppel
-python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
+git clone https://github.com/Maukthik/doppel
+cd doppel
+python -m venv .venv
+source .venv/bin/activate        # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 doppel run --base examples/shop/base --head examples/shop/head --personas examples/shop/personas.json
 ```
 
 The shop's PR ([`examples/shop/PR.md`](examples/shop/PR.md)) says it only adds an `in_stock` flag. Doppel
 finds two more changes the PR doesn't mention: coupon orders now cost more, and an order for quantity 0 is
-accepted instead of rejected.
+accepted instead of rejected. You should see `## Doppel: 6 behavior changes` in a few seconds: those three
+changes, one row per request that showed one.
 
 With a Nebius key in `.env` (copy [`.env.example`](.env.example)), the same run happens in sandboxes, with
 invented users and the judge:
@@ -714,7 +717,9 @@ command, and the PR's code only runs inside Nebius sandboxes.
 ## Develop
 
 ```bash
-pip install -e ".[dev]" && ruff check . && python -m pytest -q    # offline: no keys, no network
+pip install -e ".[dev]"
+ruff check .
+python -m pytest -q        # offline: no keys, no network
 ```
 
 The test suite runs the twin with the local backend against small Flask, Django and FastAPI apps it builds on

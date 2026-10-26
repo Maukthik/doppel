@@ -423,8 +423,9 @@ def main() -> int:
             facts.update(django_facts(manage))
         elif has["fastapi"] and any("FastAPI(" in p.read_text("utf-8", "replace") for p in python_files()):
             facts.update(fastapi_facts())
-        elif has["flask"]:
-            facts.update(flask_facts())
+        elif has["flask"] and any(re.search(r"^\s*(from|import)\s+flask\b", p.read_text("utf-8", "replace"), re.M)
+                                  for p in python_files()):
+            facts.update(flask_facts())   # Flask installed alone (a dev environment) doesn't make the app Flask
         else:
             facts["framework"] = "unknown"
             facts["installed"] = {k: v for k, v in has.items() if v}

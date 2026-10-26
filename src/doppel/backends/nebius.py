@@ -10,7 +10,7 @@ Then every persona runs as one disposable run forked from its world: the app sta
 background, runner.py (stdlib) replays the persona against it, and prints the recording.
 Base and head personas all run in parallel, so no persona can see another's side effects.
 
-Needs NEBIUS_API_KEY and NEBIUS_PROJECT_ID (pip install "doppel[nebius]").
+Needs NEBIUS_API_KEY and NEBIUS_PROJECT_ID (pip install "doppel-check[nebius]").
 """
 from __future__ import annotations
 
@@ -350,8 +350,14 @@ def pair(personas: list[dict], base: list, head: list) -> dict:
 
 
 def make_client():
-    from contree_sdk import Contree
-    from contree_sdk.config import ContreeConfig
+    from doppel.personas import require_nebius
+    require_nebius(sandboxes=True)
+    try:
+        from contree_sdk import Contree
+        from contree_sdk.config import ContreeConfig
+    except ImportError:
+        raise RuntimeError('the Nebius backend needs its extra: pip install -e ".[nebius]" in the doppel checkout '
+                           '(or pip install "doppel-check[nebius]")') from None
     # the SDK's default HTTP timeout is 10 s per request: too short to upload a few-hundred-kB file
     # (a screenshot, a lockfile) on a slow home uplink, which fails the whole build with ApiTimeoutError
     timeout = float(os.getenv("DOPPEL_HTTP_TIMEOUT", "180"))

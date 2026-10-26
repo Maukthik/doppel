@@ -383,7 +383,7 @@ def cmd_check(a) -> int:
         title = next((ln.lstrip("# ").strip() for ln in pr_text.splitlines() if ln.strip()), "")
         res = tests.get("result") or {}
         Path(a.json).write_text(json.dumps({
-            "mode": "check", "app": getattr(a, "app", None) or Path(a.base).resolve().name,
+            "mode": "check", "app": getattr(a, "app", None) or Path(a.base).resolve().name, "backend": a.backend,
             "pr": {"title": title, "body": pr_text},
             "regressions": len(group(regressions)), "regression_requests": len(regressions), "rows": rows,
             "tests": {k: v for k, v in tests.items() if k not in ("result", "rows")} | ({
